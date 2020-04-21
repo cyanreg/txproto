@@ -32,9 +32,10 @@ typedef struct PulseCaptureCtx {
     PulseCtx *main;
     AVFrameFIFO *fifo;
     uint64_t identifier;
+    report_format *info_cb;
+    void *info_cb_ctx;
 
     FormatReport fmt_report;
-    pa_sample_spec pa_spec;
 
     int64_t start_pts;
 
@@ -49,18 +50,18 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
     if (atomic_load(&ctx->quit)) {
         pa_stream_drop(stream);
         pa_stream_disconnect(stream);
-        av_free(ctx);
         return;
     }
 
     const void *buffer;
     pa_stream_peek(stream, &buffer, &size);
+    int stereo = av_get_channel_layout_nb_channels(ctx->fmt_report.channel_layout) > 1;
 
     AVFrame *f = av_frame_alloc();
     f->sample_rate    = ctx->fmt_report.sample_rate;
     f->format         = ctx->fmt_report.sample_fmt;
     f->channel_layout = ctx->fmt_report.channel_layout;
-    f->nb_samples     = size >> (av_log2(av_get_bytes_per_sample(f->format)) + (ctx->pa_spec.channels > 1));
+    f->nb_samples     = size >> (av_log2(av_get_bytes_per_sample(f->format)) + stereo);
 
     /* I can't believe these bastards don't output aligned data. Let's hope the
      * ability to have writeable refcounted frames is worth it elsewhere. */
@@ -70,15 +71,18 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
     else
         memset(f->data[0], 0, size); /* Buffer is actually a hole */
 
-    int delay_neg;
-    pa_usec_t pts, delay;
-    if (!pa_stream_get_time(stream, &pts) && buffer &&
-        !pa_stream_get_latency(stream, &delay, &delay_neg)) {
+    /* Force update the timing info now */
+    pa_operation_unref(pa_stream_update_timing_info(stream, NULL, NULL));
+
+    pa_usec_t pts;
+    if (pa_stream_get_time(stream, &pts) == PA_OK) {
         f->pts = pts;
-        f->pts -= delay_neg ? -(int64_t)delay : (int64_t)delay;
-        if (!ctx->start_pts)
-            ctx->start_pts = f->pts;
-        f->pts -= ctx->start_pts;
+        int delay_neg;
+        pa_usec_t delay;
+        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK) {
+            f->pts += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
+            f->pts -= ctx->start_pts;
+        }
     } else {
         f->pts = INT64_MIN;
     }
@@ -93,22 +97,61 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
     }
 }
 
+static const struct {
+    enum AVSampleFormat av_format;
+    int bits_per_sample;
+} format_map[] = {
+    [PA_SAMPLE_S16NE]     = { AV_SAMPLE_FMT_S16, 16 },
+    [PA_SAMPLE_S24_32NE]  = { AV_SAMPLE_FMT_S32, 24 },
+    [PA_SAMPLE_S32NE]     = { AV_SAMPLE_FMT_S32, 32 },
+    [PA_SAMPLE_FLOAT32NE] = { AV_SAMPLE_FMT_FLT, 32 },
+};
+
 static void pulse_stream_status_cb(pa_stream *stream, void *data)
 {
+    int err;
+    PulseCaptureCtx *ctx = data;
 
+    switch (pa_stream_get_state(stream)) {
+    case PA_STREAM_READY:
+        av_log(ctx->main, AV_LOG_INFO, "Capture stream ready\n");
+
+        const pa_sample_spec *ss = pa_stream_get_sample_spec(stream);
+
+        ctx->fmt_report.type            = AVMEDIA_TYPE_AUDIO;
+        ctx->fmt_report.sample_fmt      = format_map[ss->format].av_format;
+        ctx->fmt_report.sample_rate     = ss->rate;
+        ctx->fmt_report.time_base       = av_make_q(1, 1000000);
+        ctx->fmt_report.bits_per_sample = format_map[ss->format].bits_per_sample;
+        ctx->fmt_report.channel_layout  = av_get_default_channel_layout(ss->channels);
+
+        err = ctx->info_cb(ctx->info_cb_ctx, &ctx->fmt_report);
+        if (err)
+            goto fail;
+
+        break;
+    case PA_STREAM_FAILED:
+        av_log(ctx->main, AV_LOG_ERROR, "Capture stream failed!\n");
+        ctx->main->err = AVERROR(EINVAL);
+    case PA_STREAM_TERMINATED:
+        av_free(ctx);
+        break;
+    default:
+        break;
+    }
+
+    return;
+
+fail:
+    return;
 }
-
-static const pa_sample_format_t format_map[] = {
-    [PA_SAMPLE_FLOAT32NE] = AV_SAMPLE_FMT_FLT,
-    [PA_SAMPLE_S16NE]     = AV_SAMPLE_FMT_S16,
-    [PA_SAMPLE_S32NE]     = AV_SAMPLE_FMT_S32,
-};
 
 FN_CREATING(PulseCtx, PulseCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
 
 static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
                        AVFrameFIFO *dst, report_format *info_cb, void *info_cb_ctx)
 {
+    int err;
     PulseCtx *ctx = s;
     SourceInfo *src = NULL;
 
@@ -128,33 +171,56 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
     cap_ctx->identifier = identifier;
     cap_ctx->fifo = dst;
 
+    /**
+     * Pulse limits the total formats you can give it to... 8. Nice.
+     * We want pulse to give us something it doesn't have to resample,
+     * since we can afford to resample while it can't.
+     */
+    static const pa_sample_format_t sample_fmts[] = {
+        PA_SAMPLE_S16NE, PA_SAMPLE_FLOAT32NE
+    };
+    static const int sample_rates[] = { 48000, 44100 };
+    static const int channel_counts[] = { 2, 1 };
+
+    int wanted_fmts_count = 0;
+    int wanted_fmts_tot = FF_ARRAY_ELEMS(sample_fmts) *
+                          FF_ARRAY_ELEMS(sample_rates) *
+                          FF_ARRAY_ELEMS(channel_counts);
+    pa_format_info **wanted_fmts = av_mallocz(wanted_fmts_tot * sizeof(*wanted_fmts));
+
+    for (int i = 0; i < FF_ARRAY_ELEMS(sample_fmts); i++) {
+        for (int j = 0; j < FF_ARRAY_ELEMS(sample_rates); j++) {
+            for (int k = 0; k < FF_ARRAY_ELEMS(channel_counts); k++) {
+                pa_format_info *wfmt = wanted_fmts[wanted_fmts_count++] = pa_format_info_new();
+                pa_channel_map map;
+                if (channel_counts[k] == 2)
+                    pa_channel_map_init_stereo(&map);
+                else
+                    pa_channel_map_init_mono(&map);
+                wfmt->encoding = PA_ENCODING_PCM;
+                pa_format_info_set_sample_format(wfmt, sample_fmts[i]);
+                pa_format_info_set_rate(wfmt, sample_rates[j]);
+                pa_format_info_set_channels(wfmt, channel_counts[k]);
+                pa_format_info_set_channel_map(wfmt, &map);
+            }
+        }
+    }
+
+    cap_ctx->info_cb     = info_cb;
+    cap_ctx->info_cb_ctx = info_cb_ctx;
+
+    pa_stream *stream = pa_stream_new_extended(ctx->pa_context, "wlstream",
+                                               wanted_fmts, wanted_fmts_tot,
+                                               NULL);
+
+    for (int i = 0; i < wanted_fmts_tot; i++)
+        pa_format_info_free(wanted_fmts[i]);
+    av_free(wanted_fmts);
+
     pa_buffer_attr attr = { 0 };
-    pa_channel_map map  = { 0 };
-
-    cap_ctx->pa_spec.format   = PA_SAMPLE_S32NE;
-    cap_ctx->pa_spec.rate     = 48000;
-    cap_ctx->pa_spec.channels = 2;
-    if (cap_ctx->pa_spec.channels < 2)
-        pa_channel_map_init_mono(&map);
-    else
-        pa_channel_map_init_stereo(&map);
-
-    cap_ctx->fmt_report.type           = AVMEDIA_TYPE_AUDIO;
-    cap_ctx->fmt_report.sample_fmt     = format_map[cap_ctx->pa_spec.format];
-    cap_ctx->fmt_report.sample_rate    = cap_ctx->pa_spec.rate;
-    cap_ctx->fmt_report.time_base      = av_make_q(1, 1000000);
-    cap_ctx->fmt_report.channel_layout = av_get_default_channel_layout(cap_ctx->pa_spec.channels);
-
-    int err = info_cb(info_cb_ctx, &cap_ctx->fmt_report);
-    if (err)
-        goto fail;
-
-    uint32_t bsize = 512*4;
+    uint32_t bsize = 512*8;
     attr.fragsize  = bsize;
     attr.maxlength = bsize;
-
-    pa_stream *stream = pa_stream_new(ctx->pa_context, "wlstream",
-                                      &cap_ctx->pa_spec, &map);
 
     /* Set stream callbacks */
     pa_stream_set_state_callback(stream, pulse_stream_status_cb, cap_ctx);
@@ -163,8 +229,10 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
     /* Start stream */
     pa_stream_connect_record(stream, src->name, &attr,
                              PA_STREAM_ADJUST_LATENCY     |
-                             PA_STREAM_AUTO_TIMING_UPDATE |
-                             PA_STREAM_INTERPOLATE_TIMING);
+                             PA_STREAM_NOT_MONOTONIC      |
+                             //PA_STREAM_AUTO_TIMING_UPDATE |
+                             //PA_STREAM_INTERPOLATE_TIMING |
+                             0x0);
 
     return 0;
 
@@ -324,6 +392,7 @@ static void pulse_state_cb(pa_context *context, void *data)
 
 static int init_pulse(void **s, report_error *err_cb, void *err_opaque)
 {
+    int locked = 0;
     PulseCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
     *ctx->class = (AVClass) {
@@ -339,20 +408,41 @@ static int init_pulse(void **s, report_error *err_cb, void *err_opaque)
 
     ctx->err_opaque      = err_opaque;
     ctx->report_err      = err_cb;
+
     ctx->pa_mainloop     = pa_threaded_mainloop_new();
+    pa_threaded_mainloop_start(ctx->pa_mainloop);
+
+    pa_threaded_mainloop_lock(ctx->pa_mainloop);
+    locked = 1;
+
     ctx->pa_mainloop_api = pa_threaded_mainloop_get_api(ctx->pa_mainloop);
 
     ctx->pa_context = pa_context_new(ctx->pa_mainloop_api, "wlstream");
     pa_context_set_state_callback(ctx->pa_context, pulse_state_cb, ctx);
-    pa_context_connect(ctx->pa_context, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL);
+    pa_context_connect(ctx->pa_context, NULL, 0, NULL);
 
-    pa_threaded_mainloop_start(ctx->pa_mainloop);
+    /* Wait until the context is ready */
+    while (1) {
+        int state = pa_context_get_state(ctx->pa_context);
+        if (state == PA_CONTEXT_READY)
+            break;
+        if (!PA_CONTEXT_IS_GOOD(state))
+            goto fail;
+        pa_threaded_mainloop_wait(ctx->pa_mainloop);
+    }
 
-    pa_threaded_mainloop_wait(ctx->pa_mainloop);
+    pa_threaded_mainloop_unlock(ctx->pa_mainloop);
+    locked = 0;
 
     *s = ctx;
 
     return 0;
+
+fail:
+    if (locked)
+        pa_threaded_mainloop_unlock(ctx->pa_mainloop);
+
+    return AVERROR(EINVAL);
 }
 
 const CaptureSource src_pulse = {

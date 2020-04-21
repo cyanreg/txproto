@@ -15,6 +15,7 @@ executable(
                    libavcodec,
                    libpulse,
                    libavformat,
+                   libavfilter,
                    libswresample,
                    pthreads,
                    libm, ]

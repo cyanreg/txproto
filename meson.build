@@ -17,6 +17,7 @@ wayland_protocols = dependency('wayland-protocols', version: '>=1.14')
 libavutil     = dependency('libavutil')
 libavcodec    = dependency('libavcodec')
 libavformat   = dependency('libavformat')
+libavfilter   = dependency('libavfilter')
 libswresample = dependency('libswresample')
 libpulse      = dependency('libpulse')
 

@@ -8,12 +8,14 @@ typedef struct FormatReport {
     int width;
     int height;
     enum AVPixelFormat pix_fmt;
+    enum AVPixelFormat sw_format;
     AVRational avg_frame_rate;
 
     /* Audio - all must be set */
     int sample_rate;
     enum AVSampleFormat sample_fmt;
     uint64_t channel_layout;
+    int bits_per_sample;
 
     /* Common - all must be set */
     AVRational time_base;

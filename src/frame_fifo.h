@@ -40,6 +40,21 @@ static inline int get_fifo_size(AVFrameFIFO *buf)
     return ret;
 }
 
+static inline int queue_is_full(AVFrameFIFO *buf)
+{
+    int full = 0;
+
+    pthread_mutex_lock(&buf->lock);
+
+    if ((buf->max_queued_frames > 0) &&
+        (buf->num_queued_frames > (buf->max_queued_frames + 1)))
+        full = 1;
+
+    pthread_mutex_unlock(&buf->lock);
+
+    return full;
+}
+
 static inline int push_to_fifo(AVFrameFIFO *buf, AVFrame *f)
 {
     int err = 0;

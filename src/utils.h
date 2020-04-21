@@ -30,3 +30,8 @@ static inline const char *dict_get(AVDictionary *dict, const char *key)
     AVDictionaryEntry *e = av_dict_get(dict, key, NULL, 0);
     return e ? e->value : NULL;
 }
+
+static inline int cmp_numbers(const void *a, const void *b)
+{
+    return *((int *)a) > *((int *)b);
+}

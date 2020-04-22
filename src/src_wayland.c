@@ -41,7 +41,6 @@ typedef struct WaylandCtx {
     struct wl_shm *shm_interface;
 
     AVBufferRef *drm_device_ref;
-    AVBufferRef *vulkan_device_ref;
 
     struct wl_list output_list;
     SourceInfo *sources;
@@ -83,7 +82,6 @@ typedef struct WaylandCaptureCtx {
 
     /* DMABUF stuff */
     AVBufferRef *drm_frames_ref;
-    AVBufferRef *vulkan_frames_ref;
 
     /* Screencopy stuff */
     AVBufferPool *scrcpy_pool;
@@ -772,7 +770,7 @@ void *wayland_events_thread(void *arg)
     return NULL;
 }
 
-static int init_hwcontexts(WaylandCtx *ctx)
+static int init_drm_hwcontext(WaylandCtx *ctx)
 {
     int err;
 
@@ -790,22 +788,6 @@ static int init_hwcontexts(WaylandCtx *ctx)
     err = av_hwdevice_ctx_init(ctx->drm_device_ref);
     if (err) {
         av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device!\n", av_err2str(err));
-        return err;
-    }
-
-    const char *vulkan_device = "0";
-
-    AVDictionary *vulkan_opts = NULL;
-    av_dict_set_int(&vulkan_opts, "linear_images", 1, 0);
-
-    /* Vulkan hwcontext */
-    err = av_hwdevice_ctx_create(&ctx->vulkan_device_ref, AV_HWDEVICE_TYPE_VULKAN,
-                                 vulkan_device, vulkan_opts, 0);
-
-    av_dict_free(&vulkan_opts);
-
-    if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to open Vulkan mapping device!\n", av_err2str(err));
         return err;
     }
 
@@ -845,6 +827,9 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
         av_log(ctx, AV_LOG_ERROR, "Compositor doesn't support %s!\n",
                zwlr_export_dmabuf_manager_v1_interface.name);
         return AVERROR(ENOSYS);
+    } else {
+        if ((err = init_drm_hwcontext(ctx)))
+            goto fail;
     }
 
     if (!ctx->screencopy_export_manager) {
@@ -852,10 +837,6 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
                zwlr_screencopy_manager_v1_interface.name);
         return AVERROR(ENOSYS);
     }
-
-    err = init_hwcontexts(ctx);
-    if (err)
-        goto fail;
 
     /* Start the event thread */
     pthread_create(&ctx->event_thread, NULL, wayland_events_thread, ctx);

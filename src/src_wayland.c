@@ -41,6 +41,7 @@ typedef struct WaylandCtx {
     struct wl_shm *shm_interface;
 
     AVBufferRef *drm_device_ref;
+    AVBufferRef *vulkan_device_ref;
 
     struct wl_list output_list;
     SourceInfo *sources;
@@ -82,6 +83,7 @@ typedef struct WaylandCaptureCtx {
 
     /* DMABUF stuff */
     AVBufferRef *drm_frames_ref;
+    AVBufferRef *vulkan_frames_ref;
 
     /* Screencopy stuff */
     AVBufferPool *scrcpy_pool;
@@ -291,19 +293,31 @@ static void dmabuf_frame_object(void *data, struct zwlr_export_dmabuf_frame_v1 *
     desc->layers[0].nb_planes = FFMAX(desc->layers[0].nb_planes, plane_index + 1);
 }
 
-static enum AVPixelFormat drm_fmt_to_pixfmt(uint32_t fmt) {
-    switch (fmt) {
-    case DRM_FORMAT_NV12: return AV_PIX_FMT_NV12;
-    case DRM_FORMAT_ARGB8888: return AV_PIX_FMT_BGRA;
-    case DRM_FORMAT_XRGB8888: return AV_PIX_FMT_BGR0;
-    case DRM_FORMAT_ABGR8888: return AV_PIX_FMT_RGBA;
-    case DRM_FORMAT_XBGR8888: return AV_PIX_FMT_RGB0;
-    case DRM_FORMAT_RGBA8888: return AV_PIX_FMT_ABGR;
-    case DRM_FORMAT_RGBX8888: return AV_PIX_FMT_0BGR;
-    case DRM_FORMAT_BGRA8888: return AV_PIX_FMT_ARGB;
-    case DRM_FORMAT_BGRX8888: return AV_PIX_FMT_0RGB;
-    default: return AV_PIX_FMT_NONE;
+static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format drm_format,
+                                               enum wl_shm_format wl_format)
+{
+    #define FMTDBL(fmt) DRM_FORMAT_##fmt, WL_SHM_FORMAT_##fmt
+    static const struct {
+        enum wl_shm_format src_drm;
+        enum wl_shm_format src_wl;
+        enum AVPixelFormat dst;
+    } format_map[] = {
+        { FMTDBL(XRGB8888), AV_PIX_FMT_BGR0 },
+        { FMTDBL(ARGB8888), AV_PIX_FMT_BGRA },
+        { FMTDBL(XBGR8888), AV_PIX_FMT_RGB0 },
+        { FMTDBL(ABGR8888), AV_PIX_FMT_RGBA },
+        { FMTDBL(NV12),     AV_PIX_FMT_NV12 },
     };
+    #undef FMTDBL
+
+    for (int i = 0; i < FF_ARRAY_ELEMS(format_map); i++) {
+        if ((drm_format != UINT32_MAX) && format_map[i].src_drm == drm_format)
+            return format_map[i].dst;
+        if ((wl_format != UINT32_MAX) && format_map[i].src_wl == wl_format)
+            return format_map[i].dst;
+    }
+
+    return AV_PIX_FMT_NONE;
 }
 
 static int attach_drm_frames_ref(WaylandCaptureCtx *ctx, AVFrame *f,
@@ -361,7 +375,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
 {
     WaylandCaptureCtx *ctx = data;
     AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)ctx->frame->data[0];
-    enum AVPixelFormat sw_fmt = drm_fmt_to_pixfmt(desc->layers[0].format);
+    enum AVPixelFormat sw_fmt = drm_wl_fmt_to_pixfmt(desc->layers[0].format, UINT32_MAX);
     int err = 0;
 
 	/* Timestamp, nanoseconds timebase */
@@ -484,25 +498,6 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
                             scrcpy_frame_free, NULL, 0);
 }
 
-static enum AVPixelFormat map_shm_to_ffmpeg(enum wl_shm_format format)
-{
-    static const struct {
-        enum wl_shm_format src;
-        enum AVPixelFormat dst;
-    } format_map[] = {
-        { WL_SHM_FORMAT_XRGB8888, AV_PIX_FMT_BGR0 },
-        { WL_SHM_FORMAT_ARGB8888, AV_PIX_FMT_BGR0 }, /* We lie here */
-        { WL_SHM_FORMAT_XBGR8888, AV_PIX_FMT_RGB0 },
-        { WL_SHM_FORMAT_ABGR8888, AV_PIX_FMT_RGBA },
-    };
-
-    for (int i = 0; i < FF_ARRAY_ELEMS(format_map); i++)
-        if (format_map[i].src == format)
-            return format_map[i].dst;
-
-    return AV_PIX_FMT_NONE;
-}
-
 static void scrcpy_register_cb(WaylandCaptureCtx *ctx);
 
 static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
@@ -525,7 +520,7 @@ static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *fram
         ctx->fmt_report.height = ctx->height = height;
         ctx->scrcpy_stride = stride;
         ctx->scrcpy_format = format;
-        ctx->fmt_report.pix_fmt = map_shm_to_ffmpeg(format);
+        ctx->fmt_report.pix_fmt = drm_wl_fmt_to_pixfmt(UINT32_MAX, format);
         ctx->fmt_report.sw_format = ctx->fmt_report.pix_fmt;
         ctx->info_cb(ctx->info_cb_ctx, &ctx->fmt_report);
 
@@ -777,8 +772,10 @@ void *wayland_events_thread(void *arg)
     return NULL;
 }
 
-static int init_dmabuf_hwcontext(WaylandCtx *ctx)
+static int init_hwcontexts(WaylandCtx *ctx)
 {
+    int err;
+
     /* DRM hwcontext */
     ctx->drm_device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
     if (!ctx->drm_device_ref)
@@ -790,7 +787,27 @@ static int init_dmabuf_hwcontext(WaylandCtx *ctx)
     /* We don't need a device (we don't even know it and can't open it) */
     hwctx->fd = -1;
 
-    av_hwdevice_ctx_init(ctx->drm_device_ref);
+    err = av_hwdevice_ctx_init(ctx->drm_device_ref);
+    if (err) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device!\n", av_err2str(err));
+        return err;
+    }
+
+    const char *vulkan_device = "0";
+
+    AVDictionary *vulkan_opts = NULL;
+    av_dict_set_int(&vulkan_opts, "linear_images", 1, 0);
+
+    /* Vulkan hwcontext */
+    err = av_hwdevice_ctx_create(&ctx->vulkan_device_ref, AV_HWDEVICE_TYPE_VULKAN,
+                                 vulkan_device, vulkan_opts, 0);
+
+    av_dict_free(&vulkan_opts);
+
+    if (err) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to open Vulkan mapping device!\n", av_err2str(err));
+        return err;
+    }
 
     return 0;
 }
@@ -801,7 +818,7 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
     WaylandCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
     *ctx->class = (AVClass) {
-        .class_name = "wlstream_wlcapture",
+        .class_name = "wayland_capture",
         .item_name  = av_default_item_name,
         .version    = LIBAVUTIL_VERSION_INT,
     };
@@ -828,10 +845,6 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
         av_log(ctx, AV_LOG_ERROR, "Compositor doesn't support %s!\n",
                zwlr_export_dmabuf_manager_v1_interface.name);
         return AVERROR(ENOSYS);
-    } else {
-        err = init_dmabuf_hwcontext(ctx);
-        if (err)
-            goto fail;
     }
 
     if (!ctx->screencopy_export_manager) {
@@ -839,6 +852,10 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
                zwlr_screencopy_manager_v1_interface.name);
         return AVERROR(ENOSYS);
     }
+
+    err = init_hwcontexts(ctx);
+    if (err)
+        goto fail;
 
     /* Start the event thread */
     pthread_create(&ctx->event_thread, NULL, wayland_events_thread, ctx);

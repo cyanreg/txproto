@@ -55,6 +55,8 @@ typedef const struct CaptureSource {
      *     - will be called before the first frame is pushed to the FIFO
      *     - can be called from a different thread (or not)
      * To avoid race conditions, just call peek_from_fifo() right after
+     *
+     * All frames in the FIFO must be either software frames or Vulkan frames
      */
     int  (*start)(void *s, uint64_t identifier, AVDictionary *opts,
                   AVFrameFIFO *dst, report_format *info_cb, void *info_cb_ctx);

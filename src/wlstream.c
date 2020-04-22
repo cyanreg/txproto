@@ -20,7 +20,6 @@
 #include <stdatomic.h>
 
 #include "frame_fifo.h"
-#include "packet_fifo.h"
 #include "src_common.h"
 #include "utils.h"
 
@@ -95,15 +94,13 @@ struct capture_context {
     AVDictionary *audio_encoder_opts;
 
     /* Muxing */
-    pthread_t muxing_thread;
-    int target_nb_streams;
+    AVFormatContext *avf;
+    pthread_t muxing_thread; /* Its own thread to deal better with blocking */
     char *out_filename;
     char *out_format;
     int video_streamid;
     int audio_streamid;
-    AVPacketFIFO packet_buf;
-    AVFormatContext *avf;
-    pthread_mutex_t avf_lock;
+    AVFrameFIFO packet_buf;
     pthread_mutex_t avf_conf_lock;
 };
 
@@ -483,7 +480,7 @@ void *video_encode_thread(void *arg)
 
             out_pkt->stream_index = ctx->video_streamid;
 
-            pkt_push_to_fifo(&ctx->packet_buf, out_pkt);
+            push_to_fifo(&ctx->packet_buf, out_pkt);
         };
 	} while (!ctx->err);
 
@@ -495,9 +492,8 @@ end:
 
 static int init_lavf(struct capture_context *ctx)
 {
-    pkt_init_fifo(&ctx->packet_buf, 0);
+    init_fifo(&ctx->packet_buf, 0, FIFO_BLOCK_NO_INPUT);
 
-    pthread_mutex_init(&ctx->avf_lock, NULL);
     pthread_mutex_init(&ctx->avf_conf_lock, NULL);
     pthread_mutex_lock(&ctx->avf_conf_lock);
 
@@ -539,7 +535,7 @@ void *muxing_thread(void *arg)
     fprintf(stderr, "\n");
 
     while (1) {
-        AVPacket *in_pkt = pkt_pop_from_fifo(&ctx->packet_buf);
+        AVPacket *in_pkt = pop_from_fifo(&ctx->packet_buf);
         if (!in_pkt)
             break;
 
@@ -567,7 +563,7 @@ void *muxing_thread(void *arg)
 
         fprintf(stderr, "\rPackets muxed: %liv, %lia, cache: %iv, %ia, %ip", video_packets,
                 audio_packets, get_fifo_size(&ctx->video_frames),
-                get_fifo_size(&ctx->audio_frames), pkt_get_fifo_size(&ctx->packet_buf));
+                get_fifo_size(&ctx->audio_frames), get_fifo_size(&ctx->packet_buf));
     }
 
     if ((err = av_write_trailer(ctx->avf))) {
@@ -597,7 +593,7 @@ static int init_video_capture(struct capture_context *ctx)
     int err;
     uint64_t identifier = 0;
 
-    init_fifo(&ctx->video_frames, ctx->video_frame_queue);
+    init_fifo(&ctx->video_frames, ctx->video_frame_queue, FIFO_BLOCK_NO_INPUT);
 
     /* Init pulse */
     ctx->video_capture_source->init(&ctx->video_cap_ctx, NULL, ctx);
@@ -935,7 +931,7 @@ void *audio_encode_thread(void *arg)
 
             out_pkt->stream_index = ctx->audio_streamid;
 
-            pkt_push_to_fifo(&ctx->packet_buf, out_pkt);
+            push_to_fifo(&ctx->packet_buf, out_pkt);
         }
     } while (!ctx->err);
 
@@ -972,7 +968,7 @@ static int init_audio_capture(struct capture_context *ctx)
     uint64_t identifier = 0;
 
     /* Init the FIFO buffer */
-    init_fifo(&ctx->audio_frames, ctx->audio_frame_queue);
+    init_fifo(&ctx->audio_frames, ctx->audio_frame_queue, FIFO_BLOCK_NO_INPUT);
 
     /* Init pulse */
     ctx->audio_capture_source->init(&ctx->audio_cap_ctx, NULL, ctx);
@@ -1092,7 +1088,7 @@ static int main_loop(struct capture_context *ctx) {
     if (ctx->video_encoder && ctx->video_thread) pthread_join(ctx->video_thread, NULL);
     if (ctx->audio_encoder && ctx->audio_thread) pthread_join(ctx->audio_thread, NULL);
 
-    pkt_push_to_fifo(&ctx->packet_buf, NULL);
+    push_to_fifo(&ctx->packet_buf, NULL);
 
     if (ctx->audio_encoder || ctx->video_encoder) pthread_join(ctx->muxing_thread, NULL);
 
@@ -1109,8 +1105,9 @@ static void uninit(struct capture_context *ctx)
     src_pulse.free(&q_ctx->audio_cap_ctx);
 #endif
 
-    free_fifo(&ctx->video_frames);
-    free_fifo(&ctx->audio_frames);
+    free_fifo(&ctx->video_frames, 0);
+    free_fifo(&ctx->audio_frames, 0);
+    free_fifo(&ctx->packet_buf, 0);
 
     av_buffer_unref(&ctx->mapped_frames_ref);
     av_buffer_unref(&ctx->mapped_device_ref);
@@ -1147,6 +1144,8 @@ int main(int argc, char *argv[])
         ctx.out_format = "flv";
     if (!strncmp(ctx.out_filename, "udp", 3))
         ctx.out_format = "mpegts";
+    if (!strncmp(ctx.out_filename, "http", 3))
+        ctx.out_format = "dash";
 
     /* Capture settings */
     ctx.video_capture_source = &src_wayland;
@@ -1161,18 +1160,17 @@ int main(int argc, char *argv[])
     ctx.video_bitrate = 24.0f;
     ctx.hw_device_type = av_hwdevice_find_type_by_name("vulkan");
     ctx.hardware_device = "0";
-    ctx.keyframe_interval = 30;
+    ctx.keyframe_interval = 300;
     ctx.video_frame_queue = 16;
     av_dict_set(&ctx.video_encoder_opts, "preset", "superfast", 0);
 
     ctx.audio_capture_source = &src_pulse;
     ctx.audio_capture_target = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor";
-    ctx.audio_encoder = !ctx.audio_capture_source ? NULL : "libopus";
+    ctx.audio_encoder = !ctx.audio_capture_source ? NULL : "aac";
     ctx.audio_bitrate = 164.0f;
     ctx.audio_dst_samplerate = 48000;
     ctx.audio_frame_queue = 256;
 
-    ctx.target_nb_streams = !!ctx.video_encoder + !!ctx.audio_encoder;
     ctx.video_streamid = ctx.audio_streamid = -1;
 
     av_dict_set(&ctx.audio_encoder_opts, "application", "lowdelay", 0);

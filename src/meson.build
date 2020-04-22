@@ -1,7 +1,7 @@
 sources = [
     'wlstream.c',
     'src_pulse.c',
-    'src_wldmabuf.c',
+    'src_wayland.c',
     'utils.c',
 ]
 

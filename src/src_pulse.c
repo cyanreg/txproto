@@ -45,15 +45,16 @@ typedef struct PulseCaptureCtx {
 static void pulse_stream_read_cb(pa_stream *stream, size_t size,
                                  void *data)
 {
+    const void *buffer;
     PulseCaptureCtx *ctx = data;
 
     if (atomic_load(&ctx->quit)) {
+        pa_stream_peek(stream, &buffer, &size);
         pa_stream_drop(stream);
         pa_stream_disconnect(stream);
         return;
     }
 
-    const void *buffer;
     pa_stream_peek(stream, &buffer, &size);
     int stereo = av_get_channel_layout_nb_channels(ctx->fmt_report.channel_layout) > 1;
 
@@ -79,10 +80,8 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
         f->pts = pts;
         int delay_neg;
         pa_usec_t delay;
-        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK) {
+        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK)
             f->pts += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
-            f->pts -= ctx->start_pts;
-        }
     } else {
         f->pts = INT64_MIN;
     }
@@ -209,18 +208,20 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
     cap_ctx->info_cb     = info_cb;
     cap_ctx->info_cb_ctx = info_cb_ctx;
 
+    pa_proplist *pl = pa_proplist_new();
+
     pa_stream *stream = pa_stream_new_extended(ctx->pa_context, "wlstream",
                                                wanted_fmts, wanted_fmts_tot,
-                                               NULL);
+                                               pl);
 
     for (int i = 0; i < wanted_fmts_tot; i++)
         pa_format_info_free(wanted_fmts[i]);
     av_free(wanted_fmts);
 
-    pa_buffer_attr attr = { 0 };
-    uint32_t bsize = 512*8;
-    attr.fragsize  = bsize;
-    attr.maxlength = bsize;
+    pa_proplist_free(pl);
+
+    pa_buffer_attr attr = { -1, -1, -1, -1, -1 };
+    attr.fragsize = 512*8;
 
     /* Set stream callbacks */
     pa_stream_set_state_callback(stream, pulse_stream_status_cb, cap_ctx);
@@ -396,7 +397,7 @@ static int init_pulse(void **s, report_error *err_cb, void *err_opaque)
     PulseCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
     *ctx->class = (AVClass) {
-        .class_name = "wlstream_pulse",
+        .class_name = "pulse",
         .item_name  = av_default_item_name,
         .version    = LIBAVUTIL_VERSION_INT,
     };

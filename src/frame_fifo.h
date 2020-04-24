@@ -1,3 +1,5 @@
+#pragma once
+
 #include <pthread.h>
 #include <assert.h>
 #include <libavcodec/avcodec.h>

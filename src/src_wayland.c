@@ -301,7 +301,7 @@ static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format drm_format,
         enum AVPixelFormat dst;
     } format_map[] = {
         { FMTDBL(XRGB8888), AV_PIX_FMT_BGR0 },
-        { FMTDBL(ARGB8888), AV_PIX_FMT_BGRA },
+        { FMTDBL(ARGB8888), AV_PIX_FMT_BGR0 }, /* We lie here */
         { FMTDBL(XBGR8888), AV_PIX_FMT_RGB0 },
         { FMTDBL(ABGR8888), AV_PIX_FMT_RGBA },
         { FMTDBL(NV12),     AV_PIX_FMT_NV12 },
@@ -636,15 +636,17 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts,
     cap_ctx->fmt_report.time_base = av_make_q(1, 1000000000);
 
     /* Options */
-    cap_ctx->capture_cursor = strtol(dict_get(opts, "capture_cursor"), NULL, 10);
-    cap_ctx->use_screencopy = strtol(dict_get(opts, "use_screencopy"), NULL, 10);
+    if (dict_get(opts, "capture_cursor"))
+        cap_ctx->capture_cursor = strtol(dict_get(opts, "capture_cursor"), NULL, 10);
+    if (dict_get(opts, "use_screencopy"))
+        cap_ctx->use_screencopy = strtol(dict_get(opts, "use_screencopy"), NULL, 10);
 
     if (cap_ctx->use_screencopy)
         scrcpy_register_cb(cap_ctx);
     else
         dmabuf_register_cb(cap_ctx);
 
-    wl_display_dispatch(ctx->display);
+    wl_display_flush(ctx->display);
 
     return 0;
 }
@@ -787,7 +789,7 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
 
     err = av_hwdevice_ctx_init(ctx->drm_device_ref);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device!\n", av_err2str(err));
+        av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device: %s!\n", av_err2str(err));
         return err;
     }
 

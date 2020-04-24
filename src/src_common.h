@@ -1,4 +1,10 @@
+#pragma once
+
 #include <libavutil/avutil.h>
+#include <libavutil/dict.h>
+#include <libavutil/samplefmt.h>
+
+#include "frame_fifo.h"
 
 typedef struct FormatReport {
     /* Must be set for sanity */

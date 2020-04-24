@@ -110,12 +110,11 @@ static void pulse_stream_status_cb(pa_stream *stream, void *data)
 {
     int err;
     PulseCaptureCtx *ctx = data;
+    const pa_sample_spec *ss;
 
     switch (pa_stream_get_state(stream)) {
     case PA_STREAM_READY:
-        av_log(ctx->main, AV_LOG_INFO, "Capture stream ready\n");
-
-        const pa_sample_spec *ss = pa_stream_get_sample_spec(stream);
+        ss = pa_stream_get_sample_spec(stream);
 
         ctx->fmt_report.type            = AVMEDIA_TYPE_AUDIO;
         ctx->fmt_report.sample_fmt      = format_map[ss->format].av_format;
@@ -123,6 +122,9 @@ static void pulse_stream_status_cb(pa_stream *stream, void *data)
         ctx->fmt_report.time_base       = av_make_q(1, 1000000);
         ctx->fmt_report.bits_per_sample = format_map[ss->format].bits_per_sample;
         ctx->fmt_report.channel_layout  = av_get_default_channel_layout(ss->channels);
+
+        av_log(ctx->main, AV_LOG_INFO, "Capture stream ready, format: %ich %ihz %ibps\n",
+               ss->channels, ss->rate, ctx->fmt_report.bits_per_sample);
 
         err = ctx->info_cb(ctx->info_cb_ctx, &ctx->fmt_report);
         if (err)
@@ -150,7 +152,6 @@ FN_CREATING(PulseCtx, PulseCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num
 static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
                        AVFrameFIFO *dst, report_format *info_cb, void *info_cb_ctx)
 {
-    int err;
     PulseCtx *ctx = s;
     SourceInfo *src = NULL;
 
@@ -221,7 +222,7 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
     pa_proplist_free(pl);
 
     pa_buffer_attr attr = { -1, -1, -1, -1, -1 };
-    attr.fragsize = 512*8;
+    attr.fragsize = 512*16;
 
     /* Set stream callbacks */
     pa_stream_set_state_callback(stream, pulse_stream_status_cb, cap_ctx);
@@ -237,10 +238,8 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
 
     return 0;
 
-fail:
     /* TODO: Undo everything */
 
-    return err;
 }
 
 static void pulse_sink_info_cb(pa_context *context, const pa_sink_info *info,

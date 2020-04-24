@@ -46,10 +46,13 @@ static int init_avctx(EncodingContext *ctx)
     ctx->avctx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
 
     if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
-        ctx->avctx->width      = ctx->input_fmt->width;
-        ctx->avctx->height     = ctx->input_fmt->height;
-        ctx->avctx->pix_fmt    = ctx->input_fmt->sw_format;
-        ctx->avctx->gop_size   = ctx->keyframe_interval;
+        ctx->avctx->width          = ctx->input_fmt->width;
+        ctx->avctx->height         = ctx->input_fmt->height;
+        ctx->avctx->pix_fmt        = ctx->input_fmt->sw_format;
+        ctx->avctx->gop_size       = ctx->keyframe_interval;
+        ctx->avctx->global_quality = ctx->crf;
+        ctx->avctx->color_range    = AVCOL_RANGE_JPEG;
+        ctx->avctx->color_trc      = AVCOL_TRC_BT709;
 
         if (ctx->width && ctx->height) {
             ctx->avctx->width  = ctx->width;
@@ -293,7 +296,12 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
     /* Replace original frame with mapped */
     av_frame_free(&in_f);
     in_f = mapped_frame;
-    in_f->colorspace = AVCOL_SPC_BT709;
+
+    in_f->colorspace = AVCOL_SPC_RGB;
+    in_f->color_trc = AVCOL_TRC_BT709;
+    in_f->color_primaries = AVCOL_PRI_BT709;
+    in_f->color_range = AVCOL_RANGE_JPEG;
+
     *input = in_f;
 
     return 0;
@@ -313,6 +321,10 @@ static void *encoding_thread(void *arg)
             frame = pop_from_fifo(ctx->source_frames);
             flush = !frame;
         }
+
+        if (frame)
+            frame->pts = av_add_stable(ctx->avctx->time_base, frame->pts,
+                                       av_make_q(1, 1000000), ctx->ts_offset_us);
 
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
             ret = video_process_frame(ctx, &frame);

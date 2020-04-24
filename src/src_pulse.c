@@ -1,4 +1,5 @@
 #include <stdatomic.h>
+#include <libavutil/time.h>
 #include <libavutil/avstring.h>
 #include <libavutil/channel_layout.h>
 #include <pulse/pulseaudio.h>
@@ -63,6 +64,7 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
     f->format         = ctx->fmt_report.sample_fmt;
     f->channel_layout = ctx->fmt_report.channel_layout;
     f->nb_samples     = size >> (av_log2(av_get_bytes_per_sample(f->format)) + stereo);
+    f->best_effort_timestamp = av_gettime_relative();
 
     /* I can't believe these bastards don't output aligned data. Let's hope the
      * ability to have writeable refcounted frames is worth it elsewhere. */
@@ -73,15 +75,17 @@ static void pulse_stream_read_cb(pa_stream *stream, size_t size,
         memset(f->data[0], 0, size); /* Buffer is actually a hole */
 
     /* Force update the timing info now */
-    pa_operation_unref(pa_stream_update_timing_info(stream, NULL, NULL));
+    //pa_operation_unref(pa_stream_update_timing_info(stream, NULL, NULL));
 
     pa_usec_t pts;
     if (pa_stream_get_time(stream, &pts) == PA_OK) {
         f->pts = pts;
         int delay_neg;
         pa_usec_t delay;
-        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK)
+        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK) {
             f->pts += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
+            f->best_effort_timestamp += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
+        }
     } else {
         f->pts = INT64_MIN;
     }
@@ -232,8 +236,8 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts,
     pa_stream_connect_record(stream, src->name, &attr,
                              PA_STREAM_ADJUST_LATENCY     |
                              PA_STREAM_NOT_MONOTONIC      |
-                             //PA_STREAM_AUTO_TIMING_UPDATE |
-                             //PA_STREAM_INTERPOLATE_TIMING |
+                             PA_STREAM_AUTO_TIMING_UPDATE |
+                             PA_STREAM_INTERPOLATE_TIMING |
                              0x0);
 
     return 0;

@@ -5,7 +5,6 @@
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libavutil/opt.h>
-#include <libavutil/time.h>
 #include <libavutil/avstring.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
@@ -374,11 +373,10 @@ static int init_enc_muxing(struct capture_context *ctx, EncodingContext *enc)
         ctx->audio_streamid = st->id;
 
     int err = avcodec_parameters_from_context(st->codecpar, enc->avctx);
-       if (err) {
-               av_log(ctx, AV_LOG_ERROR, "Couldn't copy codec params: %s!\n",
-                               av_err2str(err));
-               return err;
-       }
+    if (err) {
+        av_log(ctx, AV_LOG_ERROR, "Couldn't copy codec params: %s!\n", av_err2str(err));
+         return err;
+     }
 
     return 0;
 }
@@ -442,6 +440,8 @@ void on_quit_signal(int signo) {
 
 static int main_loop(struct capture_context *ctx) {
 	int err;
+	int64_t ts_epoch;
+	int64_t first_ts_video = INT64_MAX, first_ts_audio = INT64_MAX;
 
 	q_ctx = ctx;
 
@@ -463,20 +463,21 @@ static int main_loop(struct capture_context *ctx) {
 
     if (ctx->audio_capture_source) {
         /* Wait for frames */
-        peek_from_fifo(&ctx->audio_frames);
+        AVFrame *f = peek_from_fifo(&ctx->audio_frames);
+        first_ts_audio = f->best_effort_timestamp;
 
         ctx->audio_encoder = alloc_encoding_ctx();
 
-        ctx->audio_encoder->codec = avcodec_find_encoder_by_name("aac");
+        ctx->audio_encoder->codec = avcodec_find_encoder_by_name("libopus");
         ctx->audio_encoder->source_frames = &ctx->audio_frames;
         ctx->audio_encoder->dest_packets = &ctx->packet_buf;
         ctx->audio_encoder->input_fmt = &ctx->audio_src_format;
         ctx->audio_encoder->bitrate = lrintf(1000.0f * (160.0));
         ctx->audio_encoder->global_header_needed = ctx->avf->oformat->flags & AVFMT_GLOBALHEADER;
 
-//        av_dict_set(&ctx->audio_encoder->encoder_opts, "application", "lowdelay", 0);
-//        av_dict_set(&ctx->audio_encoder->encoder_opts, "vbr", "off", 0);
-//        av_dict_set(&ctx->audio_encoder->encoder_opts, "frame_duration", "2.5", 0);
+        av_dict_set(&ctx->audio_encoder->encoder_opts, "application", "lowdelay", 0);
+        av_dict_set(&ctx->audio_encoder->encoder_opts, "vbr", "off", 0);
+        av_dict_set(&ctx->audio_encoder->encoder_opts, "frame_duration", "2.5", 0);
 
         init_encoder(ctx->audio_encoder);
 
@@ -485,24 +486,32 @@ static int main_loop(struct capture_context *ctx) {
 
     if (ctx->video_capture_source) {
         /* Wait for frames */
-        peek_from_fifo(&ctx->video_frames);
+        AVFrame *f = peek_from_fifo(&ctx->video_frames);
+        first_ts_video = f->best_effort_timestamp;
 
         ctx->video_encoder = alloc_encoding_ctx();
 
-        ctx->video_encoder->codec = avcodec_find_encoder_by_name("h264_vaapi");
+        ctx->video_encoder->codec = avcodec_find_encoder_by_name("hevc_vaapi");
         ctx->video_encoder->source_frames = &ctx->video_frames;
         ctx->video_encoder->dest_packets = &ctx->packet_buf;
         ctx->video_encoder->pix_fmt = AV_PIX_FMT_NV12;
         ctx->video_encoder->input_fmt = &ctx->video_src_format;
         ctx->video_encoder->bitrate = lrintf(1000000.0f * (10.0));
+//        ctx->video_encoder->keyframe_interval = 10;
+        ctx->video_encoder->crf = 40;
         ctx->video_encoder->global_header_needed = ctx->avf->oformat->flags & AVFMT_GLOBALHEADER;
 
-        av_dict_set(&ctx->video_encoder->encoder_opts, "preset", "superfast", 0);
+        av_dict_set(&ctx->video_encoder->encoder_opts, "rc_mode", "CQP", 0);
+        av_dict_set(&ctx->video_encoder->encoder_opts, "b_depth", "4", 0);
 
         init_encoder(ctx->video_encoder);
 
         init_enc_muxing(ctx, ctx->video_encoder);
     }
+
+    ts_epoch = FFMIN(first_ts_video, first_ts_audio);
+    ctx->video_encoder->ts_offset_us = first_ts_video - ts_epoch;
+    ctx->audio_encoder->ts_offset_us = first_ts_audio - ts_epoch;
 
     start_encoding_thread(ctx->video_encoder);
     start_encoding_thread(ctx->audio_encoder);
@@ -566,7 +575,7 @@ int main(int argc, char *argv[])
     });
 
     ctx.out_filename = argv[1];
-    ctx.out_format = NULL;
+    ctx.out_format = "matroska";
 
     if (!strncmp(ctx.out_filename, "rtmp", 4))
         ctx.out_format = "flv";
@@ -585,7 +594,6 @@ int main(int argc, char *argv[])
     ctx.audio_capture_source = &src_pulse;
     ctx.audio_capture_target = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor";
     ctx.audio_frame_queue = 256;
-    av_dict_set_int(&ctx.video_capture_opts, "buffer_ms", 1, 0);
 
     ctx.video_streamid = ctx.audio_streamid = -1;
 

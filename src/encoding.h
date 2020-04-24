@@ -19,10 +19,12 @@ typedef struct EncodingContext {
 
     /* Options */
     int64_t bitrate;
+    int crf;
     int keyframe_interval;
 
     /* Set this before you start the thread */
     int stream_id;
+    int64_t ts_offset_us;
 
     /* Optional data */
     AVBufferRef *input_device_ref;

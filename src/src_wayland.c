@@ -9,6 +9,7 @@
 #include <libavutil/hwcontext.h>
 #include <libavutil/buffer.h>
 #include <libavutil/hwcontext_drm.h>
+#include <libavutil/time.h>
 
 #include "wlr-export-dmabuf-unstable-v1-client-protocol.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
@@ -381,6 +382,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     if (!ctx->vid_start_pts)
         ctx->vid_start_pts = ctx->frame->pts;
     ctx->frame->pts -= ctx->vid_start_pts;
+    ctx->frame->best_effort_timestamp = av_gettime_relative();
 
     if (ctx->fmt_report.width != ctx->frame->width ||
         ctx->fmt_report.height != ctx->frame->height ||
@@ -573,6 +575,7 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     if (!ctx->vid_start_pts)
         ctx->vid_start_pts = ctx->frame->pts;
     ctx->frame->pts -= ctx->vid_start_pts;
+    ctx->frame->best_effort_timestamp = av_gettime_relative();
 
     if (!ctx->fifo) {
         av_frame_free(&ctx->frame);

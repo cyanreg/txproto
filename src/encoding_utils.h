@@ -13,14 +13,15 @@ static const AVCodecHWConfig *get_codec_hw_config(EncodingContext *ctx)
     return NULL;
 }
 
-static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec, FormatReport *fmt)
+static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec,
+                                                 enum AVSampleFormat ifmt,
+                                                 int ibps)
 {
     int i = 0;
     int max_bps = 0;
     enum AVSampleFormat max_bps_fmt = AV_SAMPLE_FMT_NONE;
 
-    enum AVSampleFormat ifmt = fmt->sample_fmt;
-    int ibps = fmt->bits_per_sample >> 3;
+    ibps = ibps >> 3;
 
     /* Accepts anything */
     if (!codec->sample_fmts)
@@ -44,9 +45,9 @@ static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec, FormatReport *f
     return max_bps_fmt;
 }
 
-static int pick_codec_sample_rate(AVCodec *codec, FormatReport *fmt)
+static int pick_codec_sample_rate(AVCodec *codec, int irate)
 {
-    int i = 0, irate = fmt->sample_rate, ret;
+    int i = 0, ret;
     if (!codec->supported_samplerates)
         return irate;
 
@@ -69,10 +70,9 @@ static int pick_codec_sample_rate(AVCodec *codec, FormatReport *fmt)
     return ret;
 }
 
-static const uint64_t pick_codec_channel_layout(AVCodec *codec, FormatReport *fmt)
+static const uint64_t pick_codec_channel_layout(AVCodec *codec, uint64_t ilayout)
 {
     int i = 0;
-    uint64_t ilayout = fmt->channel_layout;
     int in_channels = av_get_channel_layout_nb_channels(ilayout);
 
     /* Supports anything */
@@ -108,9 +108,9 @@ static int64_t get_next_audio_pts(EncodingContext *ctx, AVFrame *in)
     const int64_t m = (int64_t)ctx->swr_configured_rate * ctx->avctx->sample_rate;
     const int64_t b = (int64_t)ctx->avctx->time_base.num * m;
     const int64_t c = ctx->avctx->time_base.den;
-    const int64_t in_pts = in ? in->pts : INT64_MIN;
+    const int64_t in_pts = in ? in->pts : AV_NOPTS_VALUE;
 
-    int64_t npts = in_pts == INT64_MIN ? INT64_MIN : av_rescale(in_pts, b, c);
+    int64_t npts = in_pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE : av_rescale(in_pts, b, c);
 
     npts = swr_next_pts(ctx->swr, npts);
 

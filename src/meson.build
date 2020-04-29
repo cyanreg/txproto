@@ -1,10 +1,12 @@
 sources = [
     'wlstream.c',
 
-    'encoding.c',
-
     'src_pulse.c',
     'src_wayland.c',
+
+    'filtering.c',
+
+    'encoding.c',
 
     'utils.c',
 ]

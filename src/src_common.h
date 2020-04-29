@@ -6,35 +6,20 @@
 
 #include "frame_fifo.h"
 
-typedef struct FormatReport {
-    /* Must be set for sanity */
-    enum AVMediaType type;
-
-    /* Video - all must be set */
-    int width;
-    int height;
-    enum AVPixelFormat pix_fmt;
-    enum AVPixelFormat sw_format;
+typedef struct FormatExtraData {
     AVRational avg_frame_rate;
-
-    /* Audio - all must be set */
-    int sample_rate;
-    enum AVSampleFormat sample_fmt;
-    uint64_t channel_layout;
     int bits_per_sample;
-
-    /* Common - all must be set */
     AVRational time_base;
-} FormatReport;
+} FormatExtraData;
 
 typedef struct SourceInfo {
     char *name;
     char *desc;
     uint64_t identifier;
+    uint64_t opaque; /* Opaque info to be used by the capture source only */
 } SourceInfo;
 
-typedef int (report_format)(void *opaque, FormatReport *info);
-typedef void (report_error)(void *opaque, int error_code);
+typedef void (error_handler)(void *opaque, int error_code);
 
 typedef const struct CaptureSource {
     /**
@@ -46,7 +31,7 @@ typedef const struct CaptureSource {
      * Initialize the API
      * The report_error callback may be called at any time from any thread
      */
-    int  (*init)(void **s, report_error *err_cb, void *err_opaque);
+    int  (*init)(void **s);
 
     /**
      * Get a list of sources, memory is handled by the capture source
@@ -56,16 +41,10 @@ typedef const struct CaptureSource {
     /**
      * Start encoding and dump frames into the FIFO given.
      * Will error out if called multiple times on the same identifier.
-     * The info function:
-     *     - will be called every single time the format changes
-     *     - will be called before the first frame is pushed to the FIFO
-     *     - can be called from a different thread (or not)
-     * To avoid race conditions, just call peek_from_fifo() right after
-     *
-     * All frames in the FIFO must be either software frames or Vulkan frames
+     * The ownership of the AVDict is transferred to the CaptureSource
      */
-    int  (*start)(void *s, uint64_t identifier, AVDictionary *opts,
-                  AVFrameFIFO *dst, report_format *info_cb, void *info_cb_ctx);
+    int  (*start)(void *s, uint64_t identifier, AVDictionary *opts, AVFrameFIFO *dst,
+                  error_handler *err_cb, void *error_handler_ctx);
 
     /**
      * Stops capture from a given identifier. Returns an error if not found.

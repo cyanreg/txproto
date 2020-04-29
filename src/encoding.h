@@ -12,7 +12,6 @@ typedef struct EncodingContext {
 
     /* Data needed to init */
     AVCodec *codec;
-    FormatReport *input_fmt;
     AVFrameFIFO *source_frames;
     AVFrameFIFO *dest_packets;
     int global_header_needed;
@@ -26,10 +25,6 @@ typedef struct EncodingContext {
     int stream_id;
     int64_t ts_offset_us;
 
-    /* Optional data */
-    AVBufferRef *input_device_ref;
-    AVBufferRef *input_frames_ref;
-
     /* Video only */
     AVDictionary *encoder_opts;
     int width, height; /* If either is 0, don't scale, use input */
@@ -42,8 +37,6 @@ typedef struct EncodingContext {
     AVCodecContext *avctx;
 
     /* Video */
-    const AVCodecHWConfig *hwcfg;
-    AVBufferRef *enc_device_ref;
     AVBufferRef *enc_frames_ref;
 
     /* Audio */

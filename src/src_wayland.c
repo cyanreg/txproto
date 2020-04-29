@@ -3,10 +3,12 @@
 #include <stdatomic.h>
 #include <sys/mman.h>
 #include <poll.h>
+#include <fcntl.h>
 
 #include <libdrm/drm_fourcc.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/bprint.h>
 #include <libavutil/buffer.h>
 #include <libavutil/hwcontext_drm.h>
 #include <libavutil/time.h>
@@ -53,20 +55,22 @@ typedef struct WaylandCtx {
     int wakeup_pipe[2];
 } WaylandCtx;
 
-typedef struct WaylandCopyFrame {
-    struct wl_buffer *buffer;
-    void *data;
-    size_t size;
-} WaylandCopyFrame;
-
 typedef struct WaylandCaptureCtx {
     WaylandCtx *main;
     uint64_t identifier;
     struct wl_output *target;
-    report_format *info_cb;
-    void *info_cb_ctx;
-    atomic_bool stop_capture;
     AVFrameFIFO *fifo;
+
+    /* Stats */
+    int dropped_frames;
+
+    /* Framerate limiting */
+    int64_t next_frame_ts;
+    int64_t frame_delay;
+
+    /* Error handling */
+    error_handler *error_handler;
+    void *error_handler_ctx;
 
     /* Capture options */
     int capture_cursor;
@@ -77,17 +81,26 @@ typedef struct WaylandCaptureCtx {
 
     /* Frame being signalled */
     AVFrame *frame;
-    FormatReport fmt_report;
-    int width;
-    int height;
+    AVBufferRef *fmt_extra;
+
+    /* To shut down cleanly */
+    pthread_mutex_t frame_obj_lock;
 
     /* DMABUF stuff */
-    AVBufferRef *drm_frames_ref;
+    struct {
+        struct zwlr_export_dmabuf_frame_v1 *frame_obj;
+        AVBufferRef *frames_ref;
+    } dmabuf;
 
     /* Screencopy stuff */
-    AVBufferPool *scrcpy_pool;
-    uint32_t scrcpy_stride;
-    uint32_t scrcpy_format;
+    struct {
+        struct zwlr_screencopy_frame_v1 *frame_obj;
+        AVBufferPool *pool;
+        uint32_t stride;
+        uint32_t format;
+        int width;
+        int height;
+    } scrcpy;
 } WaylandCaptureCtx;
 
 static void output_handle_geometry(void *data, struct wl_output *wl_output,
@@ -184,7 +197,10 @@ static struct wayland_output *find_output(WaylandCtx *ctx,
 static void registry_handle_remove(void *data, struct wl_registry *reg,
                                    uint32_t id)
 {
-    remove_output(find_output((WaylandCtx *)data, NULL, id));
+    WaylandCtx *ctx = data;
+    struct wayland_output *output = find_output(ctx, NULL, id);
+    src_wayland.stop(ctx, id);
+    remove_output(output);
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -199,7 +215,8 @@ static void dmabuf_frame_free(void *opaque, uint8_t *data)
     for (int i = 0; i < desc->nb_objects; ++i)
         close(desc->objects[i].fd);
 
-    zwlr_export_dmabuf_frame_v1_destroy(opaque);
+    if (opaque)
+        zwlr_export_dmabuf_frame_v1_destroy(opaque);
 
     av_free(data);
 }
@@ -212,16 +229,9 @@ static void dmabuf_frame_start(void *data, struct zwlr_export_dmabuf_frame_v1 *f
                                uint32_t format, uint32_t mod_high, uint32_t mod_low,
                                uint32_t num_objects)
 {
-    WaylandCaptureCtx *ctx = data;
     int err = 0;
-
-    if (ctx->fifo && queue_is_full(ctx->fifo)) {
-//        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
-        zwlr_export_dmabuf_frame_v1_destroy(frame);
-        dmabuf_register_cb(ctx);
-        av_frame_free(&ctx->frame);
-        return;
-    }
+    WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
 
     /* Allocate DRM specific struct */
     AVDRMFrameDescriptor *desc = av_mallocz(sizeof(*desc));
@@ -245,10 +255,10 @@ static void dmabuf_frame_start(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     }
 
     /* Set base frame properties */
-    ctx->frame->width  = width;
-    ctx->frame->height = height;
-    ctx->frame->format = AV_PIX_FMT_DRM_PRIME;
-    ctx->frame->colorspace = AVCOL_SPC_BT709;
+    ctx->frame->width      = width;
+    ctx->frame->height     = height;
+    ctx->frame->format     = AV_PIX_FMT_DRM_PRIME;
+    ctx->frame->opaque_ref = av_buffer_ref(ctx->fmt_extra);
 
     /* Set the frame data to the DRM specific struct */
     ctx->frame->buf[0] = av_buffer_create((uint8_t*)desc, sizeof(*desc),
@@ -260,12 +270,18 @@ static void dmabuf_frame_start(void *data, struct zwlr_export_dmabuf_frame_v1 *f
 
     ctx->frame->data[0] = (uint8_t*)desc;
 
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
+
     return;
 
 fail:
-//    ctx->err = err;
     dmabuf_frame_free(frame, (uint8_t *)desc);
-//    ctx->report_err(ctx->opaque_ctx, ctx->err);
+    ctx->dmabuf.frame_obj = NULL;
+
+    if (ctx->error_handler)
+        ctx->error_handler(ctx->error_handler_ctx, err);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static void dmabuf_frame_object(void *data, struct zwlr_export_dmabuf_frame_v1 *frame,
@@ -273,12 +289,7 @@ static void dmabuf_frame_object(void *data, struct zwlr_export_dmabuf_frame_v1 *
                                 uint32_t offset, uint32_t stride, uint32_t plane_index)
 {
     WaylandCaptureCtx *ctx = data;
-
-    if (!ctx->frame) {
-        zwlr_export_dmabuf_frame_v1_destroy(frame);
-        dmabuf_register_cb(ctx);
-        av_frame_free(&ctx->frame);
-    }
+    pthread_mutex_lock(&ctx->frame_obj_lock);
 
     AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)ctx->frame->data[0];
 
@@ -290,6 +301,20 @@ static void dmabuf_frame_object(void *data, struct zwlr_export_dmabuf_frame_v1 *
     desc->layers[0].planes[plane_index].pitch = stride;
 
     desc->layers[0].nb_planes = FFMAX(desc->layers[0].nb_planes, plane_index + 1);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
+}
+
+static void frame_set_colorspace(AVFrame *f, enum AVPixelFormat format)
+{
+    /* sRGB uses the 709 primaries with the AVCOL_TRC_IEC61966_2_1 transfer
+     * function.
+     * Only valid for standard displays, but that's what most are */
+    f->color_primaries = AVCOL_PRI_BT709;
+    f->colorspace      = AVCOL_SPC_RGB;
+    f->color_range     = AVCOL_RANGE_JPEG;
+    f->color_trc       = AVCOL_TRC_IEC61966_2_1;
+    f->color_trc       = AVCOL_TRC_IEC61966_2_1;
 }
 
 static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format drm_format,
@@ -305,7 +330,6 @@ static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format drm_format,
         { FMTDBL(ARGB8888), AV_PIX_FMT_BGR0 }, /* We lie here */
         { FMTDBL(XBGR8888), AV_PIX_FMT_RGB0 },
         { FMTDBL(ABGR8888), AV_PIX_FMT_RGBA },
-        { FMTDBL(NV12),     AV_PIX_FMT_NV12 },
     };
     #undef FMTDBL
 
@@ -325,29 +349,29 @@ static int attach_drm_frames_ref(WaylandCaptureCtx *ctx, AVFrame *f,
     int err = 0;
     AVHWFramesContext *hwfc;
 
-    if (ctx->drm_frames_ref) {
-        hwfc = (AVHWFramesContext*)ctx->drm_frames_ref->data;
+    if (ctx->dmabuf.frames_ref) {
+        hwfc = (AVHWFramesContext*)ctx->dmabuf.frames_ref->data;
         if (hwfc->width == f->width && hwfc->height == f->height &&
             hwfc->sw_format == sw_format) {
             goto attach;
         }
-        av_buffer_unref(&ctx->drm_frames_ref);
+        av_buffer_unref(&ctx->dmabuf.frames_ref);
     }
 
-    ctx->drm_frames_ref = av_hwframe_ctx_alloc(ctx->main->drm_device_ref);
-    if (!ctx->drm_frames_ref) {
+    ctx->dmabuf.frames_ref = av_hwframe_ctx_alloc(ctx->main->drm_device_ref);
+    if (!ctx->dmabuf.frames_ref) {
         err = AVERROR(ENOMEM);
         goto fail;
     }
 
-    hwfc = (AVHWFramesContext*)ctx->drm_frames_ref->data;
+    hwfc = (AVHWFramesContext*)ctx->dmabuf.frames_ref->data;
 
     hwfc->format = f->format;
     hwfc->sw_format = sw_format;
     hwfc->width = f->width;
     hwfc->height = f->height;
 
-    err = av_hwframe_ctx_init(ctx->drm_frames_ref);
+    err = av_hwframe_ctx_init(ctx->dmabuf.frames_ref);
     if (err) {
         av_log(ctx, AV_LOG_ERROR, "AVHWFramesContext init failed: %s!\n",
                av_err2str(err));
@@ -356,7 +380,7 @@ static int attach_drm_frames_ref(WaylandCaptureCtx *ctx, AVFrame *f,
 
 attach:
     /* Set frame hardware context referencce */
-    f->hw_frames_ctx = av_buffer_ref(ctx->drm_frames_ref);
+    f->hw_frames_ctx = av_buffer_ref(ctx->dmabuf.frames_ref);
     if (!f->hw_frames_ctx) {
         err = AVERROR(ENOMEM);
         goto fail;
@@ -365,73 +389,112 @@ attach:
     return 0;
 
 fail:
-    av_buffer_unref(&ctx->drm_frames_ref);
+    av_buffer_unref(&ctx->dmabuf.frames_ref);
+
     return err;
 }
 
 static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *frame,
                                uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec)
 {
+    int64_t err = 0;
     WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
+
     AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)ctx->frame->data[0];
     enum AVPixelFormat sw_fmt = drm_wl_fmt_to_pixfmt(desc->layers[0].format, UINT32_MAX);
-    int err = 0;
 
-	/* Timestamp, nanoseconds timebase */
+    if (sw_fmt == AV_PIX_FMT_NONE) {
+        av_log(ctx->main, AV_LOG_ERROR, "Unsupported DMABUF format!\n");
+        err = AVERROR(ENOTSUP);
+        goto fail;
+    }
+
+    /* Set the colorspace */
+    frame_set_colorspace(ctx->frame, sw_fmt);
+
+    /* Timestamp for audio/video sync */
+    ctx->frame->best_effort_timestamp = av_gettime_relative();
+
+    /* Timestamp, nanoseconds timebase */
     ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
     if (!ctx->vid_start_pts)
         ctx->vid_start_pts = ctx->frame->pts;
     ctx->frame->pts -= ctx->vid_start_pts;
-    ctx->frame->best_effort_timestamp = av_gettime_relative();
-
-    if (ctx->fmt_report.width != ctx->frame->width ||
-        ctx->fmt_report.height != ctx->frame->height ||
-        ctx->fmt_report.pix_fmt != ctx->frame->format) {
-        ctx->fmt_report.width = ctx->frame->width;
-        ctx->fmt_report.height = ctx->frame->height;
-        ctx->fmt_report.pix_fmt = ctx->frame->format;
-        ctx->fmt_report.sw_format = sw_fmt;
-        ctx->info_cb(ctx->info_cb_ctx, &ctx->fmt_report);
-    }
 
 	/* Attach the hardware frame context to the frame */
     if ((err = attach_drm_frames_ref(ctx, ctx->frame, sw_fmt)))
-        goto end;
+        goto fail;
 
-    desc->layers[0].nb_planes = 1;
-
-    if (!ctx->fifo) {
+    /* We don't do this check at the start on since there's still some chance
+     * whatever's consuming the FIFO will be done by now. */
+    if (ctx->fifo && queue_is_full(ctx->fifo)) {
+        ctx->dropped_frames++;
         av_frame_free(&ctx->frame);
-        dmabuf_register_cb(ctx);
-        av_log(ctx->main, AV_LOG_INFO, "Copy not done!\n");
-    } else if (push_to_fifo(ctx->fifo, ctx->frame)) {
-        av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
-        av_frame_free(&ctx->frame);
-    } else {
-        dmabuf_register_cb(ctx);
+        ctx->dmabuf.frame_obj = NULL;
+    } else if (ctx->fifo) {
+        if (push_to_fifo(ctx->fifo, ctx->frame)) {
+            av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
         ctx->frame = NULL;
+    } else {
+        av_frame_free(&ctx->frame);
+        ctx->dmabuf.frame_obj = NULL;
     }
 
-end:
-//    ctx->err = err;
+    /* Framerate limiting */
+    if (ctx->frame_delay) {
+        int64_t now = av_gettime_relative();
+        if (ctx->next_frame_ts && (now < ctx->next_frame_ts)) {
+            int64_t delay;
+            while (1) {
+                delay = ctx->next_frame_ts - now;
+                if (delay <= 0)
+                    break;
+                av_usleep(delay);
+                now = av_gettime_relative();
+            }
+        }
+        ctx->next_frame_ts = now + ctx->frame_delay;
+    }
+
+    dmabuf_register_cb(ctx);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
+
+    return;
+
+fail:
     av_frame_free(&ctx->frame);
-//    ctx->report_err(ctx->opaque_ctx, ctx->err);
+    ctx->dmabuf.frame_obj = NULL;
+
+    if (ctx->error_handler)
+        ctx->error_handler(ctx->error_handler_ctx, err);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static void dmabuf_frame_cancel(void *data, struct zwlr_export_dmabuf_frame_v1 *frame,
                                 uint32_t reason)
 {
-	WaylandCaptureCtx *ctx = data;
-	av_log(ctx->main, AV_LOG_WARNING, "Frame cancelled!\n");
-	zwlr_export_dmabuf_frame_v1_destroy(frame);
-	av_frame_free(&ctx->frame);
-	if (reason == ZWLR_EXPORT_DMABUF_FRAME_V1_CANCEL_REASON_PERMANENT) {
-		av_log(ctx->main, AV_LOG_ERROR, "Permanent failure, exiting\n");
-//		ctx->err = AVERROR(EINVAL);
-//		ctx->report_err(ctx->opaque_ctx, ctx->err);
-	} else {
-		dmabuf_register_cb(ctx);
-	}
+    WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
+
+    av_log(ctx->main, AV_LOG_WARNING, "Frame cancelled!\n");
+    av_frame_free(&ctx->frame);
+    ctx->dmabuf.frame_obj = NULL;
+    if (reason == ZWLR_EXPORT_DMABUF_FRAME_V1_CANCEL_REASON_PERMANENT) {
+        av_log(ctx->main, AV_LOG_ERROR, "Permanent failure, stopping capture!\n");
+        av_buffer_unref(&ctx->dmabuf.frames_ref);
+        if (ctx->error_handler)
+            ctx->error_handler(ctx->error_handler_ctx, AVERROR_EXTERNAL);
+    } else {
+        dmabuf_register_cb(ctx);
+    }
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static const struct zwlr_export_dmabuf_frame_v1_listener dmabuf_frame_listener = {
@@ -447,7 +510,14 @@ static void dmabuf_register_cb(WaylandCaptureCtx *ctx)
     f = zwlr_export_dmabuf_manager_v1_capture_output(ctx->main->dmabuf_export_manager,
                                                      ctx->capture_cursor, ctx->target);
     zwlr_export_dmabuf_frame_v1_add_listener(f, &dmabuf_frame_listener, ctx);
+    ctx->dmabuf.frame_obj = f;
 }
+
+typedef struct WaylandCopyFrame {
+    struct wl_buffer *buffer;
+    void *data;
+    size_t size;
+} WaylandCopyFrame;
 
 static void scrcpy_frame_free(void *opaque, uint8_t *data)
 {
@@ -462,11 +532,12 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
     WaylandCaptureCtx *ctx = opaque;
     WaylandCopyFrame *f = av_malloc(sizeof(WaylandCopyFrame));
 
-    f->size = ctx->scrcpy_stride * ctx->height;
+    f->size = ctx->scrcpy.stride * ctx->scrcpy.height;
 
     char name[255];
-    snprintf(name, sizeof(name), "wlcapture_%ix%i_s%i_f0x%x", ctx->width,
-             ctx->height, ctx->scrcpy_stride, ctx->scrcpy_format);
+    snprintf(name, sizeof(name), PROGRAM_NAME "_%ix%i_s%i_f0x%x", ctx->scrcpy.width,
+             ctx->scrcpy.height, ctx->scrcpy.stride, ctx->scrcpy.format);
+
     int fd = memfd_create(name, 0);
 
     int ret;
@@ -488,10 +559,10 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
 
     struct wl_shm_pool *pool = wl_shm_create_pool(ctx->main->shm_interface, fd, f->size);
     close(fd);
-    f->buffer = wl_shm_pool_create_buffer(pool, 0, ctx->width,
-                                          ctx->height,
-                                          ctx->scrcpy_stride,
-                                          ctx->scrcpy_format);
+    f->buffer = wl_shm_pool_create_buffer(pool, 0, ctx->scrcpy.width,
+                                          ctx->scrcpy.height,
+                                          ctx->scrcpy.stride,
+                                          ctx->scrcpy.format);
     wl_shm_pool_destroy(pool);
 
     return av_buffer_create((uint8_t *)f, sizeof(WaylandCopyFrame),
@@ -504,56 +575,73 @@ static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *fram
                                enum wl_shm_format format, uint32_t width, uint32_t height,
                                uint32_t stride)
 {
+    int err;
     WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
+    enum AVPixelFormat pix_fmt = drm_wl_fmt_to_pixfmt(UINT32_MAX, format);
 
-    if (atomic_load(&ctx->stop_capture)) {
-        av_buffer_pool_uninit(&ctx->scrcpy_pool);
-        av_free(ctx);
-        return;
-    }
+    if ((stride != ctx->scrcpy.stride) || (height != ctx->scrcpy.height) ||
+        (format != ctx->scrcpy.format) || (width  != ctx->scrcpy.width)) {
+        av_buffer_pool_uninit(&ctx->scrcpy.pool);
 
-    if (stride != ctx->scrcpy_stride || height != ctx->height ||
-        format != ctx->scrcpy_format || width  != ctx->width) {
-        av_buffer_pool_uninit(&ctx->scrcpy_pool);
+        ctx->scrcpy.width  = width;
+        ctx->scrcpy.height = height;
+        ctx->scrcpy.stride = stride;
+        ctx->scrcpy.format = format;
 
-        ctx->fmt_report.width = ctx->width  = width;
-        ctx->fmt_report.height = ctx->height = height;
-        ctx->scrcpy_stride = stride;
-        ctx->scrcpy_format = format;
-        ctx->fmt_report.pix_fmt = drm_wl_fmt_to_pixfmt(UINT32_MAX, format);
-        ctx->fmt_report.sw_format = ctx->fmt_report.pix_fmt;
-        ctx->info_cb(ctx->info_cb_ctx, &ctx->fmt_report);
-
-        ctx->scrcpy_pool = av_buffer_pool_init2(sizeof(WaylandCopyFrame), ctx,
+        ctx->scrcpy.pool = av_buffer_pool_init2(sizeof(WaylandCopyFrame), ctx,
                                                 shm_pool_alloc, NULL);
-    }
 
-    if (ctx->fifo && queue_is_full(ctx->fifo)) {
-//        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
-        zwlr_screencopy_frame_v1_destroy(frame);
-        scrcpy_register_cb(ctx);
-        return;
+        if (!ctx->scrcpy.pool) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
     }
 
     ctx->frame = av_frame_alloc();
+    if (!ctx->frame) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
 
     ctx->frame->width = width;
     ctx->frame->height = height;
     ctx->frame->linesize[0] = stride;
-    ctx->frame->buf[0] = av_buffer_pool_get(ctx->scrcpy_pool);
-    ctx->frame->format = ctx->fmt_report.pix_fmt;
-    ctx->frame->colorspace = AVCOL_SPC_BT709;
+    ctx->frame->buf[0] = av_buffer_pool_get(ctx->scrcpy.pool);
+    if (!ctx->frame->buf[0]) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+    ctx->frame->format = pix_fmt;
+    ctx->frame->opaque_ref = av_buffer_ref(ctx->fmt_extra);
+
+    frame_set_colorspace(ctx->frame, pix_fmt);
 
     WaylandCopyFrame *cpf = (WaylandCopyFrame *)ctx->frame->buf[0]->data;
     ctx->frame->data[0] = cpf->data;
 
     zwlr_screencopy_frame_v1_copy(frame, cpf->buffer);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
+
+    return;
+
+fail:
+    av_frame_free(&ctx->frame);
+
+    if (ctx->error_handler)
+        ctx->error_handler(ctx->error_handler_ctx, err);
+    zwlr_screencopy_frame_v1_destroy(frame);
+    ctx->scrcpy.frame_obj = NULL;
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static void scrcpy_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
                          uint32_t flags)
 {
-    WaylandCaptureCtx *ctx = data;    
+    WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
 
     /* Horizontal flipping - we can do it */
     if (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) {
@@ -562,38 +650,95 @@ static void scrcpy_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
         /* Invert the stride */
         ctx->frame->linesize[0] *= -1;
     }
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
                          uint32_t tv_sec_hi, uint32_t tv_sec_lo,
                          uint32_t tv_nsec)
 {
+    int err;
     WaylandCaptureCtx *ctx = data;
-    zwlr_screencopy_frame_v1_destroy(frame);
+    pthread_mutex_lock(&ctx->frame_obj_lock);
 
     ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
     if (!ctx->vid_start_pts)
         ctx->vid_start_pts = ctx->frame->pts;
     ctx->frame->pts -= ctx->vid_start_pts;
+
+    /* For AV sync */
     ctx->frame->best_effort_timestamp = av_gettime_relative();
 
-    if (!ctx->fifo) {
+    /* We don't do this check at the start on since there's still some chance
+     * whatever's consuming the FIFO will be done by now. */
+    if (ctx->fifo && queue_is_full(ctx->fifo)) {
+//        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
+        ctx->dropped_frames++;
         av_frame_free(&ctx->frame);
-        scrcpy_register_cb(ctx);
-    } else if (push_to_fifo(ctx->fifo, ctx->frame)) {
-        av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
-        av_frame_free(&ctx->frame);
-    } else {
-        scrcpy_register_cb(ctx);
+    } else if (ctx->fifo) {
+        if (push_to_fifo(ctx->fifo, ctx->frame)) {
+            av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
         ctx->frame = NULL;
+    } else {
+        av_frame_free(&ctx->frame);
     }
+
+    zwlr_screencopy_frame_v1_destroy(frame);
+
+    /* Framerate limiting */
+    if (ctx->frame_delay) {
+        int64_t now = av_gettime_relative();
+        if (ctx->next_frame_ts && (now < ctx->next_frame_ts)) {
+            int64_t delay;
+            while (1) {
+                delay = ctx->next_frame_ts - now;
+                if (delay <= 0)
+                    break;
+                av_usleep(delay);
+                now = av_gettime_relative();
+            }
+        }
+        ctx->next_frame_ts = now + ctx->frame_delay;
+    }
+
+    scrcpy_register_cb(ctx);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
+
+    return;
+
+fail:
+    av_frame_free(&ctx->frame);
+
+    if (ctx->error_handler)
+        ctx->error_handler(ctx->error_handler_ctx, err);
+    zwlr_screencopy_frame_v1_destroy(frame);
+    ctx->scrcpy.frame_obj = NULL;
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static void scrcpy_fail(void *data, struct zwlr_screencopy_frame_v1 *frame)
 {
     WaylandCaptureCtx *ctx = data;
+    pthread_mutex_lock(&ctx->frame_obj_lock);
+
     av_log(ctx->main, AV_LOG_ERROR, "Copy failed!\n");
+
+    if (ctx->error_handler)
+        ctx->error_handler(ctx->error_handler_ctx, AVERROR_EXTERNAL);
+
+    av_buffer_pool_uninit(&ctx->scrcpy.pool);
     zwlr_screencopy_frame_v1_destroy(frame);
+    ctx->scrcpy.frame_obj = NULL;
+
+    av_frame_free(&ctx->frame);
+
+    pthread_mutex_unlock(&ctx->frame_obj_lock);
 }
 
 static const struct zwlr_screencopy_frame_v1_listener scrcpy_frame_listener = {
@@ -609,13 +754,15 @@ static void scrcpy_register_cb(WaylandCaptureCtx *ctx)
     f = zwlr_screencopy_manager_v1_capture_output(ctx->main->screencopy_export_manager,
                                                   ctx->capture_cursor, ctx->target);
     zwlr_screencopy_frame_v1_add_listener(f, &scrcpy_frame_listener, ctx);
+    ctx->scrcpy.frame_obj = f;
 }
 
 FN_CREATING(WaylandCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
 
-static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts,
-                           AVFrameFIFO *dst, report_format *info_cb, void *info_cb_ctx)
+static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, AVFrameFIFO *dst,
+                           error_handler *err_cb, void *error_handler_ctx)
 {
+    int err;
     WaylandCtx *ctx = s;
     struct wayland_output *src = find_output(ctx, NULL, identifier);
 
@@ -628,21 +775,46 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts,
     WaylandCaptureCtx *cap_ctx = create_capture_ctx(ctx);
 
     cap_ctx->main = ctx;
-    cap_ctx->stop_capture = ATOMIC_VAR_INIT(0);
     cap_ctx->identifier = identifier;
     cap_ctx->target = src->output;
     cap_ctx->fifo = dst;
-    cap_ctx->info_cb = info_cb;
-    cap_ctx->info_cb_ctx = info_cb_ctx;
-    cap_ctx->fmt_report.type = AVMEDIA_TYPE_VIDEO;
-    cap_ctx->fmt_report.avg_frame_rate = src->framerate;
-    cap_ctx->fmt_report.time_base = av_make_q(1, 1000000000);
+    cap_ctx->error_handler = err_cb;
+    cap_ctx->error_handler_ctx = error_handler_ctx;
+    pthread_mutex_init(&cap_ctx->frame_obj_lock, NULL);
+
+    cap_ctx->fmt_extra = av_buffer_allocz(sizeof(FormatExtraData));
+
+    FormatExtraData *fe = (FormatExtraData *)cap_ctx->fmt_extra->data;
+    fe->time_base = av_make_q(1, 1000000000);
+    fe->avg_frame_rate = src->framerate;
+
+    AVRational framerate_req;
 
     /* Options */
     if (dict_get(opts, "capture_cursor"))
         cap_ctx->capture_cursor = strtol(dict_get(opts, "capture_cursor"), NULL, 10);
     if (dict_get(opts, "use_screencopy"))
         cap_ctx->use_screencopy = strtol(dict_get(opts, "use_screencopy"), NULL, 10);
+    if (dict_get(opts, "framerate_num"))
+        framerate_req.num = strtol(dict_get(opts, "framerate_num"), NULL, 10);
+    if (dict_get(opts, "framerate_den"))
+        framerate_req.den = strtol(dict_get(opts, "framerate_den"), NULL, 10);
+
+    if ((framerate_req.num && !framerate_req.den) ||
+        (framerate_req.den && !framerate_req.num) ||
+        (av_cmp_q(framerate_req, src->framerate) > 0)) {
+        av_log(ctx, AV_LOG_ERROR, "Invalid framerate!\n");
+        err = AVERROR(EINVAL);
+        goto fail;
+    } else if ((framerate_req.num && framerate_req.den) &&
+               (av_cmp_q(framerate_req, src->framerate) != 0)) {
+        fe->avg_frame_rate = framerate_req;
+        cap_ctx->frame_delay = av_rescale_q(1, av_inv_q(framerate_req), AV_TIME_BASE_Q);
+
+        /* Nearest possible multiple of the monitor's rate */
+        int64_t out_tpf = av_rescale_q(1, av_inv_q(src->framerate), AV_TIME_BASE_Q);
+        cap_ctx->frame_delay -= cap_ctx->frame_delay % out_tpf;
+    }
 
     if (cap_ctx->use_screencopy)
         scrcpy_register_cb(cap_ctx);
@@ -651,7 +823,14 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts,
 
     wl_display_flush(ctx->display);
 
+    av_dict_free(&opts);
+
     return 0;
+
+fail:
+    av_dict_free(&opts);
+
+    return err;
 }
 
 static int stop_wlcapture(void  *s, uint64_t identifier)
@@ -662,14 +841,29 @@ static int stop_wlcapture(void  *s, uint64_t identifier)
         WaylandCaptureCtx *cap_ctx = ctx->capture_ctx[i];
         if (cap_ctx->identifier == identifier) {
             av_log(ctx, AV_LOG_INFO, "Stopping wayland capture from id %lu\n", identifier);
-            atomic_store(&cap_ctx->stop_capture, 1);
 
-            /* The WaylandCaptureCtx gets freed by the capture function */
+            pthread_mutex_lock(&cap_ctx->frame_obj_lock);
 
-            /* Remove from the list */
-            ctx->capture_ctx_num = FFMAX(ctx->capture_ctx_num - 1, 0);
-            memcpy(&ctx->capture_ctx[i], &ctx->capture_ctx[i + 1],
-                   (ctx->capture_ctx_num - i)*sizeof(WaylandCaptureCtx *));
+            /* Destroying the frame objects should destroy everything */
+            if (cap_ctx->scrcpy.frame_obj)
+                zwlr_screencopy_frame_v1_destroy(cap_ctx->scrcpy.frame_obj);
+
+            /* av_frame_free also destroys the callback */
+            if (cap_ctx->dmabuf.frame_obj && !cap_ctx->frame)
+                zwlr_export_dmabuf_frame_v1_destroy(cap_ctx->dmabuf.frame_obj);
+
+            av_frame_free(&cap_ctx->frame);
+            av_buffer_unref(&cap_ctx->fmt_extra);
+
+            pthread_mutex_unlock(&cap_ctx->frame_obj_lock);
+
+            /* Free anything allocated */
+            av_buffer_pool_uninit(&cap_ctx->scrcpy.pool);
+            av_buffer_unref(&cap_ctx->dmabuf.frames_ref);
+
+            /* Remove capture context */
+            remove_capture_ctx(ctx, cap_ctx);
+
             return 0;
         }
     }
@@ -700,7 +894,12 @@ static void sources_wlcapture(void *s, SourceInfo **sources, int *num)
         SourceInfo *src = &ctx->sources[cnt++];
         src->identifier = o->id;
         src->name = av_strdup(o->model);
-        src->desc = av_strdup(o->make);
+
+        AVBPrint tmp;
+        av_bprint_init(&tmp, 0, -1);
+        av_bprintf(&tmp, "%s %ix%i %.2fHz", o->make, o->width,
+                   o->height, av_q2d(o->framerate));
+        av_bprint_finalize(&tmp, &src->desc);
     }
 
     /* Done */
@@ -710,9 +909,9 @@ static void sources_wlcapture(void *s, SourceInfo **sources, int *num)
 
 static void uninit_wlcapture(void **s)
 {
-    WaylandCtx *ctx = *s;
+    WaylandCtx *ctx = *s;    
 
-    wls_write_wakeup_pipe(ctx->wakeup_pipe);
+    sp_write_wakeup_pipe(ctx->wakeup_pipe);
     pthread_join(ctx->event_thread, NULL);
 
     struct wayland_output *output, *tmp_o;
@@ -724,6 +923,8 @@ static void uninit_wlcapture(void **s)
 
     if (ctx->screencopy_export_manager)
         zwlr_screencopy_manager_v1_destroy(ctx->screencopy_export_manager);
+
+    av_buffer_unref(&ctx->drm_device_ref);
 
     wl_display_disconnect(ctx->display);
 
@@ -767,12 +968,17 @@ void *wayland_events_thread(void *arg)
 
         /* Stop the loop */
         if (fds[1].revents & POLLIN) {
-            wls_flush_wakeup_pipe(ctx->wakeup_pipe);
+            sp_flush_wakeup_pipe(ctx->wakeup_pipe);
             break;
         }
     }
 
     return NULL;
+}
+
+static void drm_device_free(AVHWDeviceContext *hwdev)
+{
+    close(((AVDRMDeviceContext *)hwdev->hwctx)->fd);
 }
 
 static int init_drm_hwcontext(WaylandCtx *ctx)
@@ -787,8 +993,9 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
     AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->drm_device_ref->data;
     AVDRMDeviceContext *hwctx = ref_data->hwctx;
 
-    /* We don't need a device (we don't even know it and can't open it) */
-    hwctx->fd = -1;
+    /* Hope this is the right one */
+    hwctx->fd = open("/dev/dri/renderD128", O_RDWR);
+    ref_data->free = drm_device_free;
 
     err = av_hwdevice_ctx_init(ctx->drm_device_ref);
     if (err) {
@@ -799,13 +1006,13 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
     return 0;
 }
 
-static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
+static int init_wlcapture(void **s)
 {
     int err = 0;
     WaylandCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
     *ctx->class = (AVClass) {
-        .class_name = "wayland_capture",
+        .class_name = "wayland",
         .item_name  = av_default_item_name,
         .version    = LIBAVUTIL_VERSION_INT,
     };
@@ -818,7 +1025,7 @@ static int init_wlcapture(void **s, report_error *err_cb, void *err_opaque)
 
     ctx->wakeup_pipe[0] = ctx->wakeup_pipe[1] = -1;
 
-    wls_make_wakeup_pipe(ctx->wakeup_pipe);
+    sp_make_wakeup_pipe(ctx->wakeup_pipe);
 
     wl_list_init(&ctx->output_list);
 
@@ -857,7 +1064,7 @@ fail:
 }
 
 const CaptureSource src_wayland = {
-    .name    = "wayland_capture",
+    .name    = "wayland",
     .init    = init_wlcapture,
     .start   = start_wlcapture,
     .sources = sources_wlcapture,

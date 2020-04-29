@@ -73,7 +73,9 @@ static inline int push_to_fifo(AVFrameFIFO *buf, void *f)
     pthread_mutex_lock(&buf->cond_lock_out);
     pthread_mutex_lock(&buf->lock);
 
-    if ((buf->max_queued_frames > 0) &&
+    /* Block or error, but only for non-NULL pushes */
+    if (f &&
+        (buf->max_queued_frames > 0) &&
         (buf->num_queued_frames > (buf->max_queued_frames + 1))) {
         if (!(buf->block_flags & FIFO_BLOCK_MAX_OUTPUT)) {
             err = AVERROR(ENOBUFS);

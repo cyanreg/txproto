@@ -36,6 +36,8 @@ struct capture_context {
     FilterContext *fctx;
     SPFrameFIFO filtered_frames;
 
+    AVDictionary *muxer_options;
+
     /* Encoders */
     EncodingContext *video_encoder;
     EncodingContext *audio_encoder;
@@ -99,7 +101,7 @@ void *muxing_thread(void *arg)
         goto fail;
     }
 
-	err = avformat_write_header(ctx->avf, NULL);
+	err = avformat_write_header(ctx->avf, &ctx->muxer_options);
 	if (err) {
 		av_log(ctx, AV_LOG_ERROR, "Couldn't write header: %s!\n", av_err2str(err));
 		goto fail;
@@ -128,6 +130,7 @@ void *muxing_thread(void *arg)
             audio_packets++;
             rate_audio = sliding_win_sum(&sctx_audio, in_pkt->size, in_pkt->pts, src_tb, src_tb.den, 0);
         }
+
         in_pkt->pts = av_rescale_q(in_pkt->pts, src_tb, dst_tb);
         in_pkt->dts = av_rescale_q(in_pkt->dts, src_tb, dst_tb);
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
@@ -141,10 +144,10 @@ void *muxing_thread(void *arg)
         av_packet_free(&in_pkt);
 
 #if 1
-        fprintf(stderr, "\rRate: %liMbps (video), %likbps (audio), Packets muxed: "
+        fprintf(stderr, "\rRate: %.1fMbps (video), %likbps (audio), Packets muxed: "
                 "%liv, %lia, cache: %iv, %ia, %ip",
-                av_rescale(rate_video, 8, 1000), av_rescale(rate_audio, 8, 1000),
-                video_packets, audio_packets, sp_frame_fifo_get_size(&ctx->video_frames),
+                (float)(rate_video << 3) / 1000000.0, av_rescale(rate_audio, 8, 1000),
+                video_packets, audio_packets, sp_frame_fifo_get_size(&ctx->filtered_frames),
                 sp_frame_fifo_get_size(&ctx->audio_frames), sp_packet_fifo_get_size(&ctx->packet_buf));
 #endif
     }
@@ -360,7 +363,8 @@ static int main_loop(struct capture_context *ctx) {
     }
 
     /* Setup A/V sync */
-    if (first_ts_audio || first_ts_video) {
+    if (ctx->video_capture_target && ctx->video_capture_source &&
+        ctx->audio_capture_target && ctx->audio_capture_source) {
         ts_epoch = FFMIN(first_ts_video, first_ts_audio);
         if (ctx->video_encoder)
             ctx->video_encoder->ts_offset_us = first_ts_video - ts_epoch;
@@ -448,7 +452,7 @@ int main(int argc, char *argv[])
         .version     = LIBAVUTIL_VERSION_INT,
     });
 
-//    av_log_set_level(AV_LOG_DEBUG);
+//    av_log_set_level(AV_LOG_TRACE);
 
 
     SPFrameFIFO *sv = &ctx.video_frames;
@@ -456,9 +460,9 @@ int main(int argc, char *argv[])
     sp_frame_fifo_init(&ctx.filtered_frames, 32, FRAME_FIFO_BLOCK_NO_INPUT);
     ctx.fctx = alloc_filtering_ctx();
 
-    sp_init_filter_graph(ctx.fctx, "crop=w=1280:h=720,"
-                                   "scale=w=854:h=480,format=nv12",
-                         NULL, AV_HWDEVICE_TYPE_NONE);
+    sp_init_filter_graph(ctx.fctx, "hwmap,fps=20,hwdownload,format=yuv420p,"
+                                   "scale=w=854:h=480:out_range=full",
+                         NULL, AV_HWDEVICE_TYPE_VAAPI);
 
     sp_map_fifo_to_pad(ctx.fctx, &ctx.video_frames, 0, 0);
     sp_map_fifo_to_pad(ctx.fctx, &ctx.filtered_frames, 0, 1);
@@ -477,29 +481,36 @@ int main(int argc, char *argv[])
     if (!strncmp(ctx.out_filename, "http", 3))
         ctx.out_format = "dash";
 
+    av_dict_set(&ctx.muxer_options, "seg_duration", "2", 0);
+    av_dict_set(&ctx.muxer_options, "dash_segment_type", "mp4", 0);
+    av_dict_set(&ctx.muxer_options, "window_size", "2", 0);
+    av_dict_set(&ctx.muxer_options, "remove_at_exit", "1", 0);
+
     /* Video capture */
     ctx.video_capture_source = &src_wayland;
-    ctx.video_capture_target = "0x0502";
+    ctx.video_capture_target = "0x143E";
     ctx.video_frame_queue = 16;
     av_dict_set_int(&ctx.video_capture_opts, "capture_cursor",   1, 0);
-    av_dict_set_int(&ctx.video_capture_opts, "use_screencopy",   1, 0);
-    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",   20, 0);
-    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",    1, 0);
+    av_dict_set_int(&ctx.video_capture_opts, "use_screencopy",   0, 0);
+//    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",  24000, 0);
+//    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",  1001, 0);
 
     /* Video encoder settings */
 #if 1
     ctx.video_encoder = alloc_encoding_ctx();
-    ctx.video_encoder->codec = avcodec_find_encoder_by_name("h264_vaapi");
+    ctx.video_encoder->codec = avcodec_find_encoder_by_name("librav1e");
     ctx.video_encoder->source_frames = sv;
     ctx.video_encoder->dest_packets = &ctx.packet_buf;
     ctx.video_encoder->width = 0; /* Use input */
     ctx.video_encoder->height = 0; /* Use input */
-    ctx.video_encoder->pix_fmt = AV_PIX_FMT_NV12; /* Use input */
-//    ctx.video_encoder->bitrate = 1000000 * /* Mbps */ 10;
-    ctx.video_encoder->keyframe_interval = 240;
-    ctx.video_encoder->crf = 10;
-//    av_dict_set(&ctx.video_encoder->encoder_opts, "rc_mode", "CBR", 0);
-    av_dict_set(&ctx.video_encoder->encoder_opts, "b_depth", "4", 0);
+    ctx.video_encoder->pix_fmt = AV_PIX_FMT_NONE; /* Use input */
+    ctx.video_encoder->bitrate = 1000000 * /* Mbps */ 1.5;
+    ctx.video_encoder->keyframe_interval = 40;
+    av_dict_set(&ctx.video_encoder->encoder_opts, "speed", "10", 0);
+    av_dict_set(&ctx.video_encoder->encoder_opts, "tiles", "8", 0);
+    av_dict_set(&ctx.video_encoder->encoder_opts, "rav1e-params", "low_latency=true" ":"
+                                                                  "reservoir_frame_delay=12" ":"
+                                                                  "rdo_lookahead_frames=1", 0);
 #endif
 
     /* Audio capture */

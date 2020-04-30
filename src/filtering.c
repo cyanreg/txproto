@@ -402,6 +402,7 @@ void *filtering_thread(void *data)
             av_frame_free(&filt_frame);
         } else if (err) {
             av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
+            av_frame_free(&filt_frame);
         } else {
             filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
             FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;

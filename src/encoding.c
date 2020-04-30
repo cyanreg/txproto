@@ -313,7 +313,6 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
             AVHWFramesContext *mapped_hwfc;
             mapped_hwfc = (AVHWFramesContext *)ctx->enc_frames_ref->data;
             mapped_frame->format = mapped_hwfc->format;
-            mapped_frame->pts = in_f->pts;
 
             /* Set frame hardware context referencce */
             mapped_frame->hw_frames_ctx = av_buffer_ref(ctx->enc_frames_ref);

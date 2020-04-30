@@ -664,15 +664,17 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     WaylandCaptureCtx *ctx = data;
     pthread_mutex_lock(&ctx->frame_obj_lock);
 
-    ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
-    if (!ctx->vid_start_pts)
-        ctx->vid_start_pts = ctx->frame->pts;
-    ctx->frame->pts -= ctx->vid_start_pts;
-
+    /* Opaque ref */
     FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
     fe->time_base       = av_make_q(1, 1000000000);
     fe->avg_frame_rate  = ctx->frame_rate;
     fe->clock_time      = av_gettime_relative();
+
+    /* Timestamp, nanoseconds timebase */
+    ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
+    if (!ctx->vid_start_pts)
+        ctx->vid_start_pts = ctx->frame->pts;
+    ctx->frame->pts -= ctx->vid_start_pts;
 
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
@@ -809,10 +811,6 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPF
                (av_cmp_q(framerate_req, src->framerate) != 0)) {
         cap_ctx->frame_rate = framerate_req;
         cap_ctx->frame_delay = av_rescale_q(1, av_inv_q(framerate_req), AV_TIME_BASE_Q);
-
-        /* Nearest possible multiple of the monitor's rate */
-        int64_t out_tpf = av_rescale_q(1, av_inv_q(src->framerate), AV_TIME_BASE_Q);
-        cap_ctx->frame_delay -= cap_ctx->frame_delay % out_tpf;
     }
 
     if (cap_ctx->use_screencopy)

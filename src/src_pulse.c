@@ -255,6 +255,22 @@ static void stream_status_cb(pa_stream *stream, void *data)
     return;
 }
 
+static enum pa_sample_format pulse_remap_to_useful[] = {
+    [PA_SAMPLE_U8]        = PA_SAMPLE_U8,
+    [PA_SAMPLE_ALAW]      = PA_SAMPLE_S16NE,
+    [PA_SAMPLE_ULAW]      = PA_SAMPLE_S16NE,
+    [PA_SAMPLE_S16LE]     = PA_SAMPLE_S16NE,
+    [PA_SAMPLE_S16BE]     = PA_SAMPLE_S16NE,
+    [PA_SAMPLE_FLOAT32LE] = PA_SAMPLE_FLOAT32NE,
+    [PA_SAMPLE_FLOAT32BE] = PA_SAMPLE_FLOAT32NE,
+    [PA_SAMPLE_S32LE]     = PA_SAMPLE_S32NE,
+    [PA_SAMPLE_S32BE]     = PA_SAMPLE_S32NE,
+    [PA_SAMPLE_S24LE]     = PA_SAMPLE_S24_32NE,
+    [PA_SAMPLE_S24BE]     = PA_SAMPLE_S24_32NE,
+    [PA_SAMPLE_S24_32LE]  = PA_SAMPLE_S24_32NE,
+    [PA_SAMPLE_S24_32BE]  = PA_SAMPLE_S24_32NE,
+};
+
 static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                        error_handler *err_cb, void *error_handler_ctx)
 {
@@ -295,14 +311,10 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
     pa_channel_map req_map = src->map;
 
     /* Filter out useless formats */
-    if (req_ss.format != PA_SAMPLE_U8    &&
-        req_ss.format != PA_SAMPLE_S16NE && req_ss.format != PA_SAMPLE_S24_32NE &&
-        req_ss.format != PA_SAMPLE_S32NE && req_ss.format != PA_SAMPLE_FLOAT32NE)
-        req_ss.format = PA_SAMPLE_FLOAT32NE;
+    req_ss.format = pulse_remap_to_useful[req_ss.format];
 
     /* We don't care about the rate as we'll have to resample ourselves anyway */
-    if ((req_ss.rate < 8000) || (req_ss.rate > 48000))
-        req_ss.rate = 48000;
+    req_ss.rate = av_clip(req_ss.rate, 8000, 96000);
 
     /* Check for crazy layouts */
     uint64_t lavu_ch_map = pa_to_lavu_ch_map(&req_map);

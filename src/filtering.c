@@ -403,6 +403,11 @@ void *filtering_thread(void *data)
         } else if (err) {
             av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
         } else {
+            filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
+            FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
+            fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
+            fe->time_base       = out_pad->buffer->inputs[0]->time_base;
+
             sp_frame_fifo_push(out_pad->fifo, filt_frame);
         }
     }

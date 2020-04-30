@@ -310,7 +310,7 @@ static void frame_set_colorspace(AVFrame *f, enum AVPixelFormat format)
      * function.
      * Only valid for standard displays, but that's what most are */
     f->color_primaries = AVCOL_PRI_BT709;
-    f->colorspace      = AVCOL_SPC_RGB;
+    f->colorspace      = AVCOL_SPC_BT709;
     f->color_range     = AVCOL_RANGE_JPEG;
     f->color_trc       = AVCOL_TRC_IEC61966_2_1;
     f->color_trc       = AVCOL_TRC_IEC61966_2_1;

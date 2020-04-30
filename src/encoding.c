@@ -84,6 +84,9 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
         ctx->avctx->channel_layout = pick_codec_channel_layout(ctx->codec, conf->channel_layout);
         ctx->avctx->sample_rate    = pick_codec_sample_rate(ctx->codec, conf->sample_rate);
         ctx->avctx->channels       = av_get_channel_layout_nb_channels(ctx->avctx->channel_layout);
+
+        if (ctx->sample_rate)
+            ctx->avctx->sample_rate = ctx->sample_rate;
     }
 
     if (ctx->global_header_needed)
@@ -187,7 +190,7 @@ int init_encoder(EncodingContext *ctx)
         return AVERROR(EINVAL);
     }
 
-    AVFrame *conf = pop_from_fifo(ctx->source_frames);
+    AVFrame *conf = sp_frame_fifo_peek(ctx->source_frames);
 
     init_avctx(ctx, conf);
 
@@ -401,13 +404,13 @@ static void *encoding_thread(void *arg)
     EncodingContext *ctx = arg;
     int ret = 0, flush = 0;
 
-    pthread_setname_np(pthread_self(), "audio encode thread");
+    pthread_setname_np(pthread_self(), "encoding");
 
     do {
         AVFrame *frame = NULL;
 
         if (!flush) {
-            frame = pop_from_fifo(ctx->source_frames);
+            frame = sp_frame_fifo_pop(ctx->source_frames);
             flush = !frame;
         }
 
@@ -453,7 +456,7 @@ static void *encoding_thread(void *arg)
 
             out_pkt->stream_index = ctx->stream_id;
 
-            push_to_fifo(ctx->dest_packets, out_pkt);
+            sp_packet_fifo_push(ctx->dest_packets, out_pkt);
         }
     } while (!ctx->err);
 
@@ -473,7 +476,7 @@ int stop_encoding_thread(EncodingContext *ctx)
     if (!ctx || !ctx->avctx)
         return 0;
 
-    push_to_fifo(ctx->source_frames, NULL);
+    sp_frame_fifo_push(ctx->source_frames, NULL);
     pthread_join(ctx->encoding_thread, NULL);
 
     return 0;

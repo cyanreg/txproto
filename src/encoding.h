@@ -1,10 +1,10 @@
 #pragma once
 
-#include "src_common.h"
-#include "frame_fifo.h"
-
+#include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
-#include <libavutil/dict.h>
+
+#include "src_common.h"
+#include "fifo_packet.h"
 
 /* Video encoder - we scale and convert in the encoding thread */
 typedef struct EncodingContext {
@@ -12,8 +12,8 @@ typedef struct EncodingContext {
 
     /* Data needed to init */
     AVCodec *codec;
-    AVFrameFIFO *source_frames;
-    AVFrameFIFO *dest_packets;
+    SPFrameFIFO *source_frames;
+    SPPacketFIFO *dest_packets;
     int global_header_needed;
 
     /* Options */
@@ -27,6 +27,7 @@ typedef struct EncodingContext {
 
     /* Video only */
     AVDictionary *encoder_opts;
+    int sample_rate; /* If 0, use input or closes supported */
     int width, height; /* If either is 0, don't scale, use input */
     /* If AV_PIX_FMT_NONE, don't convert, use input pixfmt
      * If encoder is hardware, this is used as the sw_format */

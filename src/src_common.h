@@ -4,12 +4,13 @@
 #include <libavutil/dict.h>
 #include <libavutil/samplefmt.h>
 
-#include "frame_fifo.h"
+#include "fifo_frame.h"
 
 typedef struct FormatExtraData {
     AVRational avg_frame_rate;
     int bits_per_sample;
     AVRational time_base;
+    int64_t clock_time;
 } FormatExtraData;
 
 typedef struct SourceInfo {
@@ -43,7 +44,7 @@ typedef const struct CaptureSource {
      * Will error out if called multiple times on the same identifier.
      * The ownership of the AVDict is transferred to the CaptureSource
      */
-    int  (*start)(void *s, uint64_t identifier, AVDictionary *opts, AVFrameFIFO *dst,
+    int  (*start)(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                   error_handler *err_cb, void *error_handler_ctx);
 
     /**

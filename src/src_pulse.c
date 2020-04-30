@@ -4,7 +4,6 @@
 #include <libavutil/channel_layout.h>
 #include <pulse/pulseaudio.h>
 
-#include "frame_fifo.h"
 #include "src_common.h"
 #include "utils.h"
 
@@ -61,7 +60,7 @@ typedef struct PulseCtx {
 
 typedef struct PulseCaptureCtx {
     PulseCtx *main;
-    AVFrameFIFO *fifo;
+    SPFrameFIFO *fifo;
     PulseSource *src;
     pa_stream *stream;
 
@@ -163,18 +162,18 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     if (!buffer && !size)
         return;
 
-    AVFrame *f               = av_frame_alloc();
-    f->sample_rate           = ss->rate;
-    f->format                = format_map[ss->format].av_format;
-    f->channel_layout        = pa_to_lavu_ch_map(ch_map);
-    f->channels              = ss->channels;
-    f->nb_samples            = (size / av_get_bytes_per_sample(f->format)) / f->channels;
-    f->best_effort_timestamp = av_gettime_relative();
-    f->opaque_ref            = av_buffer_allocz(sizeof(FormatExtraData));
+    AVFrame *f          = av_frame_alloc();
+    f->sample_rate      = ss->rate;
+    f->format           = format_map[ss->format].av_format;
+    f->channel_layout   = pa_to_lavu_ch_map(ch_map);
+    f->channels         = ss->channels;
+    f->nb_samples       = (size / av_get_bytes_per_sample(f->format)) / f->channels;
+    f->opaque_ref       = av_buffer_allocz(sizeof(FormatExtraData));
 
-    FormatExtraData *fe      = (FormatExtraData *)f->opaque_ref->data;
-    fe->time_base            = av_make_q(1, 1000000);
-    fe->bits_per_sample      = format_map[ss->format].bits_per_sample;
+    FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
+    fe->time_base       = av_make_q(1, 1000000);
+    fe->bits_per_sample = format_map[ss->format].bits_per_sample;
+    fe->clock_time      = av_gettime_relative();
 
     /* Allocate the frame */
     av_frame_get_buffer(f, 0);
@@ -192,7 +191,7 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
         pa_usec_t delay;
         if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK) {
             f->pts += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
-//            f->best_effort_timestamp += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
+//            fe->clock_time += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
         }
     } else {
         f->pts = AV_NOPTS_VALUE;
@@ -201,12 +200,12 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     /* Copied, and pts calculated, we can drop the buffer now */
     pa_stream_drop(stream);
 
-    if (ctx->fifo && queue_is_full(ctx->fifo)) {
+    if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
         av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
         ctx->dropped_samples += f->nb_samples;
         av_frame_free(&f);
     } else if (ctx->fifo) {
-        if (push_to_fifo(ctx->fifo, f)) {
+        if (sp_frame_fifo_push(ctx->fifo, f)) {
             av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
 //            err = AVERROR(ENOMEM);
 //            goto fail;
@@ -256,7 +255,7 @@ static void stream_status_cb(pa_stream *stream, void *data)
     return;
 }
 
-static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, AVFrameFIFO *dst,
+static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                        error_handler *err_cb, void *error_handler_ctx)
 {
     int err = 0;

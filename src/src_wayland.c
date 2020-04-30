@@ -16,7 +16,6 @@
 #include "wlr-export-dmabuf-unstable-v1-client-protocol.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 
-#include "frame_fifo.h"
 #include "src_common.h"
 #include "utils.h"
 
@@ -59,12 +58,13 @@ typedef struct WaylandCaptureCtx {
     WaylandCtx *main;
     uint64_t identifier;
     struct wl_output *target;
-    AVFrameFIFO *fifo;
+    SPFrameFIFO *fifo;
 
     /* Stats */
     int dropped_frames;
 
     /* Framerate limiting */
+    AVRational frame_rate;
     int64_t next_frame_ts;
     int64_t frame_delay;
 
@@ -81,7 +81,6 @@ typedef struct WaylandCaptureCtx {
 
     /* Frame being signalled */
     AVFrame *frame;
-    AVBufferRef *fmt_extra;
 
     /* To shut down cleanly */
     pthread_mutex_t frame_obj_lock;
@@ -258,7 +257,7 @@ static void dmabuf_frame_start(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     ctx->frame->width      = width;
     ctx->frame->height     = height;
     ctx->frame->format     = AV_PIX_FMT_DRM_PRIME;
-    ctx->frame->opaque_ref = av_buffer_ref(ctx->fmt_extra);
+    ctx->frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
     /* Set the frame data to the DRM specific struct */
     ctx->frame->buf[0] = av_buffer_create((uint8_t*)desc, sizeof(*desc),
@@ -413,8 +412,11 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     /* Set the colorspace */
     frame_set_colorspace(ctx->frame, sw_fmt);
 
-    /* Timestamp for audio/video sync */
-    ctx->frame->best_effort_timestamp = av_gettime_relative();
+    /* Opaque ref */
+    FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
+    fe->time_base       = av_make_q(1, 1000000000);
+    fe->avg_frame_rate  = ctx->frame_rate;
+    fe->clock_time      = av_gettime_relative();
 
     /* Timestamp, nanoseconds timebase */
     ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
@@ -428,12 +430,12 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
 
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
-    if (ctx->fifo && queue_is_full(ctx->fifo)) {
+    if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
         ctx->dropped_frames++;
         av_frame_free(&ctx->frame);
         ctx->dmabuf.frame_obj = NULL;
     } else if (ctx->fifo) {
-        if (push_to_fifo(ctx->fifo, ctx->frame)) {
+        if (sp_frame_fifo_push(ctx->fifo, ctx->frame)) {
             av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
             err = AVERROR(ENOMEM);
             goto fail;
@@ -607,13 +609,13 @@ static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *fram
     ctx->frame->width = width;
     ctx->frame->height = height;
     ctx->frame->linesize[0] = stride;
+    ctx->frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
     ctx->frame->buf[0] = av_buffer_pool_get(ctx->scrcpy.pool);
     if (!ctx->frame->buf[0]) {
         err = AVERROR(ENOMEM);
         goto fail;
     }
     ctx->frame->format = pix_fmt;
-    ctx->frame->opaque_ref = av_buffer_ref(ctx->fmt_extra);
 
     frame_set_colorspace(ctx->frame, pix_fmt);
 
@@ -667,17 +669,19 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
         ctx->vid_start_pts = ctx->frame->pts;
     ctx->frame->pts -= ctx->vid_start_pts;
 
-    /* For AV sync */
-    ctx->frame->best_effort_timestamp = av_gettime_relative();
+    FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
+    fe->time_base       = av_make_q(1, 1000000000);
+    fe->avg_frame_rate  = ctx->frame_rate;
+    fe->clock_time      = av_gettime_relative();
 
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
-    if (ctx->fifo && queue_is_full(ctx->fifo)) {
-//        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
+    if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
+        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
         ctx->dropped_frames++;
         av_frame_free(&ctx->frame);
     } else if (ctx->fifo) {
-        if (push_to_fifo(ctx->fifo, ctx->frame)) {
+        if (sp_frame_fifo_push(ctx->fifo, ctx->frame)) {
             av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
             err = AVERROR(ENOMEM);
             goto fail;
@@ -759,7 +763,7 @@ static void scrcpy_register_cb(WaylandCaptureCtx *ctx)
 
 FN_CREATING(WaylandCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
 
-static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, AVFrameFIFO *dst,
+static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                            error_handler *err_cb, void *error_handler_ctx)
 {
     int err;
@@ -774,21 +778,16 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, AVF
 
     WaylandCaptureCtx *cap_ctx = create_capture_ctx(ctx);
 
-    cap_ctx->main = ctx;
-    cap_ctx->identifier = identifier;
-    cap_ctx->target = src->output;
-    cap_ctx->fifo = dst;
-    cap_ctx->error_handler = err_cb;
+    AVRational framerate_req = src->framerate;
+
+    cap_ctx->main              = ctx;
+    cap_ctx->identifier        = identifier;
+    cap_ctx->target            = src->output;
+    cap_ctx->fifo              = dst;
+    cap_ctx->frame_rate        = framerate_req;
+    cap_ctx->error_handler     = err_cb;
     cap_ctx->error_handler_ctx = error_handler_ctx;
     pthread_mutex_init(&cap_ctx->frame_obj_lock, NULL);
-
-    cap_ctx->fmt_extra = av_buffer_allocz(sizeof(FormatExtraData));
-
-    FormatExtraData *fe = (FormatExtraData *)cap_ctx->fmt_extra->data;
-    fe->time_base = av_make_q(1, 1000000000);
-    fe->avg_frame_rate = src->framerate;
-
-    AVRational framerate_req;
 
     /* Options */
     if (dict_get(opts, "capture_cursor"))
@@ -808,7 +807,7 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, AVF
         goto fail;
     } else if ((framerate_req.num && framerate_req.den) &&
                (av_cmp_q(framerate_req, src->framerate) != 0)) {
-        fe->avg_frame_rate = framerate_req;
+        cap_ctx->frame_rate = framerate_req;
         cap_ctx->frame_delay = av_rescale_q(1, av_inv_q(framerate_req), AV_TIME_BASE_Q);
 
         /* Nearest possible multiple of the monitor's rate */
@@ -853,7 +852,6 @@ static int stop_wlcapture(void  *s, uint64_t identifier)
                 zwlr_export_dmabuf_frame_v1_destroy(cap_ctx->dmabuf.frame_obj);
 
             av_frame_free(&cap_ctx->frame);
-            av_buffer_unref(&cap_ctx->fmt_extra);
 
             pthread_mutex_unlock(&cap_ctx->frame_obj_lock);
 
@@ -942,6 +940,8 @@ static void uninit_wlcapture(void **s)
 void *wayland_events_thread(void *arg)
 {
     WaylandCtx *ctx = arg;
+
+    pthread_setname_np(pthread_self(), "wayland events");
 
     while (1) {
         while (wl_display_prepare_read(ctx->display))
@@ -1052,7 +1052,6 @@ static int init_wlcapture(void **s)
 
     /* Start the event thread */
     pthread_create(&ctx->event_thread, NULL, wayland_events_thread, ctx);
-    pthread_setname_np(ctx->event_thread, "wayland events thread");
 
     *s = ctx;
 

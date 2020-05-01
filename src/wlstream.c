@@ -348,7 +348,7 @@ void on_quit_signal(int signo) {
 static int main_loop(struct capture_context *ctx) {
 	int err;
 	int64_t ts_epoch;
-	int64_t first_ts_video = 0, first_ts_audio = 0;
+	int64_t first_ts_video = 0, first_ts_audio = INT64_MAX;
 
 	q_ctx = ctx;
 
@@ -377,9 +377,11 @@ static int main_loop(struct capture_context *ctx) {
 
     /* First A ts */
     if (ctx->audio_capture_targets_num && ctx->audio_capture_source && ctx->audio_encoder) {
-        AVFrame *f = sp_frame_fifo_peek(&ctx->audio_frames[0]);
-        FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
-        first_ts_audio = fe->clock_time;
+        for (int i = 0; i < ctx->audio_capture_targets_num; i++) {
+            AVFrame *f = sp_frame_fifo_peek(&ctx->audio_frames[i]);
+            FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
+            first_ts_audio = FFMIN(fe->clock_time, first_ts_audio);
+        }
     }
 
     /* Setup A/V sync */
@@ -556,20 +558,20 @@ int main(int argc, char *argv[])
 #if 1
     /* Audio capture */
     ctx.audio_capture_source = &src_pulse;
-    ctx.audio_capture_targets[0] = "0";
-//    ctx.audio_capture_targets[1] = "1";
-    ctx.audio_capture_targets_num = 1;
+    ctx.audio_capture_targets_num++; ctx.audio_capture_targets[0] = "0";
+    ctx.audio_capture_targets_num++; ctx.audio_capture_targets[1] = "1";
     ctx.audio_frame_queue = 256;
     av_dict_set_int(&ctx.audio_capture_opts[0], "buffer_ms", 100, 0);
     av_dict_set_int(&ctx.audio_capture_opts[1], "buffer_ms", 100, 0);
 #endif
 
-#if 0
+#if 1
     /* Audio filtering */
     sp_frame_fifo_init(&ctx.filtered_audio, 32, FRAME_FIFO_BLOCK_NO_INPUT);
     ctx.fctx_audio = alloc_filtering_ctx();
 
-    sp_init_filter_graph(ctx.fctx_audio, "amix=inputs=2:weights=1 1", NULL, AV_HWDEVICE_TYPE_NONE);
+    sp_init_filter_graph(ctx.fctx_audio, "[in1] [in2] amix=inputs=2:weights='1 1' [out1]",
+                         NULL, AV_HWDEVICE_TYPE_NONE);
     sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.audio_frames[0], 0, 0);
     sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.audio_frames[1], 1, 0);
     sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.filtered_audio, 0, 1);

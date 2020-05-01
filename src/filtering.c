@@ -383,7 +383,7 @@ error:
 
 void *filtering_thread(void *data)
 {
-    int err = 0;
+    int err = 0, flushing = 0;
     FilterContext *ctx = data;
 
     pthread_setname_np(pthread_self(), "filtering");
@@ -391,18 +391,19 @@ void *filtering_thread(void *data)
     while (1) {
         for (int i = 0; i < ctx->num_in_pads; i++) {
             FilterPad *in_pad = ctx->in_pads[i];
-            AVFrame *in_frame = sp_frame_fifo_pop(in_pad->fifo);
+            if (!flushing && (av_buffersrc_get_nb_failed_requests(in_pad->buffer) < 1))
+                continue;
 
-            /* TODO improve EOF handling */
-            if (!in_frame) {
-                sp_frame_fifo_push(ctx->out_pads[0]->fifo, NULL);
-                return NULL;
+            AVFrame *in_frame = NULL;
+            if (!flushing) {
+                in_frame = sp_frame_fifo_pop(in_pad->fifo);
+                flushing = !in_frame;
             }
 
             err = av_buffersrc_add_frame(in_pad->buffer, in_frame);
             if (err) {
                 av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
-                return NULL;
+                goto end;
             }
             av_frame_free(&in_frame);
         }
@@ -414,11 +415,13 @@ void *filtering_thread(void *data)
         if (err == AVERROR(EAGAIN)) {
             av_frame_free(&filt_frame);
         } else if (err == AVERROR_EOF) {
+            av_log(ctx, AV_LOG_INFO, "Filter flushed!\n");
             av_frame_free(&filt_frame);
+            break;
         } else if (err) {
             av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
             av_frame_free(&filt_frame);
-            return NULL;
+            goto end;
         } else {
             filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
             FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
@@ -433,6 +436,8 @@ void *filtering_thread(void *data)
         }
     }
 
+end:
+    sp_frame_fifo_push(ctx->out_pads[0]->fifo, NULL);
     return NULL;
 }
 

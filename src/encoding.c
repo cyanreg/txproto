@@ -4,12 +4,14 @@
 #include "encoding_utils.h"
 
 #include <pthread.h>
+#include <libavutil/avstring.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 {
-    if (!(ctx->swr = swr_alloc())) {
+    /* Don't reallocate if unneded. */
+    if (!ctx->swr && !(ctx->swr = swr_alloc())) {
         av_log(ctx, AV_LOG_ERROR, "Could not alloc swr context!\n");
         return AVERROR(ENOMEM);
     }
@@ -61,6 +63,8 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
 
         ctx->avctx->gop_size        = ctx->keyframe_interval;
         ctx->avctx->global_quality  = ctx->crf;
+
+        ctx->avctx->sample_aspect_ratio = conf->sample_aspect_ratio;
 
         if (ctx->width && ctx->height) {
             ctx->avctx->width  = ctx->width;
@@ -140,8 +144,10 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         }
     } else {
         ctx->enc_frames_ref = av_hwframe_ctx_alloc(enc_device_ref);
-        if (!ctx->enc_frames_ref)
-            return AVERROR(ENOMEM);
+        if (!ctx->enc_frames_ref) {
+            err = AVERROR(ENOMEM);
+            goto end;
+        }
 
         hwfc = (AVHWFramesContext*)ctx->enc_frames_ref->data;
 
@@ -181,6 +187,12 @@ int init_encoder(EncodingContext *ctx)
         av_log(ctx, AV_LOG_ERROR, "Missing codec!\n");
         return AVERROR(EINVAL);
     }
+
+    /* Also used as thread name */
+    ctx->class->class_name = av_mallocz(16);
+    av_strlcpy((char *)ctx->class->class_name, "lavc_", 16);
+    av_strlcat((char *)ctx->class->class_name, ctx->codec->name, 16);
+
     if (!ctx->source_frames) {
         av_log(ctx, AV_LOG_ERROR, "No source frame FIFO!\n");
         return AVERROR(EINVAL);
@@ -403,7 +415,7 @@ static void *encoding_thread(void *arg)
     EncodingContext *ctx = arg;
     int ret = 0, flush = 0;
 
-    pthread_setname_np(pthread_self(), "encoding");
+    pthread_setname_np(pthread_self(), ctx->class->class_name);
 
     do {
         AVFrame *frame = NULL;
@@ -470,6 +482,26 @@ fail:
     return NULL;
 }
 
+void free_encoder(EncodingContext **s)
+{
+    if (!s || !*s)
+        return;
+
+    EncodingContext *ctx = *s;
+
+    if (ctx->swr)
+        swr_free(&ctx->swr);
+
+    if (ctx->enc_frames_ref)
+        av_buffer_unref(&ctx->enc_frames_ref);
+
+    avcodec_free_context(&ctx->avctx);
+
+    av_free((char *)ctx->class->class_name);
+    av_free(ctx->class);
+    av_freep(s);
+}
+
 int stop_encoding_thread(EncodingContext *ctx)
 {
     if (!ctx || !ctx->avctx)
@@ -505,7 +537,6 @@ EncodingContext *alloc_encoding_ctx(void)
     }
 
     *ctx->class = (AVClass) {
-        .class_name = "encoding",
         .item_name  = av_default_item_name,
         .version    = LIBAVUTIL_VERSION_INT,
     };

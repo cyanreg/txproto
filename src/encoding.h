@@ -54,4 +54,7 @@ int init_encoder(EncodingContext *ctx);
 
 int start_encoding_thread(EncodingContext *ctx);
 
+/* Once a thread is stopped it cannot be restarted */
 int stop_encoding_thread(EncodingContext *ctx);
+
+void free_encoder(EncodingContext **s);

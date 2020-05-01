@@ -181,11 +181,16 @@ static inline void RENAME(fifo_free)(SNAME *buf)
 {
     pthread_mutex_lock(&buf->lock);
 
-    if (buf->num_queued)
-        for (int i = 0; i < buf->num_queued; i++)
-            FREE_FN(&buf->queued[i]);
+    for (int i = 0; i < buf->num_queued; i++)
+        FREE_FN(&buf->queued[i]);
 
     av_freep(&buf->queued);
 
     pthread_mutex_unlock(&buf->lock);
+
+    pthread_cond_destroy(&buf->cond_in);
+    pthread_cond_destroy(&buf->cond_out);
+    pthread_mutex_destroy(&buf->cond_lock_in);
+    pthread_mutex_destroy(&buf->cond_lock_out);
+    pthread_mutex_destroy(&buf->lock);
 }

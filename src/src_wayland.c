@@ -102,6 +102,8 @@ typedef struct WaylandCaptureCtx {
     } scrcpy;
 } WaylandCaptureCtx;
 
+FN_CREATING(WaylandCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
+
 static void output_handle_geometry(void *data, struct wl_output *wl_output,
                                    int32_t x, int32_t y, int32_t phys_width,
                                    int32_t phys_height, int32_t subpixel,
@@ -257,6 +259,7 @@ static void dmabuf_frame_start(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     ctx->frame->width      = width;
     ctx->frame->height     = height;
     ctx->frame->format     = AV_PIX_FMT_DRM_PRIME;
+    ctx->frame->sample_aspect_ratio = av_make_q(1, 1);
     ctx->frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
     /* Set the frame data to the DRM specific struct */
@@ -431,6 +434,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
     if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
+        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
         ctx->dropped_frames++;
         av_frame_free(&ctx->frame);
         ctx->dmabuf.frame_obj = NULL;
@@ -616,6 +620,7 @@ static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *fram
         goto fail;
     }
     ctx->frame->format = pix_fmt;
+    ctx->frame->sample_aspect_ratio = av_make_q(1, 1);
 
     frame_set_colorspace(ctx->frame, pix_fmt);
 
@@ -762,8 +767,6 @@ static void scrcpy_register_cb(WaylandCaptureCtx *ctx)
     zwlr_screencopy_frame_v1_add_listener(f, &scrcpy_frame_listener, ctx);
     ctx->scrcpy.frame_obj = f;
 }
-
-FN_CREATING(WaylandCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
 
 static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                            error_handler *err_cb, void *error_handler_ctx)
@@ -939,7 +942,7 @@ void *wayland_events_thread(void *arg)
 {
     WaylandCtx *ctx = arg;
 
-    pthread_setname_np(pthread_self(), "wayland events");
+    pthread_setname_np(pthread_self(), ctx->class->class_name);
 
     while (1) {
         while (wl_display_prepare_read(ctx->display))

@@ -60,3 +60,4 @@ typedef const struct CaptureSource {
 
 extern const CaptureSource src_pulse;
 extern const CaptureSource src_wayland;
+extern const CaptureSource src_lavd;

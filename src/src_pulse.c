@@ -207,8 +207,10 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     } else if (ctx->fifo) {
         if (sp_frame_fifo_push(ctx->fifo, f)) {
             av_log(ctx->main, AV_LOG_ERROR, "Unable to push frame to FIFO!\n");
-//            err = AVERROR(ENOMEM);
-//            goto fail;
+            av_frame_free(&f);
+            if (ctx->error_handler)
+                ctx->error_handler(ctx->error_handler_ctx, AVERROR(ENOMEM));
+            return;
         }
     } else {
         av_frame_free(&f);
@@ -716,10 +718,13 @@ static void free_pulse(void **s)
     if (ctx->pa_context) {
         pa_context_disconnect(ctx->pa_context);
         pa_context_unref(ctx->pa_context);
+        ctx->pa_context = NULL;
     }
 
-    if (ctx->pa_mainloop)
+    if (ctx->pa_mainloop) {
         pa_threaded_mainloop_free(ctx->pa_mainloop);
+        ctx->pa_mainloop = NULL;
+    }
 
     av_freep(&ctx->class);
     av_freep(s);
@@ -742,7 +747,7 @@ static int init_pulse(void **s)
 
     ctx->pa_mainloop = pa_threaded_mainloop_new();
     pa_threaded_mainloop_start(ctx->pa_mainloop);
-    pa_threaded_mainloop_set_name(ctx->pa_mainloop, PROGRAM_NAME "_pulse_thread");
+    pa_threaded_mainloop_set_name(ctx->pa_mainloop, ctx->class->class_name);
 
     pa_threaded_mainloop_lock(ctx->pa_mainloop);
     locked = 1;

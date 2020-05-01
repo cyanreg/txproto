@@ -91,8 +91,6 @@ void *muxing_thread(void *arg)
     SlidingWinCtx sctx_audio = { 0 };
     int64_t rate_video = 0, rate_audio = 0;
 
-    pthread_setname_np(pthread_self(), "muxing");
-
 	/* Open for writing */
     int err = avio_open(&ctx->avf->pb, ctx->out_filename, AVIO_FLAG_WRITE);
     if (err) {
@@ -107,17 +105,26 @@ void *muxing_thread(void *arg)
 		goto fail;
 	}
 
+    pthread_setname_np(pthread_self(), ctx->avf->oformat->name);
+
     /* Debug print */
     av_dump_format(ctx->avf, 0, ctx->out_filename, 1);
 
+    int flush = 0;
     int64_t audio_packets = 0;
     int64_t video_packets = 0;
     fprintf(stderr, "\n");
 
     while (1) {
-        AVPacket *in_pkt = sp_packet_fifo_pop(&ctx->packet_buf);
-        if (!in_pkt)
-            break;
+        AVPacket *in_pkt = NULL;
+
+        if (!flush) {
+            in_pkt = sp_packet_fifo_pop(&ctx->packet_buf);
+            flush = !in_pkt;
+        }
+
+        if (flush)
+            goto send;
 
         AVRational dst_tb = ctx->avf->streams[in_pkt->stream_index]->time_base;
         AVRational src_tb;
@@ -135,18 +142,20 @@ void *muxing_thread(void *arg)
         in_pkt->dts = av_rescale_q(in_pkt->dts, src_tb, dst_tb);
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
 
+send:
         err = av_interleaved_write_frame(ctx->avf, in_pkt);
+        av_packet_free(&in_pkt);
         if (err) {
             av_log(ctx, AV_LOG_ERROR, "Error muxing: %s!\n", av_err2str(err));
 	    	goto fail;
         }
 
-        av_packet_free(&in_pkt);
-
+        if (flush)
+            break;
 #if 1
         fprintf(stderr, "\rRate: %.1fMbps (video), %likbps (audio), Packets muxed: "
                 "%liv, %lia, cache: %iv, %ia, %ip",
-                (float)(rate_video << 3) / 1000000.0, av_rescale(rate_audio, 8, 1000),
+                (rate_video << 3) / 1048576.0f, av_rescale(rate_audio, 8, 1024),
                 video_packets, audio_packets, sp_frame_fifo_get_size(&ctx->filtered_frames),
                 sp_frame_fifo_get_size(&ctx->audio_frames), sp_packet_fifo_get_size(&ctx->packet_buf));
 #endif
@@ -157,6 +166,9 @@ void *muxing_thread(void *arg)
                av_err2str(err));
         goto fail;
     }
+
+    /* Flush output data */
+    avio_flush(ctx->avf->pb);
 
     av_log(ctx, AV_LOG_INFO, "Wrote trailer!\n");
 
@@ -243,10 +255,11 @@ static int init_enc_muxing(struct capture_context *ctx, EncodingContext *enc)
     av_strlcat(enc_str, enc->avctx->codec->name, enc_str_len);
     av_dict_set(&st->metadata, "encoder", enc_str, AV_DICT_DONT_STRDUP_VAL);
 
+    /* Set SAR */
     if (enc->codec->type == AVMEDIA_TYPE_VIDEO) {
-        ctx->video_streamid = st->id;
+        ctx->video_streamid     = st->id;
         st->avg_frame_rate      = enc->avctx->framerate;
-        st->sample_aspect_ratio = av_make_q(1, 1);
+        st->sample_aspect_ratio = enc->avctx->sample_aspect_ratio;
     }
 
     if (enc->codec->type == AVMEDIA_TYPE_AUDIO)
@@ -349,22 +362,22 @@ static int main_loop(struct capture_context *ctx) {
         return err;
 
     /* First V ts */
-    if (ctx->video_capture_target && ctx->video_capture_source) {
+    if (ctx->video_capture_target && ctx->video_capture_source && ctx->video_encoder) {
         AVFrame *f = sp_frame_fifo_peek(&ctx->video_frames);
         FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
         first_ts_video = fe->clock_time;
     }
 
     /* First A ts */
-    if (ctx->audio_capture_target && ctx->audio_capture_source) {
+    if (ctx->audio_capture_target && ctx->audio_capture_source && ctx->audio_encoder) {
         AVFrame *f = sp_frame_fifo_peek(&ctx->audio_frames);
         FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
         first_ts_audio = fe->clock_time;
     }
 
     /* Setup A/V sync */
-    if (ctx->video_capture_target && ctx->video_capture_source &&
-        ctx->audio_capture_target && ctx->audio_capture_source) {
+    if (ctx->video_capture_target && ctx->video_capture_source && ctx->video_encoder &&
+        ctx->audio_capture_target && ctx->audio_capture_source && ctx->audio_encoder) {
         ts_epoch = FFMIN(first_ts_video, first_ts_audio);
         if (ctx->video_encoder)
             ctx->video_encoder->ts_offset_us = first_ts_video - ts_epoch;
@@ -427,12 +440,18 @@ static int main_loop(struct capture_context *ctx) {
 
 static void uninit(struct capture_context *ctx)
 {
-    if (ctx->video_capture_source) ctx->video_capture_source->free(&ctx->video_cap_ctx);
-    if (ctx->audio_capture_source) ctx->audio_capture_source->free(&ctx->audio_cap_ctx);
+    if (ctx->video_capture_source)
+        ctx->video_capture_source->free(&ctx->video_cap_ctx);
+
+    if (ctx->audio_capture_source)
+        ctx->audio_capture_source->free(&ctx->audio_cap_ctx);
 
     sp_frame_fifo_free(&ctx->video_frames);
     sp_frame_fifo_free(&ctx->audio_frames);
     sp_packet_fifo_free(&ctx->packet_buf);
+
+    free_encoder(&ctx->video_encoder);
+    free_encoder(&ctx->audio_encoder);
 
     if (ctx->avf)
         avio_closep(&ctx->avf->pb);
@@ -452,11 +471,8 @@ int main(int argc, char *argv[])
         .version     = LIBAVUTIL_VERSION_INT,
     });
 
-//    av_log_set_level(AV_LOG_TRACE);
-
-
     SPFrameFIFO *sv = &ctx.video_frames;
-#if 1
+#if 0
     sp_frame_fifo_init(&ctx.filtered_frames, 32, FRAME_FIFO_BLOCK_NO_INPUT);
     ctx.fctx = alloc_filtering_ctx();
 
@@ -469,7 +485,6 @@ int main(int argc, char *argv[])
     sv = &ctx.filtered_frames;
 #endif
 
-
     ctx.out_filename = argv[1];
     ctx.out_format = "matroska";
     ctx.video_streamid = ctx.audio_streamid = -1;
@@ -478,34 +493,47 @@ int main(int argc, char *argv[])
         ctx.out_format = "flv";
     if (!strncmp(ctx.out_filename, "udp", 3))
         ctx.out_format = "mpegts";
-    if (!strncmp(ctx.out_filename, "http", 3))
+    if (!strncmp(ctx.out_filename, "http", 3)) {
         ctx.out_format = "dash";
+        av_dict_set(&ctx.muxer_options, "seg_duration", "2", 0);
+        av_dict_set(&ctx.muxer_options, "dash_segment_type", "mp4", 0);
+        av_dict_set(&ctx.muxer_options, "window_size", "2", 0);
+        av_dict_set(&ctx.muxer_options, "remove_at_exit", "1", 0);
+    }
 
-    av_dict_set(&ctx.muxer_options, "seg_duration", "2", 0);
-    av_dict_set(&ctx.muxer_options, "dash_segment_type", "mp4", 0);
-    av_dict_set(&ctx.muxer_options, "window_size", "2", 0);
-    av_dict_set(&ctx.muxer_options, "remove_at_exit", "1", 0);
-
+#if 1
     /* Video capture */
     ctx.video_capture_source = &src_wayland;
-    ctx.video_capture_target = "0x143E";
+    ctx.video_capture_target = "0x0502";
     ctx.video_frame_queue = 16;
     av_dict_set_int(&ctx.video_capture_opts, "capture_cursor",   1, 0);
     av_dict_set_int(&ctx.video_capture_opts, "use_screencopy",   0, 0);
-//    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",  24000, 0);
-//    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",  1001, 0);
+    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",  24000, 0);
+    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",  1001, 0);
+#endif
 
-    /* Video encoder settings */
+#if 0
+    /* Video capture (camera) */
+    ctx.video_capture_source = &src_lavd;
+    ctx.video_capture_target = "4";
+    ctx.video_frame_queue = 16;
+    av_dict_set(&ctx.video_capture_opts, "video_size", "640x470", 0);
+    av_dict_set(&ctx.video_capture_opts, "pixel_format", "yuyv422", 0);
+    av_dict_set_int(&ctx.video_capture_opts, "framerate",  30, 0);
+#endif
+
 #if 1
+    /* Video encoder */
     ctx.video_encoder = alloc_encoding_ctx();
-    ctx.video_encoder->codec = avcodec_find_encoder_by_name("librav1e");
+    ctx.video_encoder->codec = avcodec_find_encoder_by_name("h264_vaapi");
     ctx.video_encoder->source_frames = sv;
     ctx.video_encoder->dest_packets = &ctx.packet_buf;
     ctx.video_encoder->width = 0; /* Use input */
     ctx.video_encoder->height = 0; /* Use input */
-    ctx.video_encoder->pix_fmt = AV_PIX_FMT_NONE; /* Use input */
-    ctx.video_encoder->bitrate = 1000000 * /* Mbps */ 1.5;
+    ctx.video_encoder->pix_fmt = AV_PIX_FMT_NV12; /* Use input */
+//    ctx.video_encoder->bitrate = 1000000 * /* Mbps */ 10;
     ctx.video_encoder->keyframe_interval = 40;
+    ctx.video_encoder->crf = 10;
     av_dict_set(&ctx.video_encoder->encoder_opts, "speed", "10", 0);
     av_dict_set(&ctx.video_encoder->encoder_opts, "tiles", "8", 0);
     av_dict_set(&ctx.video_encoder->encoder_opts, "rav1e-params", "low_latency=true" ":"
@@ -513,14 +541,16 @@ int main(int argc, char *argv[])
                                                                   "rdo_lookahead_frames=1", 0);
 #endif
 
+#if 0
     /* Audio capture */
-//    ctx.audio_capture_source = &src_pulse;
-//    ctx.audio_capture_target = "0";
+    ctx.audio_capture_source = &src_pulse;
+    ctx.audio_capture_target = "0";
     ctx.audio_frame_queue = 256;
     av_dict_set_int(&ctx.audio_capture_opts, "buffer_ms", 20, 0);
+#endif
 
-    /* Audio encoder */
 #if 0
+    /* Audio encoder */
     ctx.audio_encoder = alloc_encoding_ctx();
     ctx.audio_encoder->codec = avcodec_find_encoder_by_name("libopus");
     ctx.audio_encoder->source_frames = &ctx.audio_frames;

@@ -3,6 +3,7 @@ sources = [
 
     'src_pulse.c',
     'src_wayland.c',
+    'src_lavd.c',
 
     'filtering.c',
 
@@ -19,6 +20,7 @@ executable(
                    wlstream_protos,
                    libavutil,
                    libavcodec,
+                   libavdevice,
                    libpulse,
                    libavformat,
                    libavfilter,

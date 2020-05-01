@@ -33,8 +33,11 @@ struct capture_context {
     atomic_bool quit;
 
     /* Filtering */
-    FilterContext *fctx;
-    SPFrameFIFO filtered_frames;
+    FilterContext *fctx_video;
+    SPFrameFIFO filtered_video;
+
+    FilterContext *fctx_audio;
+    SPFrameFIFO filtered_audio;
 
     AVDictionary *muxer_options;
 
@@ -54,9 +57,12 @@ struct capture_context {
     void *audio_cap_ctx;
     int audio_frame_queue;
     CaptureSource *audio_capture_source;
-    const char *audio_capture_target;
-    AVDictionary *audio_capture_opts;
-    SPFrameFIFO audio_frames;
+    const char *audio_capture_targets[16];
+    int audio_capture_targets_num;
+    AVDictionary *audio_capture_opts[16];
+    SPFrameFIFO audio_frames[16];
+
+
 
     /* Muxing */
     AVFormatContext *avf;
@@ -154,10 +160,9 @@ send:
             break;
 #if 1
         fprintf(stderr, "\rRate: %.1fMbps (video), %likbps (audio), Packets muxed: "
-                "%liv, %lia, cache: %iv, %ia, %ip",
+                "%liv, %lia",
                 (rate_video << 3) / 1048576.0f, av_rescale(rate_audio, 8, 1024),
-                video_packets, audio_packets, sp_frame_fifo_get_size(&ctx->filtered_frames),
-                sp_frame_fifo_get_size(&ctx->audio_frames), sp_packet_fifo_get_size(&ctx->packet_buf));
+                video_packets, audio_packets);
 #endif
     }
 
@@ -194,12 +199,12 @@ static int init_video_capture(struct capture_context *ctx)
     int num_infos;
     ctx->video_capture_source->sources(ctx->video_cap_ctx, &infos, &num_infos);
 
-    if (!ctx->video_capture_target) {
-        for (int i = 0; i < num_infos; i++)
-            av_log(ctx, AV_LOG_WARNING, "Video source %lu: %s (%s)\n",
-                   infos[i].identifier, infos[i].name, infos[i].desc);
+    for (int i = 0; i < num_infos; i++)
+        av_log(ctx, AV_LOG_WARNING, "Video source %lu: %s (%s)\n",
+               infos[i].identifier, infos[i].name, infos[i].desc);
+
+    if (!ctx->video_capture_target)
         return 0;
-    }
 
     char *end = NULL;
     int target_idx = strtol(ctx->video_capture_target, &end, 10);
@@ -207,8 +212,6 @@ static int init_video_capture(struct capture_context *ctx)
         target_idx = -1;
 
     for (int i = 0; i < num_infos; i++) {
-        av_log(ctx, AV_LOG_WARNING, "Video source %lu: %s (%s)\n", infos[i].identifier,
-               infos[i].name, infos[i].desc);
         if (target_idx >= 0 && target_idx == infos[i].identifier)
             identifier = infos[i].identifier;
         else if (!av_strncasecmp(ctx->video_capture_target, infos[i].name, sizeof(ctx->video_capture_target)))
@@ -218,7 +221,7 @@ static int init_video_capture(struct capture_context *ctx)
     /* Start capturing and init video encoder */
     err = ctx->video_capture_source->start(ctx->video_cap_ctx, identifier,
                                            ctx->video_capture_opts,
-                                           (ctx->video_encoder || ctx->fctx) ? &ctx->video_frames : NULL,
+                                           (ctx->video_encoder || ctx->fctx_video) ? &ctx->video_frames : NULL,
                                            NULL, NULL);
     if (err)
         return err;
@@ -286,10 +289,12 @@ static void stop_audio_capture(struct capture_context *ctx)
 static int init_audio_capture(struct capture_context *ctx)
 {
     int err;
-    uint64_t identifier = 0;
 
-    /* Init the FIFO buffer */
-    sp_frame_fifo_init(&ctx->audio_frames, ctx->audio_frame_queue, FRAME_FIFO_BLOCK_NO_INPUT);
+    /* Init the FIFO buffers */
+    for (int i = 0; i < 16; i++) {
+        sp_frame_fifo_init(&ctx->audio_frames[i], ctx->audio_frame_queue,
+                           FRAME_FIFO_BLOCK_NO_INPUT);
+    }
 
     /* Init pulse */
     ctx->audio_capture_source->init(&ctx->audio_cap_ctx);
@@ -299,33 +304,35 @@ static int init_audio_capture(struct capture_context *ctx)
     int num_infos;
     ctx->audio_capture_source->sources(ctx->audio_cap_ctx, &infos, &num_infos);
 
-    if (!ctx->audio_capture_target) {
-        for (int i = 0; i < num_infos; i++)
-            av_log(ctx, AV_LOG_WARNING, "Audio source %lu: %s\n",
-                   infos[i].identifier, infos[i].name);
-        return 0;
-    }
-
-    char *end = NULL;
-    int target_idx = strtol(ctx->audio_capture_target, &end, 10);
-    if (end == ctx->audio_capture_target)
-        target_idx = -1;
-
-    for (int i = 0; i < num_infos; i++) {
+    for (int i = 0; i < num_infos; i++)
         av_log(ctx, AV_LOG_WARNING, "Audio source %lu: %s\n", infos[i].identifier, infos[i].name);
-        if (target_idx >= 0 && target_idx == infos[i].identifier)
-            identifier = infos[i].identifier;
-        else if (!av_strncasecmp(ctx->audio_capture_target, infos[i].name, sizeof(ctx->audio_capture_target)))
-            identifier = infos[i].identifier;
-    }
 
-    /* Start capturing and init audio encoder */
-    err = ctx->audio_capture_source->start(ctx->audio_cap_ctx, identifier,
-                                           ctx->audio_capture_opts,
-                                           ctx->audio_encoder ? &ctx->audio_frames : NULL,
-                                           NULL, NULL);
-    if (err)
-        return err;
+    if (!ctx->audio_capture_targets_num)
+        return 0;
+
+    for (int i = 0; i < ctx->audio_capture_targets_num; i++) {
+        uint64_t identifier = 0;
+        char *end = NULL;
+        int target_idx = strtol(ctx->audio_capture_targets[i], &end, 10);
+        if (end == ctx->audio_capture_targets[i])
+            target_idx = -1;
+
+        for (int j = 0; j < num_infos; j++) {
+            if (target_idx >= 0 && target_idx == infos[j].identifier)
+                identifier = infos[j].identifier;
+            else if (!av_strncasecmp(ctx->audio_capture_targets[i], infos[j].name,
+                     strlen(ctx->audio_capture_targets[i])))
+                identifier = infos[j].identifier;
+        }
+
+        /* Start capturing and init audio encoder */
+        err = ctx->audio_capture_source->start(ctx->audio_cap_ctx, identifier,
+                                               ctx->audio_capture_opts[i],
+                                               ctx->audio_encoder ? &ctx->audio_frames[i] : NULL,
+                                               NULL, NULL);
+        if (err)
+            return err;
+    }
 
     return 0;
 }
@@ -369,15 +376,15 @@ static int main_loop(struct capture_context *ctx) {
     }
 
     /* First A ts */
-    if (ctx->audio_capture_target && ctx->audio_capture_source && ctx->audio_encoder) {
-        AVFrame *f = sp_frame_fifo_peek(&ctx->audio_frames);
+    if (ctx->audio_capture_targets_num && ctx->audio_capture_source && ctx->audio_encoder) {
+        AVFrame *f = sp_frame_fifo_peek(&ctx->audio_frames[0]);
         FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
         first_ts_audio = fe->clock_time;
     }
 
     /* Setup A/V sync */
     if (ctx->video_capture_target && ctx->video_capture_source && ctx->video_encoder &&
-        ctx->audio_capture_target && ctx->audio_capture_source && ctx->audio_encoder) {
+        ctx->audio_capture_targets_num && ctx->audio_capture_source && ctx->audio_encoder) {
         ts_epoch = FFMIN(first_ts_video, first_ts_audio);
         if (ctx->video_encoder)
             ctx->video_encoder->ts_offset_us = first_ts_video - ts_epoch;
@@ -386,8 +393,12 @@ static int main_loop(struct capture_context *ctx) {
     }
 
     /* Filtering should go here */
-    if (ctx->fctx) {
-        sp_filter_init_graph(ctx->fctx);
+    if (ctx->fctx_video) {
+        sp_filter_init_graph(ctx->fctx_video);
+    }
+
+    if (ctx->fctx_audio) {
+        sp_filter_init_graph(ctx->fctx_audio);
     }
 
     /* Init video encoding */
@@ -398,7 +409,7 @@ static int main_loop(struct capture_context *ctx) {
     }
 
     /* Init audio encoding */
-    if (ctx->audio_capture_target && ctx->audio_encoder && ctx->audio_capture_source) {
+    if (ctx->audio_capture_targets_num && ctx->audio_encoder && ctx->audio_capture_source) {
         ctx->audio_encoder->global_header_needed = ctx->avf->oformat->flags & AVFMT_GLOBALHEADER;
         init_encoder(ctx->audio_encoder);
         init_enc_muxing(ctx, ctx->audio_encoder);
@@ -423,7 +434,7 @@ static int main_loop(struct capture_context *ctx) {
     if (ctx->video_capture_source && ctx->video_capture_target)
         stop_video_capture(ctx);
 
-    if (ctx->audio_capture_source && ctx->audio_capture_target)
+    if (ctx->audio_capture_source && ctx->audio_capture_targets_num)
         stop_audio_capture(ctx);
 
     /* Stop encoding */
@@ -447,7 +458,10 @@ static void uninit(struct capture_context *ctx)
         ctx->audio_capture_source->free(&ctx->audio_cap_ctx);
 
     sp_frame_fifo_free(&ctx->video_frames);
-    sp_frame_fifo_free(&ctx->audio_frames);
+
+    for (int i = 0; i < ctx->audio_capture_targets_num; i++)
+        sp_frame_fifo_free(&ctx->audio_frames[i]);
+
     sp_packet_fifo_free(&ctx->packet_buf);
 
     free_encoder(&ctx->video_encoder);
@@ -470,20 +484,6 @@ int main(int argc, char *argv[])
         .item_name   = av_default_item_name,
         .version     = LIBAVUTIL_VERSION_INT,
     });
-
-    SPFrameFIFO *sv = &ctx.video_frames;
-#if 0
-    sp_frame_fifo_init(&ctx.filtered_frames, 32, FRAME_FIFO_BLOCK_NO_INPUT);
-    ctx.fctx = alloc_filtering_ctx();
-
-    sp_init_filter_graph(ctx.fctx, "hwmap,fps=20,hwdownload,format=yuv420p,"
-                                   "scale=w=854:h=480:out_range=full",
-                         NULL, AV_HWDEVICE_TYPE_VAAPI);
-
-    sp_map_fifo_to_pad(ctx.fctx, &ctx.video_frames, 0, 0);
-    sp_map_fifo_to_pad(ctx.fctx, &ctx.filtered_frames, 0, 1);
-    sv = &ctx.filtered_frames;
-#endif
 
     ctx.out_filename = argv[1];
     ctx.out_format = "matroska";
@@ -508,8 +508,8 @@ int main(int argc, char *argv[])
     ctx.video_frame_queue = 16;
     av_dict_set_int(&ctx.video_capture_opts, "capture_cursor",   1, 0);
     av_dict_set_int(&ctx.video_capture_opts, "use_screencopy",   0, 0);
-    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",  24000, 0);
-    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",  1001, 0);
+    av_dict_set_int(&ctx.video_capture_opts, "framerate_num",   30, 0);
+    av_dict_set_int(&ctx.video_capture_opts, "framerate_den",    1, 0);
 #endif
 
 #if 0
@@ -523,10 +523,22 @@ int main(int argc, char *argv[])
 #endif
 
 #if 1
+    sp_frame_fifo_init(&ctx.filtered_video, 32, FRAME_FIFO_BLOCK_NO_INPUT);
+    ctx.fctx_video = alloc_filtering_ctx();
+
+    sp_init_filter_graph(ctx.fctx_video, "hwmap,hwdownload,format=yuv420p,"
+                                         "scale=w=1280:h=720:out_range=full",
+                         NULL, AV_HWDEVICE_TYPE_VAAPI);
+
+    sp_map_fifo_to_pad(ctx.fctx_video, &ctx.video_frames, 0, 0);
+    sp_map_fifo_to_pad(ctx.fctx_video, &ctx.filtered_video, 0, 1);
+#endif
+
+#if 1
     /* Video encoder */
     ctx.video_encoder = alloc_encoding_ctx();
     ctx.video_encoder->codec = avcodec_find_encoder_by_name("h264_vaapi");
-    ctx.video_encoder->source_frames = sv;
+    ctx.video_encoder->source_frames = ctx.fctx_video ? &ctx.filtered_video : &ctx.video_frames;
     ctx.video_encoder->dest_packets = &ctx.packet_buf;
     ctx.video_encoder->width = 0; /* Use input */
     ctx.video_encoder->height = 0; /* Use input */
@@ -541,19 +553,33 @@ int main(int argc, char *argv[])
                                                                   "rdo_lookahead_frames=1", 0);
 #endif
 
-#if 0
+#if 1
     /* Audio capture */
     ctx.audio_capture_source = &src_pulse;
-    ctx.audio_capture_target = "0";
+    ctx.audio_capture_targets[0] = "0";
+//    ctx.audio_capture_targets[1] = "1";
+    ctx.audio_capture_targets_num = 1;
     ctx.audio_frame_queue = 256;
-    av_dict_set_int(&ctx.audio_capture_opts, "buffer_ms", 20, 0);
+    av_dict_set_int(&ctx.audio_capture_opts[0], "buffer_ms", 100, 0);
+    av_dict_set_int(&ctx.audio_capture_opts[1], "buffer_ms", 100, 0);
 #endif
 
 #if 0
+    /* Audio filtering */
+    sp_frame_fifo_init(&ctx.filtered_audio, 32, FRAME_FIFO_BLOCK_NO_INPUT);
+    ctx.fctx_audio = alloc_filtering_ctx();
+
+    sp_init_filter_graph(ctx.fctx_audio, "amix=inputs=2:weights=1 1", NULL, AV_HWDEVICE_TYPE_NONE);
+    sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.audio_frames[0], 0, 0);
+    sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.audio_frames[1], 1, 0);
+    sp_map_fifo_to_pad(ctx.fctx_audio, &ctx.filtered_audio, 0, 1);
+#endif
+
+#if 1
     /* Audio encoder */
     ctx.audio_encoder = alloc_encoding_ctx();
     ctx.audio_encoder->codec = avcodec_find_encoder_by_name("libopus");
-    ctx.audio_encoder->source_frames = &ctx.audio_frames;
+    ctx.audio_encoder->source_frames = ctx.fctx_audio ? &ctx.filtered_audio : &ctx.audio_frames[0];
     ctx.audio_encoder->dest_packets = &ctx.packet_buf;
     ctx.audio_encoder->sample_rate = 48000;
     ctx.audio_encoder->bitrate = 1000 * /* Kbps */ 128;

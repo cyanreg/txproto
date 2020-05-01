@@ -860,6 +860,9 @@ static int stop_wlcapture(void  *s, uint64_t identifier)
             av_buffer_pool_uninit(&cap_ctx->scrcpy.pool);
             av_buffer_unref(&cap_ctx->dmabuf.frames_ref);
 
+            /* Send EOF */
+            sp_frame_fifo_push(cap_ctx->fifo, NULL);
+
             /* Remove capture context */
             remove_capture_ctx(ctx, cap_ctx);
 

@@ -507,7 +507,6 @@ int stop_encoding_thread(EncodingContext *ctx)
     if (!ctx || !ctx->avctx)
         return 0;
 
-    sp_frame_fifo_push(ctx->source_frames, NULL);
     pthread_join(ctx->encoding_thread, NULL);
 
     return 0;

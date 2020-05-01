@@ -246,6 +246,8 @@ static void stream_status_cb(pa_stream *stream, void *data)
 
         av_log(main_ctx, AV_LOG_INFO, "Terminating capture stream!\n");
 
+        sp_frame_fifo_push(ctx->fifo, NULL); /* EOF */
+
         /* Remove the context */
         pthread_mutex_lock(lock);
         remove_capture_ctx(main_ctx, ctx);
@@ -313,7 +315,8 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
     pa_channel_map req_map = src->map;
 
     /* Filter out useless formats */
-    req_ss.format = pulse_remap_to_useful[req_ss.format];
+    //req_ss.format = pulse_remap_to_useful[req_ss.format];
+    req_ss.format = PA_SAMPLE_FLOAT32NE;
 
     /* We don't care about the rate as we'll have to resample ourselves anyway */
     req_ss.rate = av_clip(req_ss.rate, 8000, 96000);

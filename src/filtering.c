@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <pthread.h>
 
+#include <libavutil/time.h>
 #include <libavfilter/buffersink.h>
 
 #include "fifo_frame.h"
@@ -69,9 +70,9 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
 
     enum AVMediaType type;
     if (is_out)
-        type = avfilter_pad_get_type(filter->input_pads, filter_pad);
-    else
         type = avfilter_pad_get_type(filter->output_pads, filter_pad);
+    else
+        type = avfilter_pad_get_type(filter->input_pads, filter_pad);
 
     // For anonymous pads, just make something up. libavfilter allows duplicate
     // pad names (while we don't), so we check for collisions along with normal
@@ -348,6 +349,7 @@ static int init_pads(FilterContext *ctx)
         }
 
         if (!pad->buffer) {
+            av_log(ctx, AV_LOG_ERROR, "Unable to create buffer for input pad %s!\n", pad->name);
             av_free(params);
             err = AVERROR(ENOMEM);
             goto error;
@@ -384,15 +386,28 @@ void *filtering_thread(void *data)
     int err = 0;
     FilterContext *ctx = data;
 
-    pthread_setname_np(pthread_self(), "muxing");
+    pthread_setname_np(pthread_self(), "filtering");
 
     while (1) {
-        FilterPad *in_pad = ctx->in_pads[0];
-        FilterPad *out_pad = ctx->out_pads[0];
+        for (int i = 0; i < ctx->num_in_pads; i++) {
+            FilterPad *in_pad = ctx->in_pads[i];
+            AVFrame *in_frame = sp_frame_fifo_pop(in_pad->fifo);
 
-        AVFrame *in_frame = sp_frame_fifo_pop(in_pad->fifo);
-        av_buffersrc_add_frame(in_pad->buffer, in_frame);
-        av_frame_free(&in_frame);
+            /* TODO improve EOF handling */
+            if (!in_frame) {
+                sp_frame_fifo_push(ctx->out_pads[0]->fifo, NULL);
+                return NULL;
+            }
+
+            err = av_buffersrc_add_frame(in_pad->buffer, in_frame);
+            if (err) {
+                av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
+                return NULL;
+            }
+            av_frame_free(&in_frame);
+        }
+
+        FilterPad *out_pad = ctx->out_pads[0];
 
         AVFrame *filt_frame = av_frame_alloc();
         err = av_buffersink_get_frame(out_pad->buffer, filt_frame);
@@ -403,15 +418,22 @@ void *filtering_thread(void *data)
         } else if (err) {
             av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
             av_frame_free(&filt_frame);
+            return NULL;
         } else {
             filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
             FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
-            fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
-            fe->time_base       = out_pad->buffer->inputs[0]->time_base;
+            fe->time_base = out_pad->buffer->inputs[0]->time_base;
+            fe->clock_time = av_gettime_relative();
+            if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_VIDEO)
+                fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
+            else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
+                fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
 
             sp_frame_fifo_push(out_pad->fifo, filt_frame);
         }
     }
+
+    return NULL;
 }
 
 int sp_filter_init_graph(FilterContext *ctx)

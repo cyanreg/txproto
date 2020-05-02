@@ -1,26 +1,19 @@
-project('wlstream', 'c',
+project('txproto', 'c',
     license: 'LGPL2.1+',
     default_options: [ 'buildtype=debugoptimized', 'c_std=gnu11'],
+    version: '0.1',
+    meson_version: '>=0.41.0',
 )
 
-cc = meson.get_compiler('c')
+conf = configuration_data()
 
-#Common deps
-libm      = cc.find_library('m')
-pthreads  = dependency('threads')
-
-#Wayland deps
-wayland_client    = dependency('wayland-client')
-wayland_protocols = dependency('wayland-protocols', version: '>=1.14')
-
-#Library deps
-libavutil     = dependency('libavutil')
-libavcodec    = dependency('libavcodec')
-libavdevice   = dependency('libavdevice')
-libavformat   = dependency('libavformat')
-libavfilter   = dependency('libavfilter')
-libswresample = dependency('libswresample')
-libpulse      = dependency('libpulse')
+conf.set_quoted('PROJECT_NAME', meson.project_name())
+conf.set_quoted('PROJECT_VERSION_STRING', meson.project_version())
 
 subdir('protocols')
 subdir('src')
+
+configure_file(
+    output: 'config.h',
+    configuration: conf,
+)

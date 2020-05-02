@@ -1,3 +1,7 @@
+# Dependencies
+wayland_client    = dependency('wayland-client')
+wayland_protocols = dependency('wayland-protocols', version: '>=1.14')
+
 wl_protocol_dir = wayland_protocols.get_pkgconfig_variable('pkgdatadir')
 
 wayland_scanner = find_program('wayland-scanner')
@@ -15,24 +19,25 @@ wayland_scanner_client = generator(
 )
 
 protocols = [
-    [wl_protocol_dir, 'stable/xdg-shell/xdg-shell.xml'],
+    [wl_protocol_dir, 'unstable/xdg-output/xdg-output-unstable-v1.xml'],
     'wlr-export-dmabuf-unstable-v1.xml',
     'wlr-screencopy-unstable-v1.xml',
 ]
 
-wlstream_protos_src     = []
-wlstream_protos_headers = []
+wayland_client_protos_src     = []
+wayland_client_protos_headers = []
 
 foreach p : protocols
 	xml = join_paths(p)
-	wlstream_protos_src     += wayland_scanner_code.process(xml)
-	wlstream_protos_headers += wayland_scanner_client.process(xml)
+	wayland_client_protos_src     += wayland_scanner_code.process(xml)
+	wayland_client_protos_headers += wayland_scanner_client.process(xml)
 endforeach
 
-lib_wl_protos = static_library('wlstream_protos', wlstream_protos_src + wlstream_protos_headers,
-                                dependencies: [wayland_client]) # for the include directory
+lib_wl_protos = static_library('wayland_client_protos',
+                               wayland_client_protos_src + wayland_client_protos_headers,
+                               dependencies: [wayland_client]) # for the include directory
 
-wlstream_protos = declare_dependency(
+wayland_client_protos = declare_dependency(
     link_with: lib_wl_protos,
-    sources: wlstream_protos_headers,
+    sources: wayland_client_protos_headers,
 )

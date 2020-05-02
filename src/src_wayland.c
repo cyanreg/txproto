@@ -18,6 +18,7 @@
 
 #include "src_common.h"
 #include "utils.h"
+#include "../config.h"
 
 struct wayland_output {
     struct wl_list link;
@@ -541,7 +542,7 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
     f->size = ctx->scrcpy.stride * ctx->scrcpy.height;
 
     char name[255];
-    snprintf(name, sizeof(name), PROGRAM_NAME "_%ix%i_s%i_f0x%x", ctx->scrcpy.width,
+    snprintf(name, sizeof(name), PROJECT_NAME "_%ix%i_s%i_f0x%x", ctx->scrcpy.width,
              ctx->scrcpy.height, ctx->scrcpy.stride, ctx->scrcpy.format);
 
     int fd = memfd_create(name, 0);

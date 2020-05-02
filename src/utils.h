@@ -2,8 +2,6 @@
 
 #include <libavutil/opt.h>
 
-#define PROGRAM_NAME "spcapture"
-
 int  sp_make_wakeup_pipe (int pipes[2]);
 void sp_write_wakeup_pipe(int pipes[2]);
 void sp_flush_wakeup_pipe(int pipes[2]);

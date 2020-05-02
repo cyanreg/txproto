@@ -6,6 +6,7 @@
 
 #include "src_common.h"
 #include "utils.h"
+#include "../config.h"
 
 typedef struct PulseSource {
     uint32_t index;
@@ -326,7 +327,7 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
     if (av_get_default_channel_layout(req_map.channels) != lavu_ch_map)
         pa_channel_map_init_stereo(&req_map);
 
-    cap_ctx->stream = pa_stream_new(ctx->pa_context, PROGRAM_NAME, &req_ss, &req_map);
+    cap_ctx->stream = pa_stream_new(ctx->pa_context, PROJECT_NAME, &req_ss, &req_map);
     if (!cap_ctx->stream) {
         av_log(ctx, AV_LOG_ERROR, "Unable to init stream!\n");
         err = AVERROR(EINVAL);
@@ -757,7 +758,7 @@ static int init_pulse(void **s)
 
     ctx->pa_mainloop_api = pa_threaded_mainloop_get_api(ctx->pa_mainloop);
 
-    ctx->pa_context = pa_context_new(ctx->pa_mainloop_api, PROGRAM_NAME);
+    ctx->pa_context = pa_context_new(ctx->pa_mainloop_api, PROJECT_NAME);
     pa_context_set_state_callback(ctx->pa_context, pulse_state_cb, ctx);
     pa_context_connect(ctx->pa_context, NULL, PA_CONTEXT_NOFLAGS, NULL);
 

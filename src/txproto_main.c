@@ -22,8 +22,8 @@
 #include "encoding.h"
 #include "filtering.h"
 #include "utils.h"
-
-#include "wlr-export-dmabuf-unstable-v1-client-protocol.h"
+#include "../config.h"
+#include "version.h"
 
 typedef struct VideoCapturing {
     void *video_cap_ctx;
@@ -497,13 +497,15 @@ int main(int argc, char *argv[])
         .quit = ATOMIC_VAR_INIT(0),
     };
     ctx.class = &((AVClass) {
-        .class_name  = "wlstream",
+        .class_name  = "txproto",
         .item_name   = av_default_item_name,
         .version     = LIBAVUTIL_VERSION_INT,
     });
 
+    av_log(&ctx, AV_LOG_INFO, "Starting %s %s (%s)!\n", PROJECT_NAME,
+           PROJECT_VERSION_STRING, vcstag);
+
     ctx.out_filename = argv[1];
-    ctx.out_format = "matroska";
     ctx.video_streamid = ctx.audio_streamid = -1;
 
     if (!strncmp(ctx.out_filename, "rtmp", 4))

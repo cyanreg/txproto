@@ -42,6 +42,8 @@ typedef struct EncodingContext {
     /* Audio */
     SwrContext *swr;
     int swr_configured_rate;
+    uint64_t swr_configured_layout;
+    int swr_configured_format;
 
     int err;
 } EncodingContext;

@@ -16,6 +16,14 @@ static int swr_configure(EncodingContext *ctx, AVFrame *conf)
         return AVERROR(ENOMEM);
     }
 
+    if (!conf)
+        return 0;
+
+    if (ctx->swr_configured_rate   == conf->sample_rate    &&
+        ctx->swr_configured_layout == conf->channel_layout &&
+        ctx->swr_configured_format == conf->format)
+        return 0;
+
     av_opt_set_int           (ctx->swr, "in_sample_rate",     conf->sample_rate,              0);
     av_opt_set_channel_layout(ctx->swr, "in_channel_layout",  conf->channel_layout,           0);
     av_opt_set_sample_fmt    (ctx->swr, "in_sample_fmt",      conf->format,                   0);
@@ -32,6 +40,8 @@ static int swr_configure(EncodingContext *ctx, AVFrame *conf)
     }
 
     ctx->swr_configured_rate = conf->sample_rate;
+    ctx->swr_configured_layout = conf->channel_layout;
+    ctx->swr_configured_format = conf->format;
 
     return 0;
 }
@@ -164,7 +174,10 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
     }
 
     hwfc = (AVHWFramesContext*)ctx->enc_frames_ref->data;
+
     ctx->avctx->pix_fmt = hwfc->format;
+    ctx->avctx->thread_count = 1; /* Otherwise we spawn N threads */
+    ctx->avctx->thread_type = 0;
 
     ctx->avctx->hw_frames_ctx = av_buffer_ref(ctx->enc_frames_ref);
 	if (!ctx->avctx->hw_frames_ctx) {
@@ -209,7 +222,7 @@ int init_encoder(EncodingContext *ctx)
     if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
         if ((ctx->codec->capabilities & AV_CODEC_CAP_HARDWARE)) {
             err = init_hwcontext(ctx, conf);
-            if (err)
+            if (err < 0)
                 return err;
         }
     }
@@ -217,12 +230,12 @@ int init_encoder(EncodingContext *ctx)
     /* SWR */
     if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
         err = swr_configure(ctx, conf);
-        if (err)
+        if (err < 0)
             return err;
     }
 
     err = avcodec_open2(ctx->avctx, ctx->codec, &ctx->encoder_opts);
-	if (err) {
+	if (err < 0) {
 		av_log(ctx, AV_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
 		return err;
 	}
@@ -235,6 +248,10 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
     int ret;
     int frame_size = ctx->avctx->frame_size;
  
+    ret = swr_configure(ctx, *input);
+    if (ret < 0)
+        return ret;
+
     int64_t resampled_frame_pts = get_next_audio_pts(ctx, *input);
 
     /* Resample the frame, can be NULL */
@@ -275,11 +292,11 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
     out_frame->pts                   = resampled_frame_pts;
 
     /* SWR sets this field to whatever it can output if it can't this much */
-    out_frame->nb_samples     = frame_size;
+    out_frame->nb_samples            = frame_size;
 
     /* Get frame buffer */
     ret = av_frame_get_buffer(out_frame, 0);
-    if (ret) {
+    if (ret < 0) {
         av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(ret));
         av_frame_free(&out_frame);
         return ret;
@@ -332,7 +349,7 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
                 return AVERROR(ENOMEM);
 
             err = av_hwframe_map(mapped_frame, in_f, AV_HWFRAME_MAP_READ);
-            if (err) {
+            if (err < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error mapping: %s!\n", av_err2str(err));
                 return err;
             }
@@ -366,7 +383,7 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
             }
 
             err = av_hwframe_transfer_data(tx_frame, in_f, 0);
-            if (err) {
+            if (err < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error transferring: %s!\n", av_err2str(err));
                 return err;
             }
@@ -427,13 +444,13 @@ static void *encoding_thread(void *arg)
 
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
             ret = video_process_frame(ctx, &frame);
-            if (ret)
+            if (ret < 0)
                 goto fail;
         } else if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
             ret = audio_process_frame(ctx, &frame, flush);
             if (ret == AVERROR(EAGAIN))
                 continue;
-            else if (ret)
+            else if (ret < 0)
                 goto fail;
         }
 

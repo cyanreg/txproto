@@ -32,6 +32,8 @@ typedef struct PulseSink {
 typedef struct PulseCtx {
     AVClass *class;
 
+    int64_t epoch;
+
     pthread_mutex_t capture_ctx_lock;
     struct PulseCaptureCtx **capture_ctx;
     int capture_ctx_num;
@@ -68,6 +70,9 @@ typedef struct PulseCaptureCtx {
     /* Stats */
     int dropped_samples;
 
+    /* First frame delivered minus epoch */
+    int64_t delay;
+
     /* Error handling */
     error_handler *error_handler;
     void *error_handler_ctx;
@@ -78,8 +83,6 @@ typedef struct PulseCaptureCtx {
     uint64_t channel_layout;
     int bits_per_sample;
     AVRational time_base;
-
-    int64_t start_pts;
 } PulseCaptureCtx;
 
 /**
@@ -178,7 +181,6 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     FormatExtraData *fe = (FormatExtraData *)f->opaque_ref->data;
     fe->time_base       = av_make_q(1, 1000000);
     fe->bits_per_sample = format_map[ss->format].bits_per_sample;
-    fe->clock_time      = av_gettime_relative();
 
     /* Allocate the frame */
     av_frame_get_buffer(f, 0);
@@ -188,16 +190,17 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     else /* There's a hole */
         av_samples_set_silence(f->data, 0, f->nb_samples, f->channels, f->format);
 
+    if (!ctx->delay)
+        ctx->delay = av_gettime_relative() - ctx->main->epoch;
+
     /* Get PTS*/
     pa_usec_t pts;
     if (pa_stream_get_time(stream, &pts) == PA_OK) {
-        f->pts = pts;
+        f->pts = pts + ctx->delay;
         int delay_neg;
         pa_usec_t delay;
-        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK) {
+        if (pa_stream_get_latency(stream, &delay, &delay_neg) == PA_OK)
             f->pts += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
-//            fe->clock_time += delay_neg ? +((int64_t)delay) : -((int64_t)delay);
-        }
     } else {
         f->pts = AV_NOPTS_VALUE;
     }
@@ -252,7 +255,8 @@ static void stream_status_cb(pa_stream *stream, void *data)
 
         av_log(main_ctx, AV_LOG_INFO, "Terminating capture stream!\n");
 
-        sp_frame_fifo_push(ctx->fifo, NULL); /* EOF */
+        if (ctx->fifo)
+            sp_frame_fifo_push(ctx->fifo, NULL); /* EOF */
 
         /* Remove the context */
         pthread_mutex_lock(lock);
@@ -751,7 +755,7 @@ static void free_pulse(void **s)
     av_freep(s);
 }
 
-static int init_pulse(void **s)
+static int init_pulse(void **s, int64_t epoch)
 {
     int locked = 0;
     PulseCtx *ctx = av_mallocz(sizeof(*ctx));
@@ -791,6 +795,8 @@ static int init_pulse(void **s)
 
     pa_threaded_mainloop_unlock(ctx->pa_mainloop);
     locked = 0;
+
+    ctx->epoch = epoch;
 
     *s = ctx;
 

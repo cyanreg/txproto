@@ -23,7 +23,6 @@ typedef struct EncodingContext {
 
     /* Set this before you start the thread */
     int stream_id;
-    int64_t ts_offset_us;
 
     /* Video only */
     AVDictionary *encoder_opts;

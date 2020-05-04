@@ -34,6 +34,8 @@ struct wayland_output {
 typedef struct WaylandCtx {
     AVClass *class;
 
+    int64_t epoch;
+
     pthread_t event_thread;
 
     struct wl_display *display;
@@ -63,6 +65,7 @@ typedef struct WaylandCaptureCtx {
 
     /* Stats */
     int dropped_frames;
+    int dropped_frames_msg_state;
 
     /* Framerate limiting */
     AVRational frame_rate;
@@ -76,9 +79,6 @@ typedef struct WaylandCaptureCtx {
     /* Capture options */
     int capture_cursor;
     int use_screencopy;
-
-    /* To make sure timestamps start from 0 */
-    int64_t vid_start_pts;
 
     /* Frame being signalled */
     AVFrame *frame;
@@ -418,15 +418,22 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
 
     /* Opaque ref */
     FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
-    fe->time_base       = av_make_q(1, 1000000000);
+    fe->time_base       = av_make_q(1, 1000000);
     fe->avg_frame_rate  = ctx->frame_rate;
-    fe->clock_time      = av_gettime_relative();
 
-    /* Timestamp, nanoseconds timebase */
-    ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
-    if (!ctx->vid_start_pts)
-        ctx->vid_start_pts = ctx->frame->pts;
-    ctx->frame->pts -= ctx->vid_start_pts;
+    /* Timestamp of when the frame will be presented */
+    int64_t presented = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
+
+    /* Current time */
+    struct timespec tsp = { 0 };
+    clock_gettime(CLOCK_MONOTONIC, &tsp);
+
+    /* Time until presentation */
+    int64_t delay = ((tsp.tv_sec * 1000000000) + tsp.tv_nsec) - presented;
+
+    ctx->frame->pts = av_gettime_relative() - ctx->main->epoch;
+    ctx->frame->pts = av_add_stable(fe->time_base, ctx->frame->pts,
+                                    av_make_q(1, 1000000000), delay);
 
 	/* Attach the hardware frame context to the frame */
     if ((err = attach_drm_frames_ref(ctx, ctx->frame, sw_fmt)))
@@ -435,8 +442,9 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
     if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
-        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
         ctx->dropped_frames++;
+        av_log_once(ctx->main, AV_LOG_WARNING, AV_LOG_DEBUG, &ctx->dropped_frames_msg_state,
+                    "Dropping a frame, queue is full (%i dropped)!\n", ctx->dropped_frames);
         av_frame_free(&ctx->frame);
         ctx->dmabuf.frame_obj = NULL;
     } else if (ctx->fifo) {
@@ -445,6 +453,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
             err = AVERROR(ENOMEM);
             goto fail;
         }
+        ctx->dropped_frames_msg_state = 0;
         ctx->frame = NULL;
     } else {
         av_frame_free(&ctx->frame);
@@ -672,21 +681,29 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
 
     /* Opaque ref */
     FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
-    fe->time_base       = av_make_q(1, 1000000000);
+    fe->time_base       = av_make_q(1, 1000000);
     fe->avg_frame_rate  = ctx->frame_rate;
-    fe->clock_time      = av_gettime_relative();
 
-    /* Timestamp, nanoseconds timebase */
-    ctx->frame->pts = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
-    if (!ctx->vid_start_pts)
-        ctx->vid_start_pts = ctx->frame->pts;
-    ctx->frame->pts -= ctx->vid_start_pts;
+    /* Timestamp of when the frame was presented */
+    int64_t presented = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
+
+    /* Current time */
+    struct timespec tsp = { 0 };
+    clock_gettime(CLOCK_MONOTONIC, &tsp);
+
+    /* Delay */
+    int64_t delay = presented - ((tsp.tv_sec * 1000000000) + tsp.tv_nsec);
+
+    ctx->frame->pts = av_gettime_relative() - ctx->main->epoch;
+    ctx->frame->pts = av_add_stable(fe->time_base, ctx->frame->pts,
+                                    av_make_q(1, 1000000000), delay);
 
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
     if (ctx->fifo && sp_frame_fifo_is_full(ctx->fifo)) {
-        av_log(ctx->main, AV_LOG_WARNING, "Dropping a frame, queue is full!\n");
         ctx->dropped_frames++;
+        av_log_once(ctx->main, AV_LOG_WARNING, AV_LOG_DEBUG, &ctx->dropped_frames_msg_state,
+                    "Dropping a frame, queue is full (%i dropped)!\n", ctx->dropped_frames);
         av_frame_free(&ctx->frame);
     } else if (ctx->fifo) {
         if (sp_frame_fifo_push(ctx->fifo, ctx->frame)) {
@@ -694,6 +711,7 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
             err = AVERROR(ENOMEM);
             goto fail;
         }
+        ctx->dropped_frames_msg_state = 0;
         ctx->frame = NULL;
     } else {
         av_frame_free(&ctx->frame);
@@ -1012,7 +1030,7 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
     return 0;
 }
 
-static int init_wlcapture(void **s)
+static int init_wlcapture(void **s, int64_t epoch)
 {
     int err = 0;
     WaylandCtx *ctx = av_mallocz(sizeof(*ctx));
@@ -1058,6 +1076,8 @@ static int init_wlcapture(void **s)
 
     /* Start the event thread */
     pthread_create(&ctx->event_thread, NULL, wayland_events_thread, ctx);
+
+    ctx->epoch = epoch;
 
     *s = ctx;
 

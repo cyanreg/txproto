@@ -425,10 +425,6 @@ static void *encoding_thread(void *arg)
             flush = !frame;
         }
 
-        if (frame)
-            frame->pts = av_add_stable(ctx->avctx->time_base, frame->pts,
-                                       av_make_q(1, 1000000), ctx->ts_offset_us);
-
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
             ret = video_process_frame(ctx, &frame);
             if (ret)

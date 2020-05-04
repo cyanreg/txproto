@@ -23,6 +23,8 @@ typedef struct LavdCaptureCtx {
 typedef struct LavdCtx {
     AVClass *class;
 
+    int64_t epoch;
+
     LavdCaptureCtx **capture_ctx;
     int capture_ctx_num;
 
@@ -95,7 +97,6 @@ send:
             FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
             fe->time_base       = ctx->avctx->time_base;
             fe->avg_frame_rate  = ctx->avctx->framerate;
-            fe->clock_time      = av_gettime_relative();
 
             if (ctx->fifo)
                 sp_frame_fifo_push(ctx->fifo, frame);
@@ -284,7 +285,7 @@ static void uninit_lavd(void **s)
     av_freep(s);
 }
 
-static int init_lavd(void **s)
+static int init_lavd(void **s, int64_t epoch)
 {
     LavdCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
@@ -295,6 +296,8 @@ static int init_lavd(void **s)
     };
 
     avdevice_register_all();
+
+    ctx->epoch = epoch;
 
     *s = ctx;
 

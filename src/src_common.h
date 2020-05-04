@@ -10,7 +10,6 @@ typedef struct FormatExtraData {
     AVRational avg_frame_rate;
     int bits_per_sample;
     AVRational time_base;
-    int64_t clock_time;
 } FormatExtraData;
 
 typedef struct SourceInfo {
@@ -31,8 +30,10 @@ typedef const struct CaptureSource {
     /**
      * Initialize the API
      * The report_error callback may be called at any time from any thread
+     * epoch: the start time, via av_gettime_relative(). All timestamps must
+     * use this as the start time.
      */
-    int  (*init)(void **s);
+    int  (*init)(void **s, int64_t epoch);
 
     /**
      * Get a list of sources, memory is handled by the capture source

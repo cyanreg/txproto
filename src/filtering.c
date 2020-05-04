@@ -400,39 +400,51 @@ void *filtering_thread(void *data)
                 flushing = !in_frame;
             }
 
-            err = av_buffersrc_add_frame(in_pad->buffer, in_frame);
+            err = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame,
+                                               AV_BUFFERSRC_FLAG_KEEP_REF |
+                                               AV_BUFFERSRC_FLAG_PUSH);
+            av_frame_free(&in_frame);
             if (err) {
-                av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
+                av_log(ctx, AV_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
                 goto end;
             }
-            av_frame_free(&in_frame);
         }
 
-        FilterPad *out_pad = ctx->out_pads[0];
+        for (int i = 0; i < ctx->num_out_pads; i++) {
+            FilterPad *out_pad = ctx->out_pads[i];
 
-        AVFrame *filt_frame = av_frame_alloc();
-        err = av_buffersink_get_frame(out_pad->buffer, filt_frame);
-        if (err == AVERROR(EAGAIN)) {
-            av_frame_free(&filt_frame);
-        } else if (err == AVERROR_EOF) {
-            av_log(ctx, AV_LOG_INFO, "Filter flushed!\n");
-            av_frame_free(&filt_frame);
-            break;
-        } else if (err) {
-            av_log(ctx, AV_LOG_ERROR, "Error filtering: %s!\n", av_err2str(err));
-            av_frame_free(&filt_frame);
-            goto end;
-        } else {
-            filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
-            FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
-            fe->time_base = out_pad->buffer->inputs[0]->time_base;
-            fe->clock_time = av_gettime_relative();
-            if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_VIDEO)
-                fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
-            else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
-                fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
+            AVFrame *filt_frame = av_frame_alloc();
+            err = av_buffersink_get_frame(out_pad->buffer, filt_frame);
+            if (err == AVERROR(EAGAIN)) {
+                av_frame_free(&filt_frame);
+            } else if (err == AVERROR_EOF) {
+                av_log(ctx, AV_LOG_INFO, "Filter flushed!\n");
+                av_frame_free(&filt_frame);
+                goto end;
+            } else if (err) {
+                av_log(ctx, AV_LOG_ERROR, "Error pulling filtered frame: %s!\n", av_err2str(err));
+                av_frame_free(&filt_frame);
+                goto end;
+            } else {
+                filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
-            sp_frame_fifo_push(out_pad->fifo, filt_frame);
+                FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
+                fe->time_base = out_pad->buffer->inputs[0]->time_base;
+                if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_VIDEO)
+                    fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
+                else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
+                    fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
+
+                if (sp_frame_fifo_is_full(out_pad->fifo)) {
+                    out_pad->dropped_frames++;
+                    av_log_once(ctx, AV_LOG_WARNING, AV_LOG_DEBUG, &out_pad->dropped_frames_msg_state,
+                                "Dropping filtered frame (%i dropped)!\n", out_pad->dropped_frames);
+                    av_frame_free(&filt_frame);
+                } else {
+                    sp_frame_fifo_push(out_pad->fifo, filt_frame);
+                    out_pad->dropped_frames_msg_state = 0;
+                }
+            }
         }
     }
 

@@ -18,6 +18,10 @@ typedef struct FilterPad {
     AVFilterContext *filter;
     int filter_pad;
 
+    /* Output only */
+    int dropped_frames;
+    int dropped_frames_msg_state;
+
     SPFrameFIFO *fifo;
     AVFrame *in_fmt; /* Used to track format changes */
 } FilterPad;

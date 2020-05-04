@@ -487,30 +487,40 @@ static void free_tmp_sources(PulseCtx *ctx)
     av_freep(&src->name);       \
     av_freep(&src->desc);       \
 
-#define CALLBACK_BOILERPLATE(type, ftype, stype, cond)                   \
-    PulseCtx *ctx = data;                                                \
-    if (eol)                                                             \
-        return;                                                          \
-    pthread_mutex_lock(&ctx->ftype ## s_lock);                           \
-    int idx = 0;                                                         \
-    type *tmp, *src = NULL;                                              \
-    while ((tmp = get_at_index_ ##ftype (ctx, idx++))) {                 \
-        if ((tmp->index == info->index) && (cond)) {                     \
-            src = tmp;                                                   \
-            av_log(ctx, AV_LOG_INFO, "Updating " stype " %s (id: %i)\n", \
-                   info->name, info->index);                             \
-            FREE_STRING_VALUES(src)                                      \
-            break;                                                       \
-        }                                                                \
-    }                                                                    \
-                                                                         \
-    if (!src) {                                                          \
-        src = create_ ##ftype (ctx);                                     \
-        av_log(ctx, AV_LOG_INFO, "Adding new " stype " %s (id: %i)\n",   \
-               info->name, info->index);                                 \
+#define CALLBACK_BOILERPLATE(type, ftype, stype, cond)                    \
+    PulseCtx *ctx = data;                                                 \
+    if (eol)                                                              \
+        return;                                                           \
+    pthread_mutex_lock(&ctx->ftype ## s_lock);                            \
+    int idx = 0;                                                          \
+    type *tmp, *src = NULL;                                               \
+    while ((tmp = get_at_index_ ##ftype (ctx, idx++))) {                  \
+        if ((tmp->index == info->index) && (cond)) {                      \
+            src = tmp;                                                    \
+            int nam = strcmp(src->name, info->name); /* Name changes */   \
+            int ss = memcmp(&src->ss, &info->sample_spec,                 \
+                            sizeof(pa_sample_spec)); /* Sample fmt */     \
+            int map = memcmp(&src->map, &info->channel_map,               \
+                             sizeof(pa_channel_map)); /* Channel map */   \
+            int lvl = (nam | ss | map) ? AV_LOG_INFO : AV_LOG_DEBUG;      \
+            const char *snam = nam ? "name" : "";                         \
+            const char *sss = ss ? "samplefmt" : "";                      \
+            const char *smap = map ? "chmap" : "";                        \
+            av_log(ctx, lvl, "Updating " stype " %s (id: %i) %s %s %s\n", \
+                   info->name, info->index, snam, sss, smap);             \
+            FREE_STRING_VALUES(src)                                       \
+            break;                                                        \
+        }                                                                 \
+    }                                                                     \
+                                                                          \
+    if (!src) {                                                           \
+        src = create_ ##ftype (ctx);                                      \
+        av_log(ctx, AV_LOG_INFO, "Adding new " stype " %s (id: %i)\n",    \
+               info->name, info->index);                                  \
     }
 
-static void sink_cb(pa_context *context, const pa_sink_info *info, int eol, void *data)
+static void sink_cb(pa_context *context, const pa_sink_info *info,
+                    int eol, void *data)
 {
     CALLBACK_BOILERPLATE(PulseSink, sink, "sink", 1)
     src->index          = info->index;
@@ -522,7 +532,8 @@ static void sink_cb(pa_context *context, const pa_sink_info *info, int eol, void
     pthread_mutex_unlock(&ctx->sinks_lock);
 }
 
-static void source_cb(pa_context *context, const pa_source_info *info, int eol, void *data)
+static void source_cb(pa_context *context, const pa_source_info *info,
+                      int eol, void *data)
 {
     CALLBACK_BOILERPLATE(PulseSource, source, "source", !tmp->is_sink_input)
     src->index = info->index;
@@ -533,7 +544,8 @@ static void source_cb(pa_context *context, const pa_source_info *info, int eol, 
     pthread_mutex_unlock(&ctx->sources_lock);
 }
 
-static void sink_input_cb(pa_context *context, const pa_sink_input_info *info, int eol, void *data)
+static void sink_input_cb(pa_context *context, const pa_sink_input_info *info,
+                          int eol, void *data)
 {
     CALLBACK_BOILERPLATE(PulseSource, source, "sink input", tmp->is_sink_input)
     src->index             = info->index;
@@ -558,7 +570,6 @@ static void stop_stream_source(PulseCtx *ctx, PulseSource *sink)
     for (int i = 0; i < ctx->capture_ctx_num; i++) {
         PulseCaptureCtx *cap_ctx = ctx->capture_ctx[i];
         if (cap_ctx->src == sink) {
-            av_log(ctx, AV_LOG_INFO, "Soure %i must be stopped!\n", sink->index);
 
             /* Kill it immediately, purging all the data */
             pa_stream_disconnect(cap_ctx->stream);

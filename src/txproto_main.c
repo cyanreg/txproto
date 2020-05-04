@@ -163,7 +163,7 @@ send:
 #if 1
         fprintf(stderr, "\rRate: %.1fMbps (video), %likbps (audio), Packets muxed: "
                 "%liv, %lia",
-                (rate_video << 3) / 1048576.0f, av_rescale(rate_audio, 8, 1024),
+                (rate_video << 3) / 1000000.0f, av_rescale(rate_audio, 8, 1000),
                 video_packets, audio_packets);
 #endif
     }

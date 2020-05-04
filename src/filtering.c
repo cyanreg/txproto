@@ -255,7 +255,7 @@ static void attempt_derive_device(FilterContext *ctx, AVBufferRef *frames_ref)
 
     err = av_hwdevice_ctx_create_derived(&ctx->hw_device_ref, ctx->device_type,
                                          input_device_ref, 0);
-    if (err) {
+    if (err < 0) {
         av_log(ctx, AV_LOG_ERROR, "Could not derive hardware device: %s!\n",
                av_err2str(err));
         if (ctx->hw_device_ref)
@@ -401,10 +401,8 @@ void *filtering_thread(void *data)
             }
 
             err = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame,
-                                               AV_BUFFERSRC_FLAG_KEEP_REF |
                                                AV_BUFFERSRC_FLAG_PUSH);
-            av_frame_free(&in_frame);
-            if (err) {
+            if (err < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
                 goto end;
             }
@@ -421,7 +419,7 @@ void *filtering_thread(void *data)
                 av_log(ctx, AV_LOG_INFO, "Filter flushed!\n");
                 av_frame_free(&filt_frame);
                 goto end;
-            } else if (err) {
+            } else if (err < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error pulling filtered frame: %s!\n", av_err2str(err));
                 av_frame_free(&filt_frame);
                 goto end;

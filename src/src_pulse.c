@@ -299,7 +299,7 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
     int idx = 0;
     PulseSource *tmp, *src;
     while ((tmp = get_at_index_source(ctx, idx))) {
-        if (tmp->index == identifier) {
+        if (identifier == (uint64_t)tmp) {
             src = tmp;
             break;
         }
@@ -365,6 +365,7 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
 
     const char *target_name = src->name;
     if (src->is_sink_input) {
+        /* First, find the sink to which the sink input is connected to */
         idx = 0;
         PulseSink *sink_tmp, *sink = NULL;
         while ((sink_tmp = get_at_index_sink(ctx, idx))) {
@@ -383,10 +384,11 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
             goto fail;
         }
 
+        /* Next, find the sink's monitor */
         idx = 0;
         PulseSource *monitor = NULL;
         while ((tmp = get_at_index_source(ctx, idx))) {
-            if (tmp->index == sink->monitor_source) {
+            if ((tmp->index == sink->monitor_source) && (!tmp->is_sink_input)) {
                 monitor = tmp;
                 break;
             }
@@ -454,7 +456,7 @@ static int stop_pulse(void *s, uint64_t identifier)
 
     for (int i = 0; i < ctx->capture_ctx_num; i++) {
         PulseCaptureCtx *cap_ctx = ctx->capture_ctx[i];
-        if (identifier == ctx->capture_ctx[i]->src->index) {
+        if (identifier == (uint64_t)ctx->capture_ctx[i]->src) {
             /* Drain it */
             pa_threaded_mainloop_lock(ctx->pa_mainloop);
             waitop(ctx, pa_stream_drain(cap_ctx->stream, stream_success_cb, cap_ctx));
@@ -485,7 +487,7 @@ static void free_tmp_sources(PulseCtx *ctx)
     av_freep(&src->name);       \
     av_freep(&src->desc);       \
 
-#define CALLBACK_BOILERPLATE(type, ftype, stype)                         \
+#define CALLBACK_BOILERPLATE(type, ftype, stype, cond)                   \
     PulseCtx *ctx = data;                                                \
     if (eol)                                                             \
         return;                                                          \
@@ -493,7 +495,7 @@ static void free_tmp_sources(PulseCtx *ctx)
     int idx = 0;                                                         \
     type *tmp, *src = NULL;                                              \
     while ((tmp = get_at_index_ ##ftype (ctx, idx++))) {                 \
-        if (tmp->index == info->index) {                                 \
+        if ((tmp->index == info->index) && (cond)) {                     \
             src = tmp;                                                   \
             av_log(ctx, AV_LOG_INFO, "Updating " stype " %s (id: %i)\n", \
                    info->name, info->index);                             \
@@ -510,7 +512,7 @@ static void free_tmp_sources(PulseCtx *ctx)
 
 static void sink_cb(pa_context *context, const pa_sink_info *info, int eol, void *data)
 {
-    CALLBACK_BOILERPLATE(PulseSink, sink, "sink")
+    CALLBACK_BOILERPLATE(PulseSink, sink, "sink", 1)
     src->index          = info->index;
     src->name           = av_strdup(info->name);
     src->desc           = av_strdup(info->description);
@@ -522,7 +524,7 @@ static void sink_cb(pa_context *context, const pa_sink_info *info, int eol, void
 
 static void source_cb(pa_context *context, const pa_source_info *info, int eol, void *data)
 {
-    CALLBACK_BOILERPLATE(PulseSource, source, "source")
+    CALLBACK_BOILERPLATE(PulseSource, source, "source", !tmp->is_sink_input)
     src->index = info->index;
     src->name  = av_strdup(info->name);
     src->desc  = av_strdup(info->description);
@@ -533,7 +535,7 @@ static void source_cb(pa_context *context, const pa_source_info *info, int eol, 
 
 static void sink_input_cb(pa_context *context, const pa_sink_input_info *info, int eol, void *data)
 {
-    CALLBACK_BOILERPLATE(PulseSource, source, "sink input")
+    CALLBACK_BOILERPLATE(PulseSource, source, "sink input", tmp->is_sink_input)
     src->index             = info->index;
     src->name              = av_strdup(info->name);
     src->desc              = av_strdup("sink input");
@@ -575,18 +577,19 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
     pa_subscription_event_type_t facility = type & PA_SUBSCRIPTION_EVENT_FACILITY_MASK;
     pa_subscription_event_type_t event = type & PA_SUBSCRIPTION_EVENT_TYPE_MASK;
 
-#define MONITOR_TEMPL(event_type, hook_fn, callback, ftype, stype)                     \
+#define MONITOR_TEMPL(event_type, hook_fn, callback, ftype, stype, type, cond)         \
     case PA_SUBSCRIPTION_EVENT_ ## event_type:                                         \
         if (event & PA_SUBSCRIPTION_EVENT_REMOVE) {                                    \
             pthread_mutex_lock(&ctx->ftype ## s_lock);                                 \
             int idx = 0;                                                               \
-            while (get_at_index_ ##ftype (ctx, idx))  {                                \
-                if (get_at_index_ ##ftype (ctx, idx)->index == index) {                \
+            type *sel;                                                                 \
+            while ((sel = get_at_index_ ##ftype (ctx, idx)))  {                        \
+                if ((sel->index == index) && (cond)) {                                 \
                     av_log(ctx, AV_LOG_INFO, "Removing " stype " %s (id: %i)\n",       \
-                           get_at_index_ ##ftype (ctx, idx)->name, index);             \
-                    stop_stream_ ##ftype(ctx, get_at_index_ ##ftype (ctx, idx));       \
-                    FREE_STRING_VALUES(get_at_index_ ##ftype (ctx, idx));              \
-                    remove_ ##ftype(ctx, get_at_index_ ##ftype (ctx, idx));            \
+                           sel->name, index);                                          \
+                    stop_stream_ ##ftype(ctx, sel);                                    \
+                    FREE_STRING_VALUES(sel);                                           \
+                    remove_ ##ftype(ctx, sel);                                         \
                     pthread_mutex_unlock(&ctx->ftype ## s_lock);                       \
                     return;                                                            \
                 }                                                                      \
@@ -596,8 +599,9 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
             pthread_mutex_unlock(&ctx->ftype ## s_lock);                               \
             return;                                                                    \
         } else {                                                                       \
-            if (!(o = hook_fn(context, index, callback, ctx))) {                       \
-                av_log(ctx, AV_LOG_ERROR, #hook_fn "() failed for id %u\n", index);    \
+            if (!(o = pa_context_get_ ## hook_fn(context, index, callback, ctx))) {    \
+                av_log(ctx, AV_LOG_ERROR, "pa_context_get_" #hook_fn "() failed "      \
+                       "for id %u\n", index);                                          \
                 return;                                                                \
             }                                                                          \
             pa_operation_unref(o);                                                     \
@@ -605,9 +609,9 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
         break;                                                                         \
 
     switch (facility) {
-    MONITOR_TEMPL(SINK, pa_context_get_sink_info_by_index, sink_cb, sink, "sink")
-    MONITOR_TEMPL(SOURCE, pa_context_get_source_info_by_index, source_cb, source, "source")
-    MONITOR_TEMPL(SINK_INPUT, pa_context_get_sink_input_info, sink_input_cb, source, "sink input")
+    MONITOR_TEMPL(SINK, sink_info_by_index, sink_cb, sink, "sink", PulseSink, 1)
+    MONITOR_TEMPL(SOURCE, source_info_by_index, source_cb, source, "source", PulseSource, !sel->is_sink_input)
+    MONITOR_TEMPL(SINK_INPUT, sink_input_info, sink_input_cb, source, "sink input", PulseSource, sel->is_sink_input)
     default:
         break;
     };
@@ -704,7 +708,7 @@ static void sources_pulse(void *s, SourceInfo **sources, int *num)
     while ((src = get_at_index_source(ctx, idx))) {
         ctx->tmp_sources[idx].name = av_strdup(src->name);
         ctx->tmp_sources[idx].desc = av_strdup(src->desc);
-        ctx->tmp_sources[idx].identifier = src->index;
+        ctx->tmp_sources[idx].identifier = (uint64_t)src;
         idx++;
     }
 

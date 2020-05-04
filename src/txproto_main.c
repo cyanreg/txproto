@@ -202,24 +202,25 @@ static int init_video_capture(struct capture_context *ctx, VideoCapturing *vctx,
     vctx->video_capture_source->sources(vctx->video_cap_ctx, &infos, &num_infos);
 
     for (int i = 0; i < num_infos; i++)
-        av_log(ctx, AV_LOG_WARNING, "Video source %lu: %s (%s)\n",
-               infos[i].identifier, infos[i].name, infos[i].desc);
+        av_log(ctx, AV_LOG_WARNING, "Video source %i: %s (%s)\n", i,
+               infos[i].name, infos[i].desc);
 
-    if (!vctx->video_capture_target)
+    const char *target = vctx->video_capture_target;
+    if (!target)
         return 0;
 
-    
     char *end = NULL;
     uint64_t identifier = infos[0].identifier;
-    int target_idx = strtol(vctx->video_capture_target, &end, 10);
-    if (end == vctx->video_capture_target)
-        target_idx = -1;
-
-    for (int i = 0; i < num_infos; i++) {
-        if (target_idx >= 0 && target_idx == infos[i].identifier)
-            identifier = infos[i].identifier;
-        else if (!av_strncasecmp(vctx->video_capture_target, infos[i].name, sizeof(vctx->video_capture_target)))
-            identifier = infos[i].identifier;
+    int target_idx = strtol(target, &end, 10);
+    if (end != target && target_idx >= 0 && target_idx < num_infos) {
+        identifier = infos[target_idx].identifier;
+    } else {
+        for (int i = 0; i < num_infos; i++) {
+            if (!av_strncasecmp(target, infos[i].name, strlen(target))) {
+                identifier = infos[i].identifier;
+                break;
+            }
+        }
     }
 
     /* Start capturing and init video encoder */
@@ -309,24 +310,30 @@ static int init_audio_capture(struct capture_context *ctx, int64_t epoch)
     ctx->audio_capture_source->sources(ctx->audio_cap_ctx, &infos, &num_infos);
 
     for (int i = 0; i < num_infos; i++)
-        av_log(ctx, AV_LOG_WARNING, "Audio source %lu: %s\n", infos[i].identifier, infos[i].name);
+        av_log(ctx, AV_LOG_WARNING, "Audio source %i: %s (%s)\n", i,
+               infos[i].name, infos[i].desc);
 
     if (!ctx->audio_capture_targets_num)
         return 0;
 
     for (int i = 0; i < ctx->audio_capture_targets_num; i++) {
-        uint64_t identifier = 0;
-        char *end = NULL;
-        int target_idx = strtol(ctx->audio_capture_targets[i], &end, 10);
-        if (end == ctx->audio_capture_targets[i])
-            target_idx = -1;
+        const char *target = ctx->audio_capture_targets[i];
 
-        for (int j = 0; j < num_infos; j++) {
-            if (target_idx >= 0 && target_idx == infos[j].identifier)
-                identifier = infos[j].identifier;
-            else if (!av_strncasecmp(ctx->audio_capture_targets[i], infos[j].name,
-                     strlen(ctx->audio_capture_targets[i])))
-                identifier = infos[j].identifier;
+        if (!target)
+            continue;
+
+        char *end = NULL;
+        uint64_t identifier = infos[0].identifier;
+        int target_idx = strtol(target, &end, 10);
+        if (end != target && target_idx >= 0 && target_idx < num_infos) {
+            identifier = infos[target_idx].identifier;
+        } else {
+            for (int i = 0; i < num_infos; i++) {
+                if (!av_strncasecmp(target, infos[i].name, strlen(target))) {
+                    identifier = infos[i].identifier;
+                    break;
+                }
+            }
         }
 
         /* Start capturing and init audio encoder */

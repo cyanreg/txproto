@@ -157,7 +157,11 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     const pa_channel_map *ch_map = pa_stream_get_channel_map(stream);
 
     /* Read the samples */
-    pa_stream_peek(stream, &buffer, &size);
+    if (pa_stream_peek(stream, &buffer, &size) < 0) {
+        av_log(ctx->main, AV_LOG_WARNING, "Unable to get samples from PA: %s\n",
+               pa_strerror(pa_context_errno(ctx->main->pa_context)));
+        return;
+    }
 
     /* There's no data */
     if (!buffer && !size)
@@ -239,7 +243,8 @@ static void stream_status_cb(pa_stream *stream, void *data)
     case PA_STREAM_CREATING:
         return;
     case PA_STREAM_FAILED:
-        av_log(ctx->main, AV_LOG_ERROR, "Capture stream failed!\n");
+        av_log(ctx->main, AV_LOG_ERROR, "Capture stream failed: %s!\n",
+               pa_strerror(pa_context_errno(ctx->main->pa_context)));
         /* Fallthrough */
     case PA_STREAM_TERMINATED:
         main_ctx = ctx->main;
@@ -260,6 +265,7 @@ static void stream_status_cb(pa_stream *stream, void *data)
     return;
 }
 
+/* ffmpeg can only operate on native endian sample formats */
 static enum pa_sample_format pulse_remap_to_useful[] = {
     [PA_SAMPLE_U8]        = PA_SAMPLE_U8,
     [PA_SAMPLE_ALAW]      = PA_SAMPLE_S16NE,
@@ -316,11 +322,15 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
     pa_channel_map req_map = src->map;
 
     /* Filter out useless formats */
-    //req_ss.format = pulse_remap_to_useful[req_ss.format];
-    req_ss.format = PA_SAMPLE_FLOAT32NE;
+    req_ss.format = pulse_remap_to_useful[req_ss.format];
 
     /* We don't care about the rate as we'll have to resample ourselves anyway */
-    req_ss.rate = av_clip(req_ss.rate, 8000, 96000);
+    if (req_ss.rate <= 0) {
+        av_log(ctx, AV_LOG_ERROR, "Source \"%s\" (id: %u) has invalid samplerate!\n",
+               src->name, src->index);
+        err = AVERROR(EINVAL);
+        goto fail;
+    }
 
     /* Check for crazy layouts */
     uint64_t lavu_ch_map = pa_to_lavu_ch_map(&req_map);
@@ -329,7 +339,8 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
 
     cap_ctx->stream = pa_stream_new(ctx->pa_context, PROJECT_NAME, &req_ss, &req_map);
     if (!cap_ctx->stream) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to init stream!\n");
+        av_log(ctx, AV_LOG_ERROR, "Unable to init stream: %s!\n",
+               pa_strerror(pa_context_errno(ctx->pa_context)));
         err = AVERROR(EINVAL);
         goto fail;
     }
@@ -385,7 +396,8 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
         }
 
         if (pa_stream_set_monitor_stream(cap_ctx->stream, src->index) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "pa_stream_set_monitor_stream() failed!\n");
+            av_log(ctx, AV_LOG_ERROR, "pa_stream_set_monitor_stream() failed: %s!\n",
+                   pa_strerror(pa_context_errno(ctx->pa_context)));
             err = AVERROR(EINVAL);
             goto fail;
         }
@@ -399,8 +411,10 @@ static int start_pulse(void *s, uint64_t identifier, AVDictionary *opts, SPFrame
                                  PA_STREAM_NOT_MONOTONIC      |
                                  PA_STREAM_AUTO_TIMING_UPDATE |
                                  PA_STREAM_INTERPOLATE_TIMING |
+                                 PA_STREAM_DONT_MOVE          |
                                  PA_STREAM_NOFLAGS)) {
-        av_log(ctx, AV_LOG_ERROR, "pa_stream_connect_record() failed!\n");
+        av_log(ctx, AV_LOG_ERROR, "pa_stream_connect_record() failed: %s!\n",
+               pa_strerror(pa_context_errno(ctx->pa_context)));
         err = AVERROR(EINVAL);
         goto fail;
     }
@@ -613,7 +627,8 @@ static void pulse_state_cb(pa_context *context, void *data)
         av_log(ctx, AV_LOG_INFO, "Sending client name!\n");
         break;
     case PA_CONTEXT_FAILED:
-        av_log(ctx, AV_LOG_ERROR, "PulseAudio connection failed!\n");
+        av_log(ctx, AV_LOG_ERROR, "PulseAudio connection failed: %s!\n",
+               pa_strerror(pa_context_errno(context)));
         pa_context_unref(context);
         break;
     case PA_CONTEXT_TERMINATED:
@@ -629,17 +644,19 @@ static void pulse_state_cb(pa_context *context, void *data)
                                                 (PA_SUBSCRIPTION_MASK_SINK       |
                                                  PA_SUBSCRIPTION_MASK_SOURCE     |
                                                  PA_SUBSCRIPTION_MASK_SINK_INPUT), NULL, NULL))) {
-            av_log(ctx, AV_LOG_INFO, "pa_context_subscribe() failed\n");
+            av_log(ctx, AV_LOG_INFO, "pa_context_subscribe() failed: %s\n",
+                   pa_strerror(pa_context_errno(context)));
             return;
         }
         pa_operation_unref(o);
 
-#define LOAD_INITIAL(hook_fn, callback)                   \
-    if (!(o = hook_fn(context, callback, ctx))) {         \
-        av_log(ctx, AV_LOG_INFO, #hook_fn "() failed\n"); \
-        return;                                           \
-    }                                                     \
-    pa_operation_unref(o);                                \
+#define LOAD_INITIAL(hook_fn, callback)                       \
+    if (!(o = hook_fn(context, callback, ctx))) {             \
+        av_log(ctx, AV_LOG_INFO, #hook_fn "() failed: %s!\n", \
+               pa_strerror(pa_context_errno(context)));       \
+        return;                                               \
+    }                                                         \
+    pa_operation_unref(o);
 
         LOAD_INITIAL(pa_context_get_sink_info_list, sink_cb)
         LOAD_INITIAL(pa_context_get_source_info_list, source_cb)

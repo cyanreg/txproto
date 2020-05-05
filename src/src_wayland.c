@@ -434,11 +434,6 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     ctx->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
                                     av_gettime_relative() - ctx->main->epoch);
 
-    /* The timestamp we're given is when the scanout began at, not when it was
-     * presented, so offset that */
-    ctx->frame->pts = av_add_stable(fe->time_base, ctx->frame->pts,
-                                    AV_TIME_BASE_Q, ctx->frame_delay);
-
 	/* Attach the hardware frame context to the frame */
     if ((err = attach_drm_frames_ref(ctx, ctx->frame, sw_fmt)))
         goto fail;

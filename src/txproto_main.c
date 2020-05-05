@@ -188,6 +188,7 @@ send:
 
     /* Flush output data */
     avio_flush(ctx->avf->pb);
+    avformat_flush(ctx->avf);
 
     av_log(ctx, AV_LOG_INFO, "Wrote trailer!\n");
 
@@ -495,11 +496,12 @@ int main(int argc, char *argv[])
     ctx.out_filename = argv[1];
     ctx.video_streamid = ctx.audio_streamid = -1;
 
-    if (!strncmp(ctx.out_filename, "rtmp", 4))
+    ctx.out_format = NULL;
+    if (!strncmp(ctx.out_filename, "rtmp://", 7))
         ctx.out_format = "flv";
-    if (!strncmp(ctx.out_filename, "udp", 3))
+    if (!strncmp(ctx.out_filename, "udp://", 6))
         ctx.out_format = "mpegts";
-    if (!strncmp(ctx.out_filename, "http", 3)) {
+    if (!strncmp(ctx.out_filename, "http://", 7)) {
         ctx.out_format = "dash";
         av_dict_set(&ctx.muxer_options, "seg_duration", "2", 0);
         av_dict_set(&ctx.muxer_options, "dash_segment_type", "mp4", 0);

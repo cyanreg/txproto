@@ -16,7 +16,7 @@ typedef struct LavdCaptureCtx {
     pthread_t pull_thread;
     AVCodecContext *avctx;
     SPFrameFIFO *fifo;
-    int64_t start_pts;
+    int64_t delay;
     atomic_bool quit;
 } LavdCaptureCtx;
 
@@ -56,9 +56,9 @@ void *lavd_thread(void *s)
             goto end;
         }
 
-        if (ctx->start_pts == AV_NOPTS_VALUE)
-            ctx->start_pts = pkt->pts;
-        pkt->pts -= ctx->start_pts;
+        if (!ctx->delay)
+            ctx->delay = av_gettime_relative() - ctx->main->epoch - pkt->pts;
+        pkt->pts += ctx->delay;
 
 send:
         pts = pkt ? pkt->pts : AV_NOPTS_VALUE;
@@ -130,7 +130,6 @@ static int start_lavd(void *s, uint64_t identifier, AVDictionary *opts, SPFrameF
 
     cap_ctx->main = ctx;
     cap_ctx->fifo = dst;
-    cap_ctx->start_pts = AV_NOPTS_VALUE;
     cap_ctx->quit = ATOMIC_VAR_INIT(0);
     cap_ctx->src = (AVInputFormat *)src->opaque;
     cap_ctx->src_name = av_strdup(src->name);
@@ -200,11 +199,18 @@ static int stop_lavd(void  *s, uint64_t identifier)
     pthread_join(cap_ctx->pull_thread, NULL);
 
     /* EOF */
-    if (cap_ctx->fifo)
+    if (cap_ctx->fifo) {
         sp_frame_fifo_push(cap_ctx->fifo, NULL);
+
+        /* This is really stupid, but v4l2 has to memory unmap all its buffers at
+         * uninit time, and if we don't do this, it'll segfault when we try to
+         * encode or filter the residual frames */
+        while (sp_frame_fifo_get_size(cap_ctx->fifo) > 0);
+    }
 
     /* Free */
     avcodec_free_context(&cap_ctx->avctx);
+    avformat_flush(cap_ctx->avf);
     avformat_close_input(&cap_ctx->avf);
     av_free(cap_ctx->src_name);
 

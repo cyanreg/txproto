@@ -129,14 +129,14 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
     if (input_device_ref) {
         err = av_hwdevice_ctx_create_derived(&enc_device_ref, hwcfg->device_type,
                                              input_device_ref, 0);
-        if (err) {
+        if (err < 0) {
             av_log(ctx, AV_LOG_ERROR, "Could not derive hardware device: %s!\n", av_err2str(err));
             goto end;
         }
     } else {
         err = av_hwdevice_ctx_create(&enc_device_ref, hwcfg->device_type,
                                      NULL, NULL, 0);
-        if (err) {
+        if (err < 0) {
             av_log(ctx, AV_LOG_ERROR, "Could not init hardware device: %s!\n", av_err2str(err));
             goto end;
         }
@@ -148,7 +148,7 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         (hwfc->width == ctx->avctx->width) && (hwfc->height == ctx->avctx->height)) {
         err = av_hwframe_ctx_create_derived(&ctx->enc_frames_ref, hwcfg->pix_fmt,
                                             enc_device_ref, input_frames_ref, 0);
-        if (err) {
+        if (err < 0) {
             av_log(ctx, AV_LOG_ERROR, "Could not derive hardware frames context: %s!\n", av_err2str(err));
             goto end;
         }
@@ -167,7 +167,7 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         hwfc->height = ctx->avctx->height;
 
         err = av_hwframe_ctx_init(ctx->enc_frames_ref);
-        if (err) {
+        if (err < 0) {
             av_log(ctx, AV_LOG_ERROR, "Could not init hardware frames context: %s!\n", av_err2str(err));
             goto end;
         }

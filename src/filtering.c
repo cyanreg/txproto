@@ -480,11 +480,22 @@ int sp_filter_init_graph(FilterContext *ctx)
     if ((err = init_pads(ctx)))
         return err;
 
+    if (!ctx->hw_device_ref && ctx->device_type != AV_HWDEVICE_TYPE_NONE) {
+        err = av_hwdevice_ctx_create(&ctx->hw_device_ref, ctx->device_type,
+                                     NULL, NULL, 0);
+        if (err < 0) {
+            av_log(ctx, AV_LOG_ERROR, "Could not init hardware device: %s!\n",
+                   av_err2str(err));
+            return err;
+        }
+    }
+
     if (ctx->hw_device_ref) {
         for (int i = 0; i < ctx->graph->nb_filters; i++) {
             AVFilterContext *filter = ctx->graph->filters[i];
             filter->hw_device_ctx = av_buffer_ref(ctx->hw_device_ref);
         }
+        av_buffer_unref(&ctx->hw_device_ref);
     }
 
     if ((err = avfilter_graph_config(ctx->graph, NULL)) < 0) {

@@ -45,16 +45,10 @@ int sp_map_fifo_to_pad(FilterContext *ctx, SPFrameFIFO *fifo, int pad_idx, int i
         }
         ctx->out_pads[pad_idx]->fifo = fifo;
     } else {
-        int fifo_refcount = 1;
-        for (int n = 0; n < ctx->num_out_pads; n++) {
-            if (ctx->out_pads[n]->fifo == fifo)
-                fifo_refcount++;
-        }
         if (ctx->in_pads[pad_idx]->fifo) {
             av_log(ctx, AV_LOG_ERROR, "Input FIFO for pad %i already specified!\n", pad_idx);
             return AVERROR(EINVAL);
         }
-        sp_frame_fifo_set_refs(fifo, fifo_refcount);
         ctx->in_pads[pad_idx]->fifo = fifo;
     }
 
@@ -459,6 +453,29 @@ int sp_filter_init_graph(FilterContext *ctx)
 
     if (err)
         return err;
+
+    /* Duplicate FIFOs */
+    for (int i = 0; i < ctx->num_in_pads; i++) {
+        int fifo_refcount = 0;
+        SPFrameFIFO *fifo = ctx->in_pads[i]->fifo;
+        for (int j = 0; j < ctx->num_in_pads; j++) {
+            if (fifo == ctx->in_pads[j]->fifo)
+                fifo_refcount++;
+        }
+
+        if (fifo_refcount < 2)
+            continue;
+
+        SPFrameFIFO *cloned_fifos = NULL;
+        sp_frame_fifo_splitter_start(fifo, &cloned_fifos, fifo_refcount,
+                                     16, FRAME_FIFO_BLOCK_NO_INPUT);
+
+        for (int j = 0; j < ctx->num_in_pads; j++) {
+            if (fifo == ctx->in_pads[j]->fifo)
+                ctx->in_pads[j]->fifo = &cloned_fifos[--fifo_refcount];
+        }
+    }
+
 
     if ((err = init_pads(ctx)))
         return err;

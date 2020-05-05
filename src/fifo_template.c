@@ -1,6 +1,4 @@
 typedef struct SNAME {
-    int cur_out_refs;
-    int out_ref_count;
     TYPE **queued;
     int num_queued;
     int max_queued;
@@ -11,6 +9,10 @@ typedef struct SNAME {
     pthread_cond_t cond_out;
     pthread_mutex_t cond_lock_in;
     pthread_mutex_t cond_lock_out;
+
+    pthread_t splitter;
+    struct SNAME *splitter_dests;
+    int splitter_dests_num;
 } SNAME;
 
 static inline void RENAME(fifo_init)(SNAME *buf, int max_queued, FNAME block_flags)
@@ -21,8 +23,6 @@ static inline void RENAME(fifo_init)(SNAME *buf, int max_queued, FNAME block_fla
     pthread_cond_init(&buf->cond_out, NULL);
     pthread_mutex_init(&buf->cond_lock_out, NULL);
 
-    buf->cur_out_refs = 0;
-    buf->out_ref_count = 1;
     buf->num_queued = 0;
     buf->queued_alloc_size = 0;
     buf->block_flags = block_flags;
@@ -107,12 +107,6 @@ static inline TYPE *RENAME(fifo_pop)(SNAME *buf)
     }
 
     rf = buf->queued[0];
-    if ((++buf->cur_out_refs) < buf->out_ref_count) {
-        rf = CLONE_FN(rf);
-        goto unlock;
-    }
-
-    buf->cur_out_refs = 0;
     buf->num_queued--;
     assert(buf->num_queued >= 0);
 
@@ -126,31 +120,6 @@ unlock:
     pthread_mutex_unlock(&buf->cond_lock_in);
 
     return rf;
-}
-
-static inline void RENAME(fifo_set_refs)(SNAME *buf, int num)
-{
-    pthread_mutex_lock(&buf->lock);
-
-    if (!buf->num_queued)
-        assert(!buf->cur_out_refs);
-
-    buf->out_ref_count = FFMAX(num, 1);
-    if (buf->cur_out_refs >= buf->out_ref_count && buf->num_queued) {
-
-        FREE_FN(&buf->queued[0]);
-
-        buf->cur_out_refs = 0;
-        buf->num_queued--;
-        assert(buf->num_queued >= 0);
-
-        memmove(&buf->queued[0], &buf->queued[1], buf->num_queued*sizeof(TYPE *));
-
-        if (buf->max_queued > 0)
-            pthread_cond_signal(&buf->cond_out);
-    }
-
-    pthread_mutex_unlock(&buf->lock);
 }
 
 static inline TYPE *RENAME(fifo_peek)(SNAME *buf)
@@ -185,7 +154,12 @@ static inline void RENAME(fifo_free)(SNAME *buf)
     for (int i = 0; i < buf->num_queued; i++)
         FREE_FN(&buf->queued[i]);
 
+    if (buf->splitter_dests_num)
+        pthread_join(buf->splitter, NULL);
+
     av_freep(&buf->queued);
+    av_freep(&buf->splitter_dests);
+    buf->splitter_dests_num = 0;
 
     pthread_mutex_unlock(&buf->lock);
 
@@ -194,4 +168,44 @@ static inline void RENAME(fifo_free)(SNAME *buf)
     pthread_mutex_destroy(&buf->cond_lock_in);
     pthread_mutex_destroy(&buf->cond_lock_out);
     pthread_mutex_destroy(&buf->lock);
+}
+
+static void *RENAME(fifo_splitter_thread)(void *data)
+{
+    SNAME *buf = data;
+
+    while (1) {
+        TYPE *src = RENAME(fifo_pop)(buf);
+        if (!src)
+            break;
+
+        for (int i = 0; i < buf->splitter_dests_num; i++)
+            if (!RENAME(fifo_is_full)(&buf->splitter_dests[i]))
+                RENAME(fifo_push)(&buf->splitter_dests[i], CLONE_FN(src));
+
+        FREE_FN(&src);
+    }
+
+    for (int i = 0; i < buf->splitter_dests_num; i++)
+        RENAME(fifo_push)(&buf->splitter_dests[i], NULL);
+
+    return NULL;
+}
+
+static inline void RENAME(fifo_splitter_start)(SNAME *src, SNAME **dsts,
+                                               int num_dst, int max_queued,
+                                               FNAME block_flags)
+{
+    if (src->splitter_dests_num)
+        return;
+
+    src->splitter_dests = av_mallocz(num_dst * sizeof(SNAME));
+    src->splitter_dests_num = num_dst;
+
+    for (int i = 0; i < num_dst; i++)
+        RENAME(fifo_init)(&src->splitter_dests[i], max_queued, block_flags);
+
+    pthread_create(&src->splitter, NULL, RENAME(fifo_splitter_thread), src);
+
+    *dsts = src->splitter_dests;
 }

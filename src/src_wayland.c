@@ -418,7 +418,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
 
     /* Opaque ref */
     FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
-    fe->time_base       = av_make_q(1, 1000000);
+    fe->time_base       = av_make_q(1, 1000000000);
     fe->avg_frame_rate  = ctx->frame_rate;
 
     /* Timestamp of when the frame will be presented */
@@ -428,12 +428,16 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     struct timespec tsp = { 0 };
     clock_gettime(CLOCK_MONOTONIC, &tsp);
 
-    /* Time until presentation */
-    int64_t delay = ((tsp.tv_sec * 1000000000) + tsp.tv_nsec) - presented;
+    /* Delay */
+    int64_t delay = presented - ((tsp.tv_sec * 1000000000) + tsp.tv_nsec);
 
-    ctx->frame->pts = av_gettime_relative() - ctx->main->epoch;
+    ctx->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
+                                    av_gettime_relative() - ctx->main->epoch);
+
+    /* The timestamp we're given is when the scanout began at, not when it was
+     * presented, so offset that */
     ctx->frame->pts = av_add_stable(fe->time_base, ctx->frame->pts,
-                                    av_make_q(1, 1000000000), delay);
+                                    AV_TIME_BASE_Q, ctx->frame_delay);
 
 	/* Attach the hardware frame context to the frame */
     if ((err = attach_drm_frames_ref(ctx, ctx->frame, sw_fmt)))
@@ -681,7 +685,7 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
 
     /* Opaque ref */
     FormatExtraData *fe = (FormatExtraData *)ctx->frame->opaque_ref->data;
-    fe->time_base       = av_make_q(1, 1000000);
+    fe->time_base       = av_make_q(1, 1000000000);
     fe->avg_frame_rate  = ctx->frame_rate;
 
     /* Timestamp of when the frame was presented */
@@ -694,9 +698,8 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     /* Delay */
     int64_t delay = presented - ((tsp.tv_sec * 1000000000) + tsp.tv_nsec);
 
-    ctx->frame->pts = av_gettime_relative() - ctx->main->epoch;
-    ctx->frame->pts = av_add_stable(fe->time_base, ctx->frame->pts,
-                                    av_make_q(1, 1000000000), delay);
+    ctx->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
+                                    av_gettime_relative() - ctx->main->epoch);
 
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */

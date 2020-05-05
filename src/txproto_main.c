@@ -38,6 +38,8 @@ struct capture_context {
     int err;
     atomic_bool quit;
 
+    int64_t epoch;
+
     /* Filtering */
     FilterContext *fctx_video;
     SPFrameFIFO filtered_video;
@@ -121,6 +123,10 @@ void *muxing_thread(void *arg)
     int flush = 0;
     int64_t audio_packets = 0;
     int64_t video_packets = 0;
+    SlidingWinCtx sctx_delay_video = { 0 };
+    SlidingWinCtx sctx_delay_audio = { 0 };
+    int64_t delay_video = 0;
+    int64_t delay_audio = 0;
     fprintf(stderr, "\n");
 
     while (1) {
@@ -140,10 +146,16 @@ void *muxing_thread(void *arg)
             src_tb = ctx->video_encoder->avctx->time_base;
             video_packets++;
             rate_video = sliding_win_sum(&sctx_video, in_pkt->size, in_pkt->pts, src_tb, src_tb.den, 0);
+            delay_video = av_gettime_relative() - ctx->epoch; /* Time since epoch */
+            delay_video -= av_rescale_q(in_pkt->pts, src_tb, av_make_q(1, 1000000));
+            delay_video = sliding_win_sum(&sctx_delay_video, delay_video, in_pkt->pts, src_tb, src_tb.den, 1);
         } else if (in_pkt->stream_index == ctx->audio_streamid) {
             src_tb = ctx->audio_encoder->avctx->time_base;
             audio_packets++;
             rate_audio = sliding_win_sum(&sctx_audio, in_pkt->size, in_pkt->pts, src_tb, src_tb.den, 0);
+            delay_audio = av_gettime_relative() - ctx->epoch; /* Time since epoch */
+            delay_audio -= av_rescale_q(in_pkt->pts, src_tb, av_make_q(1, 1000000));
+            delay_audio = sliding_win_sum(&sctx_delay_audio, delay_audio, in_pkt->pts, src_tb, src_tb.den, 1);
         }
 
         in_pkt->pts = av_rescale_q(in_pkt->pts, src_tb, dst_tb);
@@ -162,9 +174,9 @@ send:
             break;
 #if 1
         fprintf(stderr, "\rRate: %.1fMbps (video), %likbps (audio), Packets muxed: "
-                "%liv, %lia",
+                "%liv, %lia, Delay: %.1fms (v), %.1fms (a)",
                 (rate_video << 3) / 1000000.0f, av_rescale(rate_audio, 8, 1000),
-                video_packets, audio_packets);
+                video_packets, audio_packets, delay_video / 1000.0f, delay_audio / 1000.0f);
 #endif
     }
 
@@ -369,16 +381,16 @@ static int main_loop(struct capture_context *ctx) {
     if ((err = init_lavf(ctx)))
         return err;
 
-    int64_t epoch = av_gettime_relative();
+    ctx->epoch = av_gettime_relative();
 
     /* If existing, init video capture */
     for (int i = 0; i < ctx->vcap_nums; i++) {
-        if (ctx->vcap[i].video_capture_source && (err = init_video_capture(ctx, &ctx->vcap[i], epoch)))
+        if (ctx->vcap[i].video_capture_source && (err = init_video_capture(ctx, &ctx->vcap[i], ctx->epoch)))
             return err;
     }
 
     /* If existing, init audio capture */
-    if (ctx->audio_capture_source && (err = init_audio_capture(ctx, epoch)))
+    if (ctx->audio_capture_source && (err = init_audio_capture(ctx, ctx->epoch)))
         return err;
 
     /* Filtering should go here */

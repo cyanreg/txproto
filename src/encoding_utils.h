@@ -27,6 +27,17 @@ static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec,
     if (!codec->sample_fmts)
         return ifmt;
 
+    /* Try to match the input sample format first */
+    while (1) {
+        if (codec->sample_fmts[i] == -1)
+            break;
+        if (codec->sample_fmts[i] == ifmt)
+            return codec->sample_fmts[i];
+        i++;
+    }
+
+    i = 0;
+
     /* Try to match bits per sample */
     while (1) {
         if (codec->sample_fmts[i] == -1)
@@ -73,7 +84,9 @@ static int pick_codec_sample_rate(AVCodec *codec, int irate)
 static const uint64_t pick_codec_channel_layout(AVCodec *codec, uint64_t ilayout)
 {
     int i = 0;
+    int max_channels = 0;
     int in_channels = av_get_channel_layout_nb_channels(ilayout);
+    uint64_t best_layout = 0;
 
     /* Supports anything */
     if (!codec->channel_layouts)
@@ -94,13 +107,18 @@ static const uint64_t pick_codec_channel_layout(AVCodec *codec, uint64_t ilayout
     while (1) {
         if (!codec->channel_layouts[i])
             break;
-        if (av_get_channel_layout_nb_channels(codec->channel_layouts[i]) == in_channels)
+        int num = av_get_channel_layout_nb_channels(codec->channel_layouts[i]);
+        if (num > max_channels) {
+            max_channels = num;
+            best_layout = codec->channel_layouts[i];
+        }
+        if (num >= in_channels)
             return codec->channel_layouts[i];
         i++;
     }
 
     /* Whatever */
-    return codec->channel_layouts[0];
+    return best_layout;
 }
 
 static int64_t get_next_audio_pts(EncodingContext *ctx, AVFrame *in)

@@ -94,10 +94,11 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
     }
 
     if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
-        ctx->avctx->sample_fmt     = pick_codec_sample_fmt(ctx->codec, conf->format, fe->bits_per_sample);
-        ctx->avctx->channel_layout = pick_codec_channel_layout(ctx->codec, conf->channel_layout);
-        ctx->avctx->sample_rate    = pick_codec_sample_rate(ctx->codec, conf->sample_rate);
-        ctx->avctx->channels       = av_get_channel_layout_nb_channels(ctx->avctx->channel_layout);
+        ctx->avctx->bits_per_raw_sample = fe->bits_per_sample;
+        ctx->avctx->sample_fmt          = pick_codec_sample_fmt(ctx->codec, conf->format, fe->bits_per_sample);
+        ctx->avctx->channel_layout      = pick_codec_channel_layout(ctx->codec, conf->channel_layout);
+        ctx->avctx->sample_rate         = pick_codec_sample_rate(ctx->codec, conf->sample_rate);
+        ctx->avctx->channels            = av_get_channel_layout_nb_channels(ctx->avctx->channel_layout);
 
         if (ctx->sample_rate)
             ctx->avctx->sample_rate = ctx->sample_rate;

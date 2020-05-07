@@ -39,6 +39,8 @@ version_src = vcs_tag(command: ['git', 'rev-parse', '--short', 'HEAD'],
 sources = [
     'txproto_main.c',
 
+    'wayland_common.c',
+
     'src_pulse.c',
     'src_wayland.c',
     'src_lavd.c',

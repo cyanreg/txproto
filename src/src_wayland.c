@@ -1,64 +1,21 @@
 #define _GNU_SOURCE
 #include <unistd.h>
-#include <stdatomic.h>
 #include <sys/mman.h>
-#include <poll.h>
-#include <fcntl.h>
 
 #include <libdrm/drm_fourcc.h>
 #include <libavutil/pixdesc.h>
-#include <libavutil/hwcontext.h>
 #include <libavutil/bprint.h>
 #include <libavutil/buffer.h>
-#include <libavutil/hwcontext_drm.h>
 #include <libavutil/time.h>
 
-#include "wlr-export-dmabuf-unstable-v1-client-protocol.h"
-#include "wlr-screencopy-unstable-v1-client-protocol.h"
+#include "wayland_common.h"
 
-#include "src_common.h"
 #include "utils.h"
+#include "src_common.h"
 #include "../config.h"
 
-struct wayland_output {
-    struct wl_list link;
-    uint32_t id;
-    struct wl_output *output;
-    char *make;
-    char *model;
-    int width;
-    int height;
-    AVRational framerate;
-};
-
-typedef struct WaylandCtx {
-    AVClass *class;
-
-    int64_t epoch;
-
-    pthread_t event_thread;
-
-    struct wl_display *display;
-    struct wl_registry *registry;
-
-    struct zwlr_export_dmabuf_manager_v1 *dmabuf_export_manager;
-    struct zwlr_screencopy_manager_v1 *screencopy_export_manager;
-    struct wl_shm *shm_interface;
-
-    AVBufferRef *drm_device_ref;
-
-    struct wl_list output_list;
-    SourceInfo *sources;
-    int num_sources;
-
-    struct WaylandCaptureCtx **capture_ctx;
-    int capture_ctx_num;
-
-    int wakeup_pipe[2];
-} WaylandCtx;
-
 typedef struct WaylandCaptureCtx {
-    WaylandCtx *main;
+    struct WaylandCaptureMainCtx *main;
     uint64_t identifier;
     struct wl_output *target;
     SPFrameFIFO *fifo;
@@ -103,112 +60,20 @@ typedef struct WaylandCaptureCtx {
     } scrcpy;
 } WaylandCaptureCtx;
 
-FN_CREATING(WaylandCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
+typedef struct WaylandCaptureMainCtx {
+    AVClass *class;
+    WaylandCtx *wlctx;
 
-static void output_handle_geometry(void *data, struct wl_output *wl_output,
-                                   int32_t x, int32_t y, int32_t phys_width,
-                                   int32_t phys_height, int32_t subpixel,
-                                   const char *make, const char *model,
-                                   int32_t transform)
-{
-    struct wayland_output *output = data;
-    output->make = av_strdup(make);
-    output->model = av_strdup(model);
-}
+    WaylandCaptureCtx **capture_ctx;
+    int capture_ctx_num;
 
-static void output_handle_mode(void *data, struct wl_output *wl_output,
-                               uint32_t flags, int32_t width, int32_t height,
-                               int32_t refresh)
-{
-    if (flags & WL_OUTPUT_MODE_CURRENT) {
-        struct wayland_output *output = data;
-        output->width = width;
-        output->height = height;
-        output->framerate = (AVRational){ refresh, 1000 };
-    }
-}
+    SourceInfo *sources;
+    int num_sources;
 
-static void output_handle_done(void *data, struct wl_output *wl_output)
-{
-    /* Nothing to do */
-}
+    int64_t epoch;
+} WaylandCaptureMainCtx;
 
-static void output_handle_scale(void *data, struct wl_output *wl_output,
-                                int32_t factor)
-{
-    /* Nothing to do */
-}
-
-static const struct wl_output_listener output_listener = {
-    .geometry = output_handle_geometry,
-    .mode = output_handle_mode,
-    .done = output_handle_done,
-    .scale = output_handle_scale,
-};
-
-static void registry_handle_add(void *data, struct wl_registry *reg,
-                                uint32_t id, const char *interface,
-                                uint32_t ver)
-{
-    WaylandCtx *ctx = data;
-
-    if (!strcmp(interface, wl_output_interface.name)) {
-        struct wayland_output *output = av_mallocz(sizeof(*output));
-
-        output->id = id;
-        output->output = wl_registry_bind(reg, id, &wl_output_interface, 1);
-
-        wl_output_add_listener(output->output, &output_listener, output);
-        wl_list_insert(&ctx->output_list, &output->link);
-    }
-
-    if (!strcmp(interface, wl_shm_interface.name)) {
-        const struct wl_interface *i = &wl_shm_interface;
-        ctx->shm_interface = wl_registry_bind(reg, id, i, 1);
-	}
-
-    if (!strcmp(interface, zwlr_export_dmabuf_manager_v1_interface.name)) {
-        const struct wl_interface *i = &zwlr_export_dmabuf_manager_v1_interface;
-        ctx->dmabuf_export_manager = wl_registry_bind(reg, id, i, 1);
-	}
-
-    if (!strcmp(interface, zwlr_screencopy_manager_v1_interface.name)) {
-        const struct wl_interface *i = &zwlr_screencopy_manager_v1_interface;
-        ctx->screencopy_export_manager = wl_registry_bind(reg, id, i, 1);
-    }
-}
-
-static void remove_output(struct wayland_output *out)
-{
-    wl_list_remove(&out->link);
-    av_free(out->make);
-    av_free(out->model);
-    av_free(out);
-}
-
-static struct wayland_output *find_output(WaylandCtx *ctx,
-                                          struct wl_output *out, uint32_t id)
-{
-    struct wayland_output *output, *tmp;
-    wl_list_for_each_safe(output, tmp, &ctx->output_list, link)
-        if ((output->output == out) || (output->id == id))
-            return output;
-    return NULL;
-}
-
-static void registry_handle_remove(void *data, struct wl_registry *reg,
-                                   uint32_t id)
-{
-    WaylandCtx *ctx = data;
-    struct wayland_output *output = find_output(ctx, NULL, id);
-    src_wayland.stop(ctx, id);
-    remove_output(output);
-}
-
-static const struct wl_registry_listener registry_listener = {
-    .global = registry_handle_add,
-    .global_remove = registry_handle_remove,
-};
+FN_CREATING(WaylandCaptureMainCtx, WaylandCaptureCtx, capture_ctx, capture_ctx, capture_ctx_num)
 
 static void dmabuf_frame_free(void *opaque, uint8_t *data)
 {
@@ -361,7 +226,7 @@ static int attach_drm_frames_ref(WaylandCaptureCtx *ctx, AVFrame *f,
         av_buffer_unref(&ctx->dmabuf.frames_ref);
     }
 
-    ctx->dmabuf.frames_ref = av_hwframe_ctx_alloc(ctx->main->drm_device_ref);
+    ctx->dmabuf.frames_ref = av_hwframe_ctx_alloc(ctx->main->wlctx->drm_device_ref);
     if (!ctx->dmabuf.frames_ref) {
         err = AVERROR(ENOMEM);
         goto fail;
@@ -522,7 +387,7 @@ static const struct zwlr_export_dmabuf_frame_v1_listener dmabuf_frame_listener =
 static void dmabuf_register_cb(WaylandCaptureCtx *ctx)
 {
     struct zwlr_export_dmabuf_frame_v1 *f;
-    f = zwlr_export_dmabuf_manager_v1_capture_output(ctx->main->dmabuf_export_manager,
+    f = zwlr_export_dmabuf_manager_v1_capture_output(ctx->main->wlctx->dmabuf_export_manager,
                                                      ctx->capture_cursor, ctx->target);
     zwlr_export_dmabuf_frame_v1_add_listener(f, &dmabuf_frame_listener, ctx);
     ctx->dmabuf.frame_obj = f;
@@ -572,7 +437,8 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
         return NULL;
     }
 
-    struct wl_shm_pool *pool = wl_shm_create_pool(ctx->main->shm_interface, fd, f->size);
+    struct wl_shm_pool *pool;
+    pool = wl_shm_create_pool(ctx->main->wlctx->shm_interface, fd, f->size);
     close(fd);
     f->buffer = wl_shm_pool_create_buffer(pool, 0, ctx->scrcpy.width,
                                           ctx->scrcpy.height,
@@ -779,21 +645,29 @@ static const struct zwlr_screencopy_frame_v1_listener scrcpy_frame_listener = {
 static void scrcpy_register_cb(WaylandCaptureCtx *ctx)
 {
     struct zwlr_screencopy_frame_v1 *f;
-    f = zwlr_screencopy_manager_v1_capture_output(ctx->main->screencopy_export_manager,
+    f = zwlr_screencopy_manager_v1_capture_output(ctx->main->wlctx->screencopy_export_manager,
                                                   ctx->capture_cursor, ctx->target);
     zwlr_screencopy_frame_v1_add_listener(f, &scrcpy_frame_listener, ctx);
     ctx->scrcpy.frame_obj = f;
 }
 
+static void remove_callback(void *s, uint32_t identifier);
+
 static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPFrameFIFO *dst,
                            error_handler *err_cb, void *error_handler_ctx)
 {
     int err;
-    WaylandCtx *ctx = s;
-    struct wayland_output *src = find_output(ctx, NULL, identifier);
+    WaylandCaptureMainCtx *ctx = s;
+    WaylandOutput *src = sp_find_wayland_output(ctx->wlctx, NULL, identifier);
 
     if (!src)
         return AVERROR(EINVAL);
+
+    if (src->remove_callback) {
+        av_log(ctx, AV_LOG_ERROR, "Output \"%s\" (id: %li) already captured!\n",
+               src->model, identifier);
+        return AVERROR(EINVAL);
+    }
 
     av_log(ctx, AV_LOG_INFO, "Starting capturing from \"%s\" (id: %li)\n",
            src->model, identifier);
@@ -821,6 +695,18 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPF
     if (dict_get(opts, "framerate_den"))
         framerate_req.den = strtol(dict_get(opts, "framerate_den"), NULL, 10);
 
+    if (cap_ctx->use_screencopy && !ctx->wlctx->screencopy_export_manager) {
+        av_log(ctx, AV_LOG_ERROR, "Screencopy protocol unavailable!\n");
+        err = AVERROR(ENOTSUP);
+        goto fail;
+    }
+
+    if (!cap_ctx->use_screencopy && !ctx->wlctx->dmabuf_export_manager) {
+        av_log(ctx, AV_LOG_ERROR, "DMABUF capture protocol unavailable!\n");
+        err = AVERROR(ENOTSUP);
+        goto fail;
+    }
+
     if ((framerate_req.num && !framerate_req.den) ||
         (framerate_req.den && !framerate_req.num) ||
         (av_cmp_q(framerate_req, src->framerate) > 0)) {
@@ -838,7 +724,10 @@ static int start_wlcapture(void *s, uint64_t identifier, AVDictionary *opts, SPF
     else
         dmabuf_register_cb(cap_ctx);
 
-    wl_display_flush(ctx->display);
+    src->remove_callback = remove_callback;
+    src->remove_ctx = ctx;
+
+    wl_display_flush(ctx->wlctx->display);
 
     av_dict_free(&opts);
 
@@ -850,9 +739,9 @@ fail:
     return err;
 }
 
-static int stop_wlcapture(void  *s, uint64_t identifier)
+static int stop_wlcapture(void *s, uint64_t identifier)
 {
-    WaylandCtx *ctx = s;
+    WaylandCaptureMainCtx *ctx = s;
 
     for (int i = 0; i < ctx->capture_ctx_num; i++) {
         WaylandCaptureCtx *cap_ctx = ctx->capture_ctx[i];
@@ -891,9 +780,14 @@ static int stop_wlcapture(void  *s, uint64_t identifier)
     return AVERROR(EINVAL);
 }
 
+static void remove_callback(void *s, uint32_t identifier)
+{
+    stop_wlcapture(s, identifier);
+}
+
 static void sources_wlcapture(void *s, SourceInfo **sources, int *num)
 {
-    WaylandCtx *ctx = s;
+    WaylandCaptureMainCtx *ctx = s;
 
     /* Free */
     for (int i = 0; i < ctx->num_sources; i++) {
@@ -903,14 +797,21 @@ static void sources_wlcapture(void *s, SourceInfo **sources, int *num)
     }
     av_freep(&ctx->sources);
 
+    if (!ctx->wlctx->dmabuf_export_manager ||
+        !ctx->wlctx->screencopy_export_manager) {
+        *sources = NULL;
+        *num = 0;
+        return;
+    }
+
     /* Realloc */
-    ctx->num_sources = wl_list_length(&ctx->output_list);
+    ctx->num_sources = wl_list_length(&ctx->wlctx->output_list);
     ctx->sources = av_mallocz(ctx->num_sources*sizeof(*ctx->sources));
 
     /* Copy */
     int cnt = 0;
-    struct wayland_output *o, *tmp_o;
-    wl_list_for_each_reverse_safe(o, tmp_o, &ctx->output_list, link) {
+    WaylandOutput *o, *tmp_o;
+    wl_list_for_each_reverse_safe(o, tmp_o, &ctx->wlctx->output_list, link) {
         SourceInfo *src = &ctx->sources[cnt++];
         src->identifier = o->id;
         src->name = av_strdup(o->model);
@@ -929,24 +830,7 @@ static void sources_wlcapture(void *s, SourceInfo **sources, int *num)
 
 static void uninit_wlcapture(void **s)
 {
-    WaylandCtx *ctx = *s;    
-
-    sp_write_wakeup_pipe(ctx->wakeup_pipe);
-    pthread_join(ctx->event_thread, NULL);
-
-    struct wayland_output *output, *tmp_o;
-    wl_list_for_each_safe(output, tmp_o, &ctx->output_list, link)
-        remove_output(output);
-
-    if (ctx->dmabuf_export_manager)
-        zwlr_export_dmabuf_manager_v1_destroy(ctx->dmabuf_export_manager);
-
-    if (ctx->screencopy_export_manager)
-        zwlr_screencopy_manager_v1_destroy(ctx->screencopy_export_manager);
-
-    av_buffer_unref(&ctx->drm_device_ref);
-
-    wl_display_disconnect(ctx->display);
+    WaylandCaptureMainCtx *ctx = *s;
 
     for (int i = 0; i < ctx->num_sources; i++) {
         SourceInfo *src = &ctx->sources[i];
@@ -955,134 +839,47 @@ static void uninit_wlcapture(void **s)
     }
     av_freep(&ctx->sources);
 
+    sp_waylad_uninit(&ctx->wlctx);
+
     av_freep(&ctx->class);
     av_freep(s);
-}
-
-void *wayland_events_thread(void *arg)
-{
-    WaylandCtx *ctx = arg;
-
-    pthread_setname_np(pthread_self(), ctx->class->class_name);
-
-    while (1) {
-        while (wl_display_prepare_read(ctx->display))
-			wl_display_dispatch_pending(ctx->display);
-        wl_display_flush(ctx->display);
-
-        struct pollfd fds[2] = {
-            {.fd = wl_display_get_fd(ctx->display), .events = POLLIN, },
-            {.fd = ctx->wakeup_pipe[0],             .events = POLLIN, },
-        };
-
-        if (poll(fds, FF_ARRAY_ELEMS(fds), -1) < 0) {
-            wl_display_cancel_read(ctx->display);
-            break;
-        }
-
-        if (fds[0].revents & POLLIN) {
-            if (wl_display_read_events(ctx->display) < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error reading events!\n");
-                break;
-            }
-            wl_display_dispatch_pending(ctx->display);
-        }
-
-        /* Stop the loop */
-        if (fds[1].revents & POLLIN) {
-            sp_flush_wakeup_pipe(ctx->wakeup_pipe);
-            break;
-        }
-    }
-
-    return NULL;
-}
-
-static void drm_device_free(AVHWDeviceContext *hwdev)
-{
-    close(((AVDRMDeviceContext *)hwdev->hwctx)->fd);
-}
-
-static int init_drm_hwcontext(WaylandCtx *ctx)
-{
-    int err;
-
-    /* DRM hwcontext */
-    ctx->drm_device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
-    if (!ctx->drm_device_ref)
-        return AVERROR(ENOMEM);
-
-    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->drm_device_ref->data;
-    AVDRMDeviceContext *hwctx = ref_data->hwctx;
-
-    /* Hope this is the right one */
-    hwctx->fd = open("/dev/dri/renderD128", O_RDWR);
-    ref_data->free = drm_device_free;
-
-    err = av_hwdevice_ctx_init(ctx->drm_device_ref);
-    if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device: %s!\n", av_err2str(err));
-        return err;
-    }
-
-    return 0;
 }
 
 static int init_wlcapture(void **s, int64_t epoch)
 {
     int err = 0;
-    WaylandCtx *ctx = av_mallocz(sizeof(*ctx));
+    WaylandCaptureMainCtx *ctx = av_mallocz(sizeof(*ctx));
     ctx->class = av_mallocz(sizeof(*ctx->class));
     *ctx->class = (AVClass) {
-        .class_name = "wayland",
+        .class_name = "wayland_capture",
         .item_name  = av_default_item_name,
         .version    = LIBAVUTIL_VERSION_INT,
     };
 
-    ctx->display = wl_display_connect(NULL);
-    if (!ctx->display) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to connect to display!\n");
-        return AVERROR(EINVAL);
+    err = sp_wayland_init(&ctx->wlctx);
+    if (err < 0) {
+        av_free(ctx->class);
+        av_free(ctx);
+        goto end;
     }
 
-    ctx->wakeup_pipe[0] = ctx->wakeup_pipe[1] = -1;
-
-    sp_make_wakeup_pipe(ctx->wakeup_pipe);
-
-    wl_list_init(&ctx->output_list);
-
-    ctx->registry = wl_display_get_registry(ctx->display);
-    wl_registry_add_listener(ctx->registry, &registry_listener, ctx);
-
-    wl_display_roundtrip(ctx->display);
-    wl_display_dispatch(ctx->display);
-
-    if (!ctx->dmabuf_export_manager) {
-        av_log(ctx, AV_LOG_ERROR, "Compositor doesn't support %s!\n",
+    if (!ctx->wlctx->dmabuf_export_manager) {
+        av_log(ctx, AV_LOG_WARNING, "Compositor doesn't support the %s protocol, "
+               "display DMABUF capture unavailable!\n",
                zwlr_export_dmabuf_manager_v1_interface.name);
-        return AVERROR(ENOSYS);
-    } else {
-        if ((err = init_drm_hwcontext(ctx)))
-            goto fail;
     }
 
-    if (!ctx->screencopy_export_manager) {
-        av_log(ctx, AV_LOG_ERROR, "Compositor doesn't support %s!\n",
+    if (!ctx->wlctx->screencopy_export_manager) {
+        av_log(ctx, AV_LOG_WARNING, "Compositor doesn't support the %s protocol, "
+               "display screencopy capture unavailable!\n",
                zwlr_screencopy_manager_v1_interface.name);
-        return AVERROR(ENOSYS);
     }
-
-    /* Start the event thread */
-    pthread_create(&ctx->event_thread, NULL, wayland_events_thread, ctx);
 
     ctx->epoch = epoch;
 
     *s = ctx;
 
-    return 0;
-
-fail:
-    //TODO
+end:
     return err;
 }
 

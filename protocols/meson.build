@@ -19,9 +19,13 @@ wayland_scanner_client = generator(
 )
 
 protocols = [
+    [wl_protocol_dir, 'stable/xdg-shell/xdg-shell.xml'],
+    [wl_protocol_dir, 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml'],
     [wl_protocol_dir, 'unstable/xdg-output/xdg-output-unstable-v1.xml'],
+    [wl_protocol_dir, 'unstable/idle-inhibit/idle-inhibit-unstable-v1.xml'],
     'wlr-export-dmabuf-unstable-v1.xml',
     'wlr-screencopy-unstable-v1.xml',
+    'wlr-layer-shell-unstable-v1.xml',
 ]
 
 wayland_client_protos_src     = []

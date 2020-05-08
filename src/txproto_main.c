@@ -497,6 +497,8 @@ int main(int argc, char *argv[])
     ctx.video_streamid = ctx.audio_streamid = -1;
 
     ctx.out_format = NULL;
+    if (!strncmp(ctx.out_filename, "/dev/video", 10))
+        ctx.out_format = "v4l2";
     if (!strncmp(ctx.out_filename, "rtmp://", 7))
         ctx.out_format = "flv";
     if (!strncmp(ctx.out_filename, "udp://", 6))

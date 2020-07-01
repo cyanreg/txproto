@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <pthread.h>
 
 #include <libavutil/time.h>
@@ -30,26 +29,14 @@ static void free_graph(FilterContext *ctx)
     }
 }
 
-int sp_map_fifo_to_pad(FilterContext *ctx, SPFrameFIFO *fifo, int pad_idx, int is_out)
+int sp_map_fifo_to_pad(AVBufferRef *ctx_ref, AVBufferRef *fifo, int pad_idx,
+                       const char *label, int is_out)
 {
+    FilterContext *ctx = (FilterContext *)ctx_ref->data;
     if (is_out) {
-        for (int n = 0; n < ctx->num_out_pads; n++) {
-            if (ctx->out_pads[n]->fifo == fifo) {
-                av_log(ctx, AV_LOG_ERROR, "Duplicate output FIFO!\n");
-                return AVERROR(EINVAL);
-            }
-        }
-        if (ctx->out_pads[pad_idx]->fifo) {
-            av_log(ctx, AV_LOG_ERROR, "Output FIFO for pad %i already specified!\n", pad_idx);
-            return AVERROR(EINVAL);
-        }
-        ctx->out_pads[pad_idx]->fifo = fifo;
+        sp_frame_fifo_mirror(ctx->out_pads[pad_idx]->fifo, fifo);
     } else {
-        if (ctx->in_pads[pad_idx]->fifo) {
-            av_log(ctx, AV_LOG_ERROR, "Input FIFO for pad %i already specified!\n", pad_idx);
-            return AVERROR(EINVAL);
-        }
-        ctx->in_pads[pad_idx]->fifo = fifo;
+        sp_frame_fifo_mirror(ctx->in_pads[pad_idx]->fifo, fifo);
     }
 
     return 0;
@@ -132,6 +119,7 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
             return;
         }
 
+        pad->fifo = is_out ? sp_frame_fifo_create(0, 0) : sp_frame_fifo_create(8, FRAME_FIFO_BLOCK_NO_INPUT);
         pad->main = ctx;
         pad->is_out = is_out;
         pad->name = av_strdup(name);
@@ -157,7 +145,7 @@ static void add_pads_direct(FilterContext *ctx, int is_out, AVFilterContext *fct
         add_pad(ctx, is_out, idx, fctx, idx, avfilter_pad_get_name(pads, idx), first_init);
 }
 
-int re_create_filtering(FilterContext *ctx, int first_init)
+static int re_create_filtering(FilterContext *ctx, int first_init)
 {
     int err = 0;
 
@@ -214,10 +202,11 @@ end:
     return err;
 }
 
-int sp_init_filter_single(FilterContext *ctx, const char *name,
+int sp_init_filter_single(AVBufferRef *ctx_ref, const char *name,
                           AVDictionary *opts, AVDictionary *graph_opts,
                           enum AVHWDeviceType derive_device)
 {
+    FilterContext *ctx = (FilterContext *)ctx_ref->data;
     ctx->direct_filter = 1;
     ctx->graph_str = name;
     ctx->graph_opts = graph_opts;
@@ -226,9 +215,10 @@ int sp_init_filter_single(FilterContext *ctx, const char *name,
     return re_create_filtering(ctx, 1);
 }
 
-int sp_init_filter_graph(FilterContext *ctx, const char *graph, AVDictionary *graph_opts,
+int sp_init_filter_graph(AVBufferRef *ctx_ref, const char *graph, AVDictionary *graph_opts,
                          enum AVHWDeviceType derive_device)
 {
+    FilterContext *ctx = (FilterContext *)ctx_ref->data;
     ctx->direct_filter = 0;
     ctx->graph_str = graph;
     ctx->graph_opts = graph_opts;
@@ -303,7 +293,7 @@ static int init_pads(FilterContext *ctx)
 
         av_frame_free(&pad->in_fmt);
 
-        AVFrame *in_fmt = sp_frame_fifo_peek(pad->fifo);
+        AVFrame *in_fmt = NULL; /*sp_frame_fifo_peek(pad->fifo); */
         pad->in_fmt = av_frame_alloc();
         av_frame_copy_props(pad->in_fmt, in_fmt);
 
@@ -311,6 +301,7 @@ static int init_pads(FilterContext *ctx)
         AVBufferSrcParameters *params = av_buffersrc_parameters_alloc();
         if (!params) {
             err = AVERROR(ENOMEM);
+            av_frame_free(&in_fmt);
             goto error;
         }
 
@@ -334,6 +325,8 @@ static int init_pads(FilterContext *ctx)
             params->frame_rate = fe->avg_frame_rate;
             filter_name = "buffer";
         }
+
+        av_frame_free(&in_fmt);
 
         const AVFilter *filter = avfilter_get_by_name(filter_name);
         if (filter) {
@@ -375,12 +368,12 @@ error:
     return err;
 }
 
-void *filtering_thread(void *data)
+static void *filtering_thread(void *data)
 {
     int err = 0, flushing = 0;
     FilterContext *ctx = data;
 
-    pthread_setname_np(pthread_self(), "filtering");
+    sp_set_thread_name_self("filtering");
 
     while (1) {
         for (int i = 0; i < ctx->num_in_pads; i++) {
@@ -390,7 +383,7 @@ void *filtering_thread(void *data)
 
             AVFrame *in_frame = NULL;
             if (!flushing) {
-                in_frame = sp_frame_fifo_pop(in_pad->fifo);
+//                in_frame = sp_frame_fifo_pop(in_pad->fifo);
                 flushing = !in_frame;
             }
 
@@ -427,13 +420,13 @@ void *filtering_thread(void *data)
                 else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
                     fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
 
-                if (sp_frame_fifo_is_full(out_pad->fifo)) {
+                if (/*sp_frame_fifo_is_full(out_pad->fifo)*/ 1) {
                     out_pad->dropped_frames++;
                     av_log_once(ctx, AV_LOG_WARNING, AV_LOG_DEBUG, &out_pad->dropped_frames_msg_state,
                                 "Dropping filtered frame (%i dropped)!\n", out_pad->dropped_frames);
                     av_frame_free(&filt_frame);
                 } else {
-                    sp_frame_fifo_push(out_pad->fifo, filt_frame);
+//                    sp_frame_fifo_push(out_pad->fifo, filt_frame);
                     out_pad->dropped_frames_msg_state = 0;
                 }
             }
@@ -441,41 +434,20 @@ void *filtering_thread(void *data)
     }
 
 end:
-    sp_frame_fifo_push(ctx->out_pads[0]->fifo, NULL);
+//    sp_frame_fifo_push(ctx->out_pads[0]->fifo, NULL);
     return NULL;
 }
 
-int sp_filter_init_graph(FilterContext *ctx)
+int sp_filter_init_graph(AVBufferRef *ctx_ref)
 {
+    FilterContext *ctx = (FilterContext *)ctx_ref->data;
+
     int err = 0;
     if (!ctx->graph)
         err = re_create_filtering(ctx, 1);
 
     if (err)
         return err;
-
-    /* Duplicate FIFOs */
-    for (int i = 0; i < ctx->num_in_pads; i++) {
-        int fifo_refcount = 0;
-        SPFrameFIFO *fifo = ctx->in_pads[i]->fifo;
-        for (int j = 0; j < ctx->num_in_pads; j++) {
-            if (fifo == ctx->in_pads[j]->fifo)
-                fifo_refcount++;
-        }
-
-        if (fifo_refcount < 2)
-            continue;
-
-        SPFrameFIFO *cloned_fifos = NULL;
-        sp_frame_fifo_splitter_start(fifo, &cloned_fifos, fifo_refcount,
-                                     16, FRAME_FIFO_BLOCK_NO_INPUT);
-
-        for (int j = 0; j < ctx->num_in_pads; j++) {
-            if (fifo == ctx->in_pads[j]->fifo)
-                ctx->in_pads[j]->fifo = &cloned_fifos[--fifo_refcount];
-        }
-    }
-
 
     if ((err = init_pads(ctx)))
         return err;
@@ -515,23 +487,26 @@ int sp_filter_init_graph(FilterContext *ctx)
     return err;
 }
 
-FilterContext *alloc_filtering_ctx(void)
+AVBufferRef *sp_filter_alloc(void)
 {
     FilterContext *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return NULL;
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
+    int err = sp_alloc_class(ctx, "lavfi", AV_CLASS_CATEGORY_FILTER,
+                             &ctx->log_lvl_offset, NULL);
+    if (err < 0) {
         av_free(ctx);
         return NULL;
     }
 
-    *ctx->class = (AVClass) {
-        .class_name = "filtering",
-        .item_name  = av_default_item_name,
-        .version    = LIBAVUTIL_VERSION_INT,
-    };
+    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
+                                            av_buffer_default_free, NULL, 0);
+    if (!ctx_ref) {
+        sp_free_class(ctx);
+        av_free(ctx);
+        return NULL;
+    }
 
-    return ctx;
+    return ctx_ref;
 }

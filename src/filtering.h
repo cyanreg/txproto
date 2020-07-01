@@ -5,8 +5,6 @@
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 
-#include "src_common.h"
-
 typedef struct FilterPad {
     struct FilterContext *main;
     const char *name;
@@ -22,12 +20,14 @@ typedef struct FilterPad {
     int dropped_frames;
     int dropped_frames_msg_state;
 
-    SPFrameFIFO *fifo;
+    AVBufferRef *fifo;
     AVFrame *in_fmt; /* Used to track format changes */
 } FilterPad;
 
 typedef struct FilterContext {
     AVClass *class;
+    int log_lvl_offset;
+
     AVFilterGraph *graph;
 
     /* Derived from input device reference */
@@ -56,7 +56,7 @@ typedef struct FilterContext {
 } FilterContext;
 
 /* Allocate a filtering context */
-FilterContext *alloc_filtering_ctx(void);
+AVBufferRef *sp_filter_alloc(void);
 
 /**
  * Initializes a single filter, such as a scaling filter
@@ -65,9 +65,8 @@ FilterContext *alloc_filtering_ctx(void);
  * graph_opts - options for the filtergraph (threads, thread_type, etc, look: avfiltergraph.c),
  *              ownership goes to FilterContext
  * derive_device - derive a hardware device from the input frames and use it
- *                 
  */
-int sp_init_filter_single(FilterContext *ctx, const char *name,
+int sp_init_filter_single(AVBufferRef *ctx_ref, const char *name,
                           AVDictionary *opts, AVDictionary *graph_opts,
                           enum AVHWDeviceType derive_device);
 
@@ -79,17 +78,17 @@ int sp_init_filter_single(FilterContext *ctx, const char *name,
  * derive_device - same as sp_init_filter_single but iterate over all the sources with
  *                 a device and and try each until it succeeds
  */
-int sp_init_filter_graph(FilterContext *ctx, const char *graph, AVDictionary *graph_opts,
+int sp_init_filter_graph(AVBufferRef *ctx_ref, const char *graph, AVDictionary *graph_opts,
                          enum AVHWDeviceType derive_device);
 
 /**
- * Maps a FIFO to a pad. A single FIFO may be mapped to multiple input pads,
- * but output FIFOs must be unique.
+ * Maps a FIFO to a pad.
  */
-int sp_map_fifo_to_pad(FilterContext *ctx, SPFrameFIFO *fifo, int pad_idx, int is_out);
+int sp_map_fifo_to_pad(AVBufferRef *ctx_ref, AVBufferRef *fifo, int pad_idx,
+                       const char *label, int is_out);
 
-
-int sp_filter_init_graph(FilterContext *ctx);
+/* Run it */
+int sp_filter_init_graph(AVBufferRef *ctx_ref);
 
 
 

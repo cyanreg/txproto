@@ -1,3 +1,5 @@
+#include "utils.h"
+
 typedef struct SNAME {
     TYPE **queued;
     int num_queued;
@@ -7,205 +9,302 @@ typedef struct SNAME {
     pthread_mutex_t lock;
     pthread_cond_t cond_in;
     pthread_cond_t cond_out;
-    pthread_mutex_t cond_lock_in;
-    pthread_mutex_t cond_lock_out;
 
-    pthread_t splitter;
-    struct SNAME *splitter_dests;
-    int splitter_dests_num;
+    SPBufferList *dests;
+    SPBufferList *sources;
 } SNAME;
 
-static inline void RENAME(fifo_init)(SNAME *buf, int max_queued, FNAME block_flags)
+static AVBufferRef *find_ref_by_data(AVBufferRef *entry, void *opaque)
 {
-    pthread_mutex_init(&buf->lock, NULL);
-    pthread_cond_init(&buf->cond_in, NULL);
-    pthread_mutex_init(&buf->cond_lock_in, NULL);
-    pthread_cond_init(&buf->cond_out, NULL);
-    pthread_mutex_init(&buf->cond_lock_out, NULL);
-
-    buf->num_queued = 0;
-    buf->queued_alloc_size = 0;
-    buf->block_flags = block_flags;
-    buf->max_queued = max_queued;
-    buf->queued = NULL;
+    if (entry->data == opaque)
+        return entry;
+    return NULL;
 }
 
-static inline int RENAME(fifo_get_max_size)(SNAME *buf)
+static void PRIV_RENAME(fifo_destroy)(void *opaque, uint8_t *data)
 {
-    return buf->max_queued;
+    SNAME *ctx = (SNAME *)data;
+
+    pthread_mutex_lock(&ctx->lock);
+
+    sp_bufferlist_free(&ctx->sources);
+    sp_bufferlist_free(&ctx->dests);
+
+    for (int i = 0; i < ctx->num_queued; i++)
+        FREE_FN(&ctx->queued[i]);
+    av_freep(&ctx->queued);
+
+    pthread_mutex_unlock(&ctx->lock);
+
+    pthread_cond_destroy(&ctx->cond_in);
+    pthread_cond_destroy(&ctx->cond_out);
+    pthread_mutex_destroy(&ctx->lock);
+
+    av_free(ctx);
 }
 
-static inline int RENAME(fifo_get_size)(SNAME *buf)
+AVBufferRef *RENAME(fifo_create)(int max_queued, FNAME block_flags)
 {
-    pthread_mutex_lock(&buf->lock);
-    int ret = buf->num_queued;
-    pthread_mutex_unlock(&buf->lock);
+    SNAME *ctx = av_mallocz(sizeof(*ctx));
+    if (!ctx)
+        return NULL;
+
+    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx), PRIV_RENAME(fifo_destroy), NULL, 0);
+    if (!ctx_ref) {
+        av_free(ctx);
+        return NULL;
+    }
+
+    pthread_mutex_init(&ctx->lock, NULL);
+
+    pthread_cond_init(&ctx->cond_in, NULL);
+    pthread_cond_init(&ctx->cond_out, NULL);
+
+    ctx->block_flags = block_flags;
+    ctx->max_queued = max_queued;
+    ctx->dests = sp_bufferlist_new();
+    if (!ctx->dests) {
+        av_buffer_unref(&ctx_ref);
+        return NULL;
+    }
+
+    ctx->sources = sp_bufferlist_new();
+    if (!ctx->sources) {
+        av_buffer_unref(&ctx_ref);
+        return NULL;
+    }
+
+    return ctx_ref;
+}
+
+int RENAME(fifo_mirror)(AVBufferRef *dst, AVBufferRef *src)
+{
+    SNAME *dst_ctx = (SNAME *)dst->data;
+    SNAME *src_ctx = (SNAME *)src->data;
+
+    if (!dst || !src)
+        return 0;
+
+    sp_bufferlist_append(dst_ctx->sources, av_buffer_ref(src));
+    sp_bufferlist_append(src_ctx->dests,   av_buffer_ref(dst));
+
+    return 0;
+}
+
+int RENAME(fifo_unmirror)(AVBufferRef *dst, AVBufferRef *src)
+{
+    SNAME *dst_ctx = (SNAME *)dst->data;
+    SNAME *src_ctx = (SNAME *)src->data;
+
+    AVBufferRef *dst_ref = sp_bufferlist_pop(src_ctx->dests, find_ref_by_data,
+                                             dst->data);
+    assert(dst_ref);
+    av_buffer_unref(&dst_ref);
+
+    AVBufferRef *src_ref = sp_bufferlist_pop(dst_ctx->sources, find_ref_by_data,
+                                             src->data);
+    assert(src_ref);
+    av_buffer_unref(&src_ref);
+
+    return 0;
+}
+
+int RENAME(fifo_unmirror_all)(AVBufferRef *dst)
+{
+    SNAME *dst_ctx = (SNAME *)dst->data;
+
+    pthread_mutex_lock(&dst_ctx->lock);
+
+    AVBufferRef *src_ref = NULL;
+    while ((src_ref = sp_bufferlist_pop(dst_ctx->sources, sp_bufferlist_find_fn_first, NULL))) {
+        SNAME *src_ctx = (SNAME *)src_ref->data;
+        AVBufferRef *own_ref = sp_bufferlist_pop(src_ctx->dests, find_ref_by_data,
+                                                 dst->data);
+        av_buffer_unref(&own_ref);
+        av_buffer_unref(&src_ref);
+    }
+
+    pthread_mutex_unlock(&dst_ctx->lock);
+
+    return 0;
+}
+
+int RENAME(fifo_is_full)(AVBufferRef *src)
+{
+    if (!src)
+        return 0;
+
+    SNAME *ctx = (SNAME *)src->data;
+    pthread_mutex_lock(&ctx->lock);
+    int ret = 0; /* max_queued == -1 -> unlimited */
+    if (!ctx->max_queued)
+        ret = 1; /* max_queued = 0 -> always full */
+    else if (ctx->max_queued > 0)
+        ret = ctx->num_queued > (ctx->max_queued + 1);
+    pthread_mutex_unlock(&ctx->lock);
     return ret;
 }
 
-static inline int RENAME(fifo_is_full)(SNAME *buf)
+int RENAME(fifo_get_size)(AVBufferRef *src)
 {
-    pthread_mutex_lock(&buf->lock);
-    int full = buf->max_queued > 0 && (buf->num_queued > (buf->max_queued + 1));
-    pthread_mutex_unlock(&buf->lock);
-    return full;
+    if (!src)
+        return 0;
+
+    SNAME *ctx = (SNAME *)src->data;
+    pthread_mutex_lock(&ctx->lock);
+    int ret = ctx->num_queued;
+    pthread_mutex_unlock(&ctx->lock);
+    return ret;
 }
 
-static inline int RENAME(fifo_push)(SNAME *buf, TYPE *f)
+int RENAME(fifo_get_max_size)(AVBufferRef *src)
 {
-    int err = 0;
+    if (!src)
+        return INT_MAX;
 
-    pthread_mutex_lock(&buf->cond_lock_out);
-    pthread_mutex_lock(&buf->lock);
+    SNAME *ctx = (SNAME *)src->data;
+    pthread_mutex_lock(&ctx->lock);
+    int ret = ctx->max_queued == -1 ? INT_MAX : ctx->max_queued;
+    pthread_mutex_unlock(&ctx->lock);
+    return ret;
+}
+
+void RENAME(fifo_set_max_queued)(AVBufferRef *dst, int max_queued)
+{
+    SNAME *ctx = (SNAME *)dst->data;
+    pthread_mutex_lock(&ctx->lock);
+    ctx->max_queued = max_queued;
+    pthread_mutex_unlock(&ctx->lock);
+}
+
+void RENAME(fifo_set_block_flags)(AVBufferRef *dst, FNAME block_flags)
+{
+    SNAME *ctx = (SNAME *)dst->data;
+    pthread_mutex_lock(&ctx->lock);
+    ctx->block_flags = block_flags;
+    pthread_mutex_unlock(&ctx->lock);
+}
+
+int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
+{
+    if (!dst)
+        return 0;
+
+    int err = 0;
+    AVBufferRef *dist = NULL;
+    TYPE *in_clone = CLONE_FN(in);
+
+    SNAME *ctx = (SNAME *)dst->data;
+    pthread_mutex_lock(&ctx->lock);
+
+    if (ctx->max_queued == 0)
+        goto distribute;
 
     /* Block or error, but only for non-NULL pushes */
-    if (f && (buf->max_queued > 0) &&
-        (buf->num_queued > (buf->max_queued + 1))) {
-        if (!(buf->block_flags & FRENAME(BLOCK_MAX_OUTPUT))) {
+    if (in && (ctx->max_queued != -1) &&
+        (ctx->num_queued > (ctx->max_queued + 1))) {
+        if (!(ctx->block_flags & FRENAME(BLOCK_MAX_OUTPUT))) {
             err = AVERROR(ENOBUFS);
+            FREE_FN(&in_clone);
             goto unlock;
         }
-        pthread_mutex_unlock(&buf->lock);
-        pthread_cond_wait(&buf->cond_out, &buf->cond_lock_out);
-        pthread_mutex_lock(&buf->lock);
+
+        pthread_cond_wait(&ctx->cond_out, &ctx->lock);
     }
 
-    unsigned int oalloc = buf->queued_alloc_size;
-    TYPE **fq = av_fast_realloc(buf->queued, &buf->queued_alloc_size,
-                                sizeof(TYPE *)*(buf->num_queued + 1));
+    unsigned int oalloc = ctx->queued_alloc_size;
+    TYPE **fq = av_fast_realloc(ctx->queued, &ctx->queued_alloc_size,
+                                sizeof(TYPE *)*(ctx->num_queued + 1));
     if (!fq) {
-        buf->queued_alloc_size = oalloc;
+        ctx->queued_alloc_size = oalloc;
         err = AVERROR(ENOMEM);
+        FREE_FN(&in_clone);
         goto unlock;
     }
 
-    buf->queued = fq;
-    buf->queued[buf->num_queued++] = f;
+    ctx->queued = fq;
+    ctx->queued[ctx->num_queued++] = in_clone;
 
-    pthread_cond_signal(&buf->cond_in);
+    pthread_cond_signal(&ctx->cond_in);
+
+distribute:
+    while ((dist = sp_bufferlist_iter_ref(ctx->dests))) {
+        TYPE *cloned = CLONE_FN(in_clone);
+        if (in_clone && !cloned) {
+            err = AVERROR(ENOMEM);
+            av_buffer_unref(&dist);
+            sp_bufferlist_iter_halt(ctx->dests);
+            break;
+        }
+
+        int ret = RENAME(fifo_push)(dist, cloned);
+        av_buffer_unref(&dist);
+        if (ret != AVERROR(ENOBUFS)) {
+            sp_bufferlist_iter_halt(ctx->dests);
+            err = ret;
+            break;
+        } else if (!err) {
+            err = AVERROR(ENOBUFS);
+        }
+    }
 
 unlock:
-    pthread_mutex_unlock(&buf->lock);
-    pthread_mutex_unlock(&buf->cond_lock_out);
+    pthread_mutex_unlock(&ctx->lock);
 
     return err;
 }
 
-static inline TYPE *RENAME(fifo_pop)(SNAME *buf)
+TYPE *RENAME(fifo_pop)(AVBufferRef *src)
 {
-    TYPE *rf = NULL;
+    if (!src)
+        return NULL;
 
-    pthread_mutex_lock(&buf->cond_lock_in);
-    pthread_mutex_lock(&buf->lock);
+    TYPE *out = NULL;
+    SNAME *ctx = (SNAME *)src->data;
+    pthread_mutex_lock(&ctx->lock);
 
-    if (!buf->num_queued) {
-        if (!(buf->block_flags & FRENAME(BLOCK_NO_INPUT)))
+    if (!ctx->num_queued) {
+        if (!(ctx->block_flags & FRENAME(BLOCK_NO_INPUT)))
             goto unlock;
-        pthread_mutex_unlock(&buf->lock);
-        pthread_cond_wait(&buf->cond_in, &buf->cond_lock_in);
-        pthread_mutex_lock(&buf->lock);
+
+        pthread_cond_wait(&ctx->cond_in, &ctx->lock);
     }
 
-    rf = buf->queued[0];
-    buf->num_queued--;
-    assert(buf->num_queued >= 0);
+    out = ctx->queued[0];
+    ctx->num_queued--;
+    assert(ctx->num_queued >= 0);
 
-    memmove(&buf->queued[0], &buf->queued[1], buf->num_queued*sizeof(TYPE *));
+    memmove(&ctx->queued[0], &ctx->queued[1], ctx->num_queued*sizeof(TYPE *));
 
-    if (buf->max_queued > 0)
-        pthread_cond_signal(&buf->cond_out);
+    if (ctx->max_queued > 0)
+        pthread_cond_signal(&ctx->cond_out);
 
 unlock:
-    pthread_mutex_unlock(&buf->lock);
-    pthread_mutex_unlock(&buf->cond_lock_in);
+    pthread_mutex_unlock(&ctx->lock);
 
-    return rf;
+    return out;
 }
 
-static inline TYPE *RENAME(fifo_peek)(SNAME *buf)
+TYPE *RENAME(fifo_peek)(AVBufferRef *src)
 {
-    void *rf = NULL;
+    if (!src)
+        return NULL;
 
-    pthread_mutex_lock(&buf->cond_lock_in);
-    pthread_mutex_lock(&buf->lock);
+    TYPE *out = NULL;
+    SNAME *ctx = (SNAME *)src->data;
+    pthread_mutex_lock(&ctx->lock);
 
-    if (!buf->num_queued) {
-        if (!(buf->block_flags & FRENAME(BLOCK_NO_INPUT)))
+    if (!ctx->num_queued) {
+        if (!(ctx->block_flags & FRENAME(BLOCK_NO_INPUT)))
             goto unlock;
-        pthread_mutex_unlock(&buf->lock);
-        pthread_cond_wait(&buf->cond_in, &buf->cond_lock_in);
-        pthread_mutex_lock(&buf->lock);
+
+        pthread_cond_wait(&ctx->cond_in, &ctx->lock);
     }
 
-    rf = buf->queued[0];
+    out = CLONE_FN(ctx->queued[0]);
 
 unlock:
-    pthread_mutex_unlock(&buf->lock);
-    pthread_mutex_unlock(&buf->cond_lock_in);
+    pthread_mutex_unlock(&ctx->lock);
 
-    return rf;
-}
-
-static inline void RENAME(fifo_free)(SNAME *buf)
-{
-    pthread_mutex_lock(&buf->lock);
-
-
-    for (int i = 0; i < buf->num_queued; i++)
-        FREE_FN(&buf->queued[i]);
-
-    if (buf->splitter_dests_num)
-        pthread_join(buf->splitter, NULL);
-
-    av_freep(&buf->queued);
-    av_freep(&buf->splitter_dests);
-    buf->splitter_dests_num = 0;
-
-    pthread_mutex_unlock(&buf->lock);
-
-    pthread_cond_destroy(&buf->cond_in);
-    pthread_cond_destroy(&buf->cond_out);
-    pthread_mutex_destroy(&buf->cond_lock_in);
-    pthread_mutex_destroy(&buf->cond_lock_out);
-    pthread_mutex_destroy(&buf->lock);
-}
-
-static void *RENAME(fifo_splitter_thread)(void *data)
-{
-    SNAME *buf = data;
-
-    while (1) {
-        TYPE *src = RENAME(fifo_pop)(buf);
-        if (!src)
-            break;
-
-        for (int i = 0; i < buf->splitter_dests_num; i++)
-            if (!RENAME(fifo_is_full)(&buf->splitter_dests[i]))
-                RENAME(fifo_push)(&buf->splitter_dests[i], CLONE_FN(src));
-
-        FREE_FN(&src);
-    }
-
-    for (int i = 0; i < buf->splitter_dests_num; i++)
-        RENAME(fifo_push)(&buf->splitter_dests[i], NULL);
-
-    return NULL;
-}
-
-static inline void RENAME(fifo_splitter_start)(SNAME *src, SNAME **dsts,
-                                               int num_dst, int max_queued,
-                                               FNAME block_flags)
-{
-    if (src->splitter_dests_num)
-        return;
-
-    src->splitter_dests = av_mallocz(num_dst * sizeof(SNAME));
-    src->splitter_dests_num = num_dst;
-
-    for (int i = 0; i < num_dst; i++)
-        RENAME(fifo_init)(&src->splitter_dests[i], max_queued, block_flags);
-
-    pthread_create(&src->splitter, NULL, RENAME(fifo_splitter_thread), src);
-
-    *dsts = src->splitter_dests;
+    return out;
 }

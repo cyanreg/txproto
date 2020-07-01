@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include "encoding.h"
 #include "encoding_utils.h"
 
@@ -10,12 +8,6 @@
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 {
-    /* Don't reallocate if unneded. */
-    if (!ctx->swr && !(ctx->swr = swr_alloc())) {
-        av_log(ctx, AV_LOG_ERROR, "Could not alloc swr context!\n");
-        return AVERROR(ENOMEM);
-    }
-
     if (!conf)
         return 0;
 
@@ -31,6 +23,8 @@ static int swr_configure(EncodingContext *ctx, AVFrame *conf)
     av_opt_set_int           (ctx->swr, "out_sample_rate",    ctx->avctx->sample_rate,        0);
     av_opt_set_channel_layout(ctx->swr, "out_channel_layout", ctx->avctx->channel_layout,     0);
     av_opt_set_sample_fmt    (ctx->swr, "out_sample_fmt",     ctx->avctx->sample_fmt,         0);
+
+    av_opt_set_int(ctx->swr, "output_sample_bits", ctx->avctx->bits_per_raw_sample, 0);
 
     int err = swr_init(ctx->swr);
     if (err) {
@@ -50,13 +44,8 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
 {
     FormatExtraData *fe = (FormatExtraData *)conf->opaque_ref->data;
 
-    ctx->avctx = avcodec_alloc_context3(ctx->codec);
-    if (!ctx->avctx)
-        return AVERROR(ENOMEM);
-
     ctx->avctx->opaque                = ctx;
     ctx->avctx->time_base             = fe->time_base;
-    ctx->avctx->bit_rate              = ctx->bitrate;
     ctx->avctx->compression_level     = 7;
     ctx->avctx->thread_count          = av_cpu_count();
     ctx->avctx->thread_type           = FF_THREAD_FRAME | FF_THREAD_SLICE;
@@ -81,11 +70,6 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
             ctx->avctx->height = ctx->height;
         }
 
-        if (conf->hw_frames_ctx) {
-            AVHWFramesContext *in_hwfc = (AVHWFramesContext *)conf->hw_frames_ctx->data;
-            ctx->avctx->pix_fmt = in_hwfc->sw_format;
-        }
-
         if (ctx->pix_fmt != AV_PIX_FMT_NONE)
             ctx->avctx->pix_fmt = ctx->pix_fmt;
 
@@ -94,18 +78,30 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
     }
 
     if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
-        ctx->avctx->sample_fmt          = pick_codec_sample_fmt(ctx->codec, conf->format, fe->bits_per_sample);
-        ctx->avctx->channel_layout      = pick_codec_channel_layout(ctx->codec, conf->channel_layout);
-        ctx->avctx->sample_rate         = pick_codec_sample_rate(ctx->codec, conf->sample_rate);
-        ctx->avctx->channels            = av_get_channel_layout_nb_channels(ctx->avctx->channel_layout);
-        ctx->avctx->bits_per_raw_sample = FFMIN(av_get_bytes_per_sample(ctx->avctx->sample_fmt) * 8,
-                                                fe->bits_per_sample);
+        /* Pick selected or input sample rate, then the one closest which the codec supports */
+        ctx->avctx->sample_rate = ctx->sample_rate ? ctx->sample_rate : conf->sample_rate;
+        ctx->avctx->sample_rate = pick_codec_sample_rate(ctx->codec, ctx->avctx->sample_rate);
 
-        if (ctx->sample_rate)
-            ctx->avctx->sample_rate = ctx->sample_rate;
+        /* Same with the sample format */
+        if (ctx->sample_fmt != AV_SAMPLE_FMT_NONE) {
+            int bpsf = av_get_bytes_per_sample(ctx->avctx->sample_fmt) * 8;
+            ctx->avctx->sample_fmt = pick_codec_sample_fmt(ctx->codec, ctx->sample_fmt, bpsf);
+            ctx->avctx->bits_per_raw_sample = bpsf;
+        } else {
+            ctx->avctx->sample_fmt = pick_codec_sample_fmt(ctx->codec, conf->format, fe->bits_per_sample);
+            ctx->avctx->bits_per_raw_sample = SPMIN(av_get_bytes_per_sample(ctx->avctx->sample_fmt) * 8,
+                                                    fe->bits_per_sample);
+        }
+
+        if (ctx->channel_layout)
+            ctx->avctx->channel_layout = pick_codec_channel_layout(ctx->codec, ctx->channel_layout);
+        else
+            ctx->avctx->channel_layout = pick_codec_channel_layout(ctx->codec, conf->channel_layout);
+
+        ctx->avctx->channels = av_get_channel_layout_nb_channels(ctx->avctx->channel_layout);
     }
 
-    if (ctx->global_header_needed)
+    if (ctx->need_global_header)
         ctx->avctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     return 0;
@@ -150,31 +146,33 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         (hwfc->width == ctx->avctx->width) && (hwfc->height == ctx->avctx->height)) {
         err = av_hwframe_ctx_create_derived(&ctx->enc_frames_ref, hwcfg->pix_fmt,
                                             enc_device_ref, input_frames_ref, 0);
-        if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not derive hardware frames context: %s!\n", av_err2str(err));
-            goto end;
-        }
-    } else {
-        ctx->enc_frames_ref = av_hwframe_ctx_alloc(enc_device_ref);
-        if (!ctx->enc_frames_ref) {
-            err = AVERROR(ENOMEM);
-            goto end;
-        }
-
-        hwfc = (AVHWFramesContext*)ctx->enc_frames_ref->data;
-
-        hwfc->format = hwcfg->pix_fmt;
-        hwfc->sw_format = ctx->avctx->pix_fmt;
-        hwfc->width = ctx->avctx->width;
-        hwfc->height = ctx->avctx->height;
-
-        err = av_hwframe_ctx_init(ctx->enc_frames_ref);
-        if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not init hardware frames context: %s!\n", av_err2str(err));
-            goto end;
-        }
+        if (err < 0)
+            av_log(ctx, AV_LOG_WARNING, "Could not derive hardware frames context: %s!\n",
+                   av_err2str(err));
+        else
+            goto set;
     }
 
+    ctx->enc_frames_ref = av_hwframe_ctx_alloc(enc_device_ref);
+    if (!ctx->enc_frames_ref) {
+        err = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    hwfc = (AVHWFramesContext*)ctx->enc_frames_ref->data;
+
+    hwfc->format = hwcfg->pix_fmt;
+    hwfc->sw_format = ctx->avctx->pix_fmt;
+    hwfc->width = ctx->avctx->width;
+    hwfc->height = ctx->avctx->height;
+
+    err = av_hwframe_ctx_init(ctx->enc_frames_ref);
+    if (err < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not init hardware frames context: %s!\n", av_err2str(err));
+        goto end;
+    }
+
+set:
     hwfc = (AVHWFramesContext*)ctx->enc_frames_ref->data;
 
     ctx->avctx->pix_fmt = hwfc->format;
@@ -194,53 +192,50 @@ end:
     return err;
 }
 
-int init_encoder(EncodingContext *ctx)
+static int context_full_init(EncodingContext *ctx)
 {
     int err;
 
-    if (!ctx->codec) {
-        av_log(ctx, AV_LOG_ERROR, "Missing codec!\n");
+    AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
+    if (!conf) {
+        av_log(ctx, AV_LOG_ERROR, "No input frame to configure with!\n");
         return AVERROR(EINVAL);
     }
 
-    /* Also used as thread name */
-    ctx->class->class_name = av_mallocz(16);
-    av_strlcpy((char *)ctx->class->class_name, "lavc_", 16);
-    av_strlcat((char *)ctx->class->class_name, ctx->codec->name, 16);
-
-    if (!ctx->source_frames) {
-        av_log(ctx, AV_LOG_ERROR, "No source frame FIFO!\n");
-        return AVERROR(EINVAL);
+    if ((err = init_avctx(ctx, conf))) {
+        av_frame_free(&conf);
+        return err;
     }
-    if (!ctx->dest_packets) {
-        av_log(ctx, AV_LOG_ERROR, "No destination packet FIFO!\n");
-        return AVERROR(EINVAL);
-    }
-
-    AVFrame *conf = sp_frame_fifo_peek(ctx->source_frames);
-
-    init_avctx(ctx, conf);
 
     if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
         if ((ctx->codec->capabilities & AV_CODEC_CAP_HARDWARE)) {
             err = init_hwcontext(ctx, conf);
-            if (err < 0)
+            if (err < 0) {
+                av_frame_free(&conf);
                 return err;
+            }
         }
     }
 
     /* SWR */
     if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
         err = swr_configure(ctx, conf);
-        if (err < 0)
+        if (err < 0) {
+            av_frame_free(&conf);
             return err;
+        }
     }
 
-    err = avcodec_open2(ctx->avctx, ctx->codec, &ctx->encoder_opts);
+    err = avcodec_open2(ctx->avctx, ctx->codec, NULL);
 	if (err < 0) {
 		av_log(ctx, AV_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
 		return err;
 	}
+
+    av_frame_free(&conf);
+
+    atomic_store(&ctx->initialized, 1);
+    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_CHANGE);
 
     return 0;
 }
@@ -249,7 +244,7 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
 {
     int ret;
     int frame_size = ctx->avctx->frame_size;
- 
+
     ret = swr_configure(ctx, *input);
     if (ret < 0)
         return ret;
@@ -367,12 +362,12 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
             if (!tx_frame)
                 return AVERROR(ENOMEM);
 
+            tx_frame->width = in_f->width;
+            tx_frame->height = in_f->height;
+
             if (ed->flags & AV_PIX_FMT_FLAG_HWACCEL) {
-                AVHWFramesContext *enc_hwfc;
-                enc_hwfc = (AVHWFramesContext *)ctx->enc_frames_ref->data;
+                AVHWFramesContext *enc_hwfc = (AVHWFramesContext *)ctx->enc_frames_ref->data;
                 tx_frame->format = enc_hwfc->format;
-                tx_frame->width = enc_hwfc->width;
-                tx_frame->height = enc_hwfc->height;
 
                 /* Set frame hardware context referencce */
                 tx_frame->hw_frames_ctx = av_buffer_ref(ctx->enc_frames_ref);
@@ -381,7 +376,20 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
                     return err;
                 }
 
-                av_hwframe_get_buffer(ctx->enc_frames_ref, tx_frame, 0);
+                err = av_hwframe_get_buffer(ctx->enc_frames_ref, tx_frame, 0);
+                if (err < 0) {
+                    av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
+                    return err;
+                }
+            } else {
+                AVHWFramesContext *in_hwfc = (AVHWFramesContext *)in_f->hw_frames_ctx->data;
+                tx_frame->format = in_hwfc->sw_format;
+
+                err = av_frame_get_buffer(tx_frame, 4096);
+                if (err < 0) {
+                    av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
+                    return err;
+                }
             }
 
             err = av_hwframe_transfer_data(tx_frame, in_f, 0);
@@ -434,26 +442,41 @@ static void *encoding_thread(void *arg)
     EncodingContext *ctx = arg;
     int ret = 0, flush = 0;
 
-    pthread_setname_np(pthread_self(), ctx->class->class_name);
+    pthread_mutex_lock(&ctx->lock);
+
+    sp_set_thread_name_self(ctx->class->class_name);
+
+    ret = context_full_init(ctx);
+    if (ret < 0)
+        goto fail;
+
+    pthread_mutex_unlock(&ctx->lock);
 
     do {
+        pthread_mutex_lock(&ctx->lock);
+
         AVFrame *frame = NULL;
 
         if (!flush) {
-            frame = sp_frame_fifo_pop(ctx->source_frames);
+            frame = sp_frame_fifo_pop(ctx->src_frames);
             flush = !frame;
         }
 
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
             ret = video_process_frame(ctx, &frame);
-            if (ret < 0)
+            if (ret < 0) {
+                pthread_mutex_unlock(&ctx->lock);
                 goto fail;
+            }
         } else if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
             ret = audio_process_frame(ctx, &frame, flush);
-            if (ret == AVERROR(EAGAIN))
+            if (ret == AVERROR(EAGAIN)) {
+                pthread_mutex_unlock(&ctx->lock);
                 continue;
-            else if (ret < 0)
+            } else if (ret < 0) {
+                pthread_mutex_unlock(&ctx->lock);
                 goto fail;
+            }
         }
 
         /* Give frame */
@@ -461,6 +484,7 @@ static void *encoding_thread(void *arg)
         av_frame_free(&frame);
         if (ret < 0) {
             av_log(ctx, AV_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
+            pthread_mutex_unlock(&ctx->lock);
             goto fail;
         }
 
@@ -471,19 +495,24 @@ static void *encoding_thread(void *arg)
             ret = avcodec_receive_packet(ctx->avctx, out_pkt);
             if (ret == AVERROR_EOF) {
                 ret = 0;
+                pthread_mutex_unlock(&ctx->lock);
                 goto end;
             } else if (ret == AVERROR(EAGAIN)) {
                 ret = 0;
                 break;
             } else if (ret < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
+                pthread_mutex_unlock(&ctx->lock);
                 goto fail;
             }
 
-            out_pkt->stream_index = ctx->stream_id;
+            out_pkt->stream_index = ctx->encoder_id;
 
-            sp_packet_fifo_push(ctx->dest_packets, out_pkt);
+            sp_packet_fifo_push(ctx->dst_packets, out_pkt);
+            av_packet_free(&out_pkt);
         }
+
+        pthread_mutex_unlock(&ctx->lock);
     } while (!ctx->err);
 
 end:
@@ -494,15 +523,153 @@ end:
 fail:
     ctx->err = ret;
 
+    atomic_store(&ctx->running, 0);
     return NULL;
 }
 
-void free_encoder(EncodingContext **s)
-{
-    if (!s || !*s)
-        return;
+typedef struct EncoderIOCtrlCtx {
+    enum SPEventType ctrl;
+    AVDictionary *opts;
+} EncoderIOCtrlCtx;
 
-    EncodingContext *ctx = *s;
+static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+{
+    EncoderIOCtrlCtx *event = (EncoderIOCtrlCtx *)opaque->data;
+    EncodingContext *ctx = src_ctx;
+
+    if (event->ctrl & SP_EVENT_CTRL_START) {
+        pthread_mutex_lock(&ctx->lock);
+        if (!atomic_load(&ctx->running)) {
+            atomic_store(&ctx->running, 1);
+            pthread_create(&ctx->encoding_thread, NULL, encoding_thread, ctx);
+        }
+        pthread_mutex_unlock(&ctx->lock);
+    } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
+        if (atomic_load(&ctx->running)) {
+            sp_frame_fifo_push(ctx->src_frames, NULL);
+            pthread_join(ctx->encoding_thread, NULL);
+        }
+    } else {
+        return AVERROR(ENOTSUP);
+    }
+
+    return 0;    
+}
+
+int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
+{
+    EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
+
+    if (ctrl & SP_EVENT_CTRL_COMMIT) {
+        av_log(ctx, AV_LOG_DEBUG, "Comitting!\n");
+        return sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_COMMIT);
+    } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
+        av_log(ctx, AV_LOG_DEBUG, "Discarding!\n");
+        sp_bufferlist_discard_new_events(ctx->events);
+    } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
+        char *fstr = sp_event_flags_to_str_buf(arg);
+        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_bufferlist_append_event(ctx->events, arg);
+     } else if (ctrl & SP_EVENT_CTRL_DEP) {
+        char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
+        av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
+    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+        return AVERROR(ENOTSUP);
+    }
+
+    SP_EVENT_BUFFER_CTX_ALLOC(EncoderIOCtrlCtx, ctrl_ctx, av_buffer_default_free, ctx)
+
+    ctrl_ctx->ctrl = ctrl;
+    if (ctrl & SP_EVENT_CTRL_OPTS)
+        av_dict_copy(&ctrl_ctx->opts, arg, 0);
+
+    if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
+        int ret = encoder_ioctx_ctrl_cb(ctrl_ctx_ref, ctx);
+        av_buffer_unref(&ctrl_ctx_ref);
+        return ret;
+    }
+
+    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | ctrl;
+    AVBufferRef *ctrl_event = sp_event_create(encoder_ioctx_ctrl_cb, NULL,
+                                              flags, ctrl_ctx_ref,
+                                              sp_event_gen_identifier(ctx, NULL, flags));
+
+    char *fstr = sp_event_flags_to_str_buf(ctrl_event);
+    av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    av_free(fstr);
+
+    int err = sp_bufferlist_append_event(ctx->events, ctrl_event);
+    av_buffer_unref(&ctrl_event);
+    if (err < 0)
+        return err;
+
+    return 0;
+}
+
+int sp_encoder_init(AVBufferRef *ctx_ref)
+{
+    int err;
+    EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
+
+    if (!ctx->codec) {
+        av_log(ctx, AV_LOG_ERROR, "Missing codec!\n");
+        return AVERROR(EINVAL);
+    }
+
+    ctx->avctx = avcodec_alloc_context3(ctx->codec);
+    if (!ctx->avctx)
+        return AVERROR(ENOMEM);
+
+    char *new_name = NULL;
+    if (ctx->name) {
+        new_name = av_strdup(ctx->name);
+        if (!new_name) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
+    } else {
+        int len = strlen(ctx->class->class_name) + 1 + strlen(ctx->codec->name) + 1;
+        new_name = av_mallocz(len);
+        if (!new_name) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
+        av_strlcpy(new_name, ctx->class->class_name, len);
+        av_strlcat(new_name, ":", len);
+        av_strlcat(new_name, ctx->codec->name, len);
+    }
+
+    av_free((void *)ctx->class->class_name);
+    ctx->class->class_name = new_name;
+    ctx->name = new_name;
+
+    return 0;
+
+fail:
+    avcodec_free_context(&ctx->avctx);
+    return err;
+}
+
+static void encoder_free(void *opaque, uint8_t *data)
+{
+    EncodingContext *ctx = (EncodingContext *)data;
+
+    sp_frame_fifo_unmirror_all(ctx->src_frames);
+    sp_frame_fifo_unmirror_all(ctx->dst_packets);
+
+    if (atomic_load(&ctx->running)) {
+        sp_frame_fifo_push(ctx->src_frames, NULL);
+        pthread_join(ctx->encoding_thread, NULL);
+    }
+
+    av_buffer_unref(&ctx->src_frames);
+    av_buffer_unref(&ctx->dst_packets);
+
+    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_DESTROY);
+    sp_bufferlist_free(&ctx->events);
 
     if (ctx->swr)
         swr_free(&ctx->swr);
@@ -512,50 +679,47 @@ void free_encoder(EncodingContext **s)
 
     avcodec_free_context(&ctx->avctx);
 
-    av_free((char *)ctx->class->class_name);
+    av_dict_free(&ctx->priv_options);
+    av_free((void *)ctx->class->class_name);
     av_free(ctx->class);
-    av_freep(s);
+
+    pthread_mutex_destroy(&ctx->lock);
 }
 
-int stop_encoding_thread(EncodingContext *ctx)
+AVBufferRef *sp_encoder_alloc(void)
 {
-    if (!ctx || !ctx->avctx)
-        return 0;
-
-    pthread_join(ctx->encoding_thread, NULL);
-
-    return 0;
-}
-
-int start_encoding_thread(EncodingContext *ctx)
-{
-    if (!ctx || !ctx->avctx)
-        return 0;
-
-    av_log(ctx, AV_LOG_INFO, "Starting encoding thread!\n");
-    pthread_create(&ctx->encoding_thread, NULL, encoding_thread, ctx);
-
-    return 0;
-}
-
-EncodingContext *alloc_encoding_ctx(void)
-{
-    EncodingContext *ctx = av_mallocz(sizeof(*ctx));
+    EncodingContext *ctx = av_mallocz(sizeof(EncodingContext));
     if (!ctx)
         return NULL;
 
+    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
+                                            encoder_free, NULL, 0);
+
     ctx->class = av_mallocz(sizeof(*ctx->class));
     if (!ctx->class) {
-        av_free(ctx);
+        av_buffer_unref(&ctx_ref);
         return NULL;
     }
 
     *ctx->class = (AVClass) {
-        .item_name  = av_default_item_name,
-        .version    = LIBAVUTIL_VERSION_INT,
+        .class_name   = av_strdup("lavc"),
+        .item_name    = av_default_item_name,
+        .get_category = av_default_get_category,
+        .version      = LIBAVUTIL_VERSION_INT,
+        .category     = AV_CLASS_CATEGORY_ENCODER,
     };
 
+    pthread_mutex_init(&ctx->lock, NULL);
     ctx->pix_fmt = AV_PIX_FMT_NONE;
+    ctx->events = sp_bufferlist_new();
+    ctx->swr = swr_alloc();
 
-    return ctx;
+    ctx->src_frames = sp_frame_fifo_create(8, FRAME_FIFO_BLOCK_NO_INPUT);
+    ctx->dst_packets = sp_packet_fifo_create(0, 0);
+    ctx->initialized = ATOMIC_VAR_INIT(0);
+    ctx->running = ATOMIC_VAR_INIT(0);
+
+    sp_gen_random_data(&ctx->encoder_id, sizeof(ctx->encoder_id), sizeof(ctx->encoder_id) - 1);
+
+    return ctx_ref;
 }

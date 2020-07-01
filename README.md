@@ -1,11 +1,32 @@
 # txproto
 
-Records and streams. Think of it as a bloatless, NIH-less OBS.
-Configuration is currently done via src/txproto_main.c, at the very end of the file.
-Toggle the if 0/1 flags to enable/disable features like mixing and filtering.
-Change the encoder to h264_vaapi to enable hardware encoding.
-Change the source via the _target parameters of the capture context structures.
-All available sources are listed on capture system init.
+A fully scriptable and flexible multimedia streaming/handling program.
 
-There's currently a single command line argument used - the destination URL.
-If there's http in the name, the muxer is switched to dash. If rtmp is present, the flv protocol is used.
+Here would go a pipeline/GUI image
+
+Features
+--------
+ * Fully scriptable via Lua
+ * Fully atomic API
+ * Every frame is perfect
+ * Frame-perfect synchronization between video and audio capture
+ * Custom first-class capture/output code for minimal overhead:
+     * Most feature-complete and accurate Pulseaudio implementation, including isolated client capture
+     * Zero-copy Wayland capture via the wlr-export-dmabuf-unstable protocol
+     * Wayland capture via the wlr-screencopy-unstable protocol (both software or DMA-BUF frames supported)
+ * Second-class libavdevice capture/output support
+ * Headless operation supported
+ * Optional Vulkan-only GUI via libplacebo, supported window systems:
+     * Wayland
+ * Minimal dependencies (FFmpeg and Lua required, libplacebo and all custom capture code optional)
+ * Liberally licensed (LGPL v2.1)
+
+| Custom feature | Acceptance |
+|-----------------|--------------|
+| Custom inputs | Always accepted |
+| Custom outputs | Always accepted |
+| Platform integration | Via optional Lua scripts |
+| Custom filters | Unlikely, submit to FFmpeg first |
+| Custom muxers | Very unlikely, submit to FFmpeg first |
+| Custom encoders | Never, submit any to FFmpeg |
+

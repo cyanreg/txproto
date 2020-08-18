@@ -18,6 +18,8 @@
 #include "version.h"
 #include "../config.h"
 
+#include "default.lua.bin.h"
+
 typedef struct MainContext {
     AVClass *class;
     int log_lvl_offset;
@@ -1387,7 +1389,8 @@ int main(int argc, char *argv[])
         if ((err = lfn_loadfile(ctx, script_name)))
             goto end;
     } else {
-        err = luaL_loadbufferx(ctx->lua, NULL, 0, "built-in script", "b");
+        err = luaL_loadbufferx(ctx->lua, scripts_default_lua_bin,
+                               scripts_default_lua_bin_len, "built-in script", "b");
         if (err) {
             av_log(ctx, AV_LOG_ERROR, "%s\n", lua_tostring(ctx->lua, -1));
             err = AVERROR_EXTERNAL;

@@ -320,7 +320,7 @@ AVBufferRef *sp_bufferlist_iter_ref(SPBufferList *list)
     if (list->iter_idx < 0)
         pthread_mutex_lock(&list->lock);
     list->iter_idx++;
-    if (list->iter_idx == list->entries_num) {
+    if (list->iter_idx >= list->entries_num) {
         list->iter_idx = -1;
         pthread_mutex_unlock(&list->lock);
         goto end;

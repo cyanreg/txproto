@@ -229,7 +229,7 @@ static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
 	}
 
     iosys_entry->io_priv = priv;
-    iosys_entry->frames = sp_frame_fifo_create(0, 0);
+    iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 0, 0);
     iosys_entry->ctrl = lavd_ioctx_ctrl;
     iosys_entry->events = sp_bufferlist_new();
     priv->main_ref = av_buffer_ref(ctx_ref);

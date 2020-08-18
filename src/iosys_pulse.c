@@ -317,9 +317,9 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     int is_sink = sp_classed_ctx_to_type(iosys_entry) == SP_EVENT_TYPE_SINK;
     if (!is_sink)
-        iosys_entry->frames = sp_frame_fifo_create(0, 0);
+        iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 0, 0);
     else
-        iosys_entry->frames = sp_frame_fifo_create(16, FRAME_FIFO_BLOCK_NO_INPUT);
+        iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 16, FRAME_FIFO_BLOCK_NO_INPUT);
 
     priv->main_ref = av_buffer_ref(ctx_ref);
     priv->main = (PulseCtx *)priv->main_ref->data;

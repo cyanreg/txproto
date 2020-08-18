@@ -497,7 +497,7 @@ AVBufferRef *sp_muxer_alloc(void)
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
-    ctx->src_packets = sp_packet_fifo_create(256, PACKET_FIFO_BLOCK_NO_INPUT);
+    ctx->src_packets = sp_packet_fifo_create(ctx, 256, PACKET_FIFO_BLOCK_NO_INPUT);
     ctx->initialized = ATOMIC_VAR_INIT(0);
     ctx->running = ATOMIC_VAR_INIT(0);
 

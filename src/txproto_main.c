@@ -60,22 +60,23 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
     av_log(opaque, AV_LOG_WARNING, "%s%c", msg, contd ? '\0' : '\n');
 }
 
-#define LUA_CLEANUP_FN_DEFS           \
-    AVBufferRef **cleanup_ref = NULL;
+#define LUA_CLEANUP_FN_DEFS(fnname)   \
+    AVBufferRef **cleanup_ref = NULL; \
+    const char *fn_name = fnname;
 
 #define LUA_SET_CLEANUP(ref) \
     do {                     \
         cleanup_ref = &ref;  \
     } while (0)
 
-#define LUA_ERROR(fmt, ...)                               \
-    do {                                                  \
-        av_log(ctx, AV_LOG_ERROR, fmt "\n", __VA_ARGS__); \
-        lua_pushfstring(L, fmt, __VA_ARGS__);             \
-        if (cleanup_ref && *cleanup_ref)                  \
-            av_buffer_unref(cleanup_ref);                 \
-        pthread_mutex_unlock(&ctx->lock);                 \
-        return lua_error(L);                              \
+#define LUA_ERROR(fmt, ...)                                               \
+    do {                                                                  \
+        av_log(ctx, AV_LOG_ERROR, "%s: " fmt "\n", fn_name, __VA_ARGS__); \
+        lua_pushfstring(L, fmt, __VA_ARGS__);                             \
+        if (cleanup_ref && *cleanup_ref)                                  \
+            av_buffer_unref(cleanup_ref);                                 \
+        pthread_mutex_unlock(&ctx->lock);                                 \
+        return lua_error(L);                                              \
     } while (0)
 
 #define LUA_INTERFACE_END(ret)            \
@@ -224,7 +225,7 @@ static int lua_create_muxer(lua_State *L)
     int err;
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".create_muxer")
     LUA_INTERFACE_BOILERPLATE();
 
     AVBufferRef *mctx_ref = sp_muxer_alloc();
@@ -258,7 +259,7 @@ static int lua_create_encoder(lua_State *L)
     const char *temp_str;
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".create_encoder")
     LUA_INTERFACE_BOILERPLATE();
 
     AVBufferRef *ectx_ref = sp_encoder_alloc();
@@ -319,7 +320,7 @@ static int lua_create_encoder(lua_State *L)
 static int lua_create_io(lua_State *L)
 {
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".create_io")
 
     pthread_mutex_lock(&ctx->lock);
 
@@ -365,7 +366,7 @@ static int lua_create_filter(lua_State *L)
     int err;
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".create_filter")
     LUA_INTERFACE_BOILERPLATE();
 
     AVBufferRef *fctx_ref = sp_filter_alloc();
@@ -441,7 +442,7 @@ static int lua_link_objects(lua_State *L)
 {
     int err;
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".link_objects")
 
     pthread_mutex_lock(&ctx->lock);
 
@@ -647,7 +648,7 @@ static void epoch_event_free(void *opaque, uint8_t *data)
 static int lua_set_epoch(lua_State *L)
 {
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".set_epoch")
 
     pthread_mutex_lock(&ctx->lock);
 
@@ -734,7 +735,7 @@ static int lua_discard(lua_State *L)
 static int lua_ctrl(lua_State *L)
 {
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".ctrl")
 
     pthread_mutex_lock(&ctx->lock);
 
@@ -884,7 +885,7 @@ end:
 static int lua_register_io_cb(lua_State *L)
 {
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_CLEANUP_FN_DEFS
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".register_io_cb")
 
     pthread_mutex_lock(&ctx->lock);
 

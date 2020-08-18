@@ -1,5 +1,5 @@
 /* Create */
-AVBufferRef *RENAME(fifo_create)(int max_queued, FNAME block_flags); /* -1 = INF, 0 = none */
+AVBufferRef *RENAME(fifo_create)(void *opaque, int max_queued, FNAME block_flags); /* -1 = INF, 0 = none */
 AVBufferRef *RENAME(fifo_ref)(AVBufferRef *src, int max_queued, FNAME block_flags);
 
 /* Query */

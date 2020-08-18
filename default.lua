@@ -9,11 +9,19 @@ state = {
                 low_latency = true,
             },
         },
+        file_2 = { -- value-less entries and unknown keys, are ignored
+            name = nil, -- custom name, if nil, will create a sane, possibly non-unique one on muxer creation
+            out_url = "dmabuf_recording_02.mkv",
+            out_format = nil, -- this is populated upon muxer creation if empty
+            priv_options = {
+                low_latency = true,
+            },
+        },
     },
     encoders = {
         video = {
-            encoder = "rawvideo",
-            pix_fmt = "none",
+            encoder = "h264_vaapi",
+            pix_fmt = "nv12",
             options = {
                 b = 10^3 --[[ Kbps ]] * 2000,
             },
@@ -144,8 +152,8 @@ audio_source_id = nil
 
 function io_update_cb(identifier, entry)
     io_list[identifier] = entry
-    if entry ~= nil and entry.name == "/dev/video0" then video_source_id = identifier end
-    if entry ~= nil and entry.name == "alsa_input.usb-046d_HD_Pro_Webcam_C920_8C2D30EF-02.analog-stereo" then audio_source_id = identifier end
+    if entry ~= nil and entry.name == "eDP-1" then video_source_id = identifier end
+    if entry ~= nil and entry.name == "alsa_output.usb-FiiO_FiiO_USB_DAC_K1-01.analog-stereo.monitor" then audio_source_id = identifier end
 end
 
 function initial_config(...)
@@ -156,7 +164,7 @@ function initial_config(...)
     print(dump_table_to_string(io_list, true, 2))
 
     -- Create a video source
-    video_source = tx.create_io(video_source_id, { pixel_format="mjpeg" })
+    video_source = tx.create_io(video_source_id)
 
     -- Create an audio source
     audio_source = tx.create_io(audio_source_id, { buffer_ms=20 })
@@ -177,6 +185,8 @@ function initial_config(...)
 
     tx.link(state.muxers.file_1, state.encoders.video)
     tx.link(state.muxers.file_1, state.encoders.audio)
+    tx.link(state.muxers.file_2, state.encoders.video)
+    tx.link(state.muxers.file_2, state.encoders.audio)
 
     tx.link(state.encoders.video, video_source)
     tx.link(state.encoders.audio, audio_source)
@@ -189,6 +199,7 @@ function initial_config(...)
     tx.ctrl(state.encoders.video, "start")
     tx.ctrl(state.encoders.audio, "start")
     tx.ctrl(state.muxers.file_1, "start")
+    tx.ctrl(state.muxers.file_2, "start")
 
     tx.commit()
 end

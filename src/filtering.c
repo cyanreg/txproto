@@ -119,7 +119,7 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
             return;
         }
 
-        pad->fifo = is_out ? sp_frame_fifo_create(0, 0) : sp_frame_fifo_create(8, FRAME_FIFO_BLOCK_NO_INPUT);
+        pad->fifo = is_out ? sp_frame_fifo_create(ctx, 0, 0) : sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
         pad->main = ctx;
         pad->is_out = is_out;
         pad->name = av_strdup(name);

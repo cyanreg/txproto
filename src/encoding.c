@@ -714,8 +714,8 @@ AVBufferRef *sp_encoder_alloc(void)
     ctx->events = sp_bufferlist_new();
     ctx->swr = swr_alloc();
 
-    ctx->src_frames = sp_frame_fifo_create(8, FRAME_FIFO_BLOCK_NO_INPUT);
-    ctx->dst_packets = sp_packet_fifo_create(0, 0);
+    ctx->src_frames = sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
+    ctx->dst_packets = sp_packet_fifo_create(ctx, 0, 0);
     ctx->initialized = ATOMIC_VAR_INIT(0);
     ctx->running = ATOMIC_VAR_INIT(0);
 

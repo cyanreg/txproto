@@ -43,13 +43,13 @@ static void PRIV_RENAME(fifo_destroy)(void *opaque, uint8_t *data)
     av_free(ctx);
 }
 
-AVBufferRef *RENAME(fifo_create)(int max_queued, FNAME block_flags)
+AVBufferRef *RENAME(fifo_create)(void *opaque, int max_queued, FNAME block_flags)
 {
     SNAME *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return NULL;
 
-    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx), PRIV_RENAME(fifo_destroy), NULL, 0);
+    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx), PRIV_RENAME(fifo_destroy), opaque, 0);
     if (!ctx_ref) {
         av_free(ctx);
         return NULL;
@@ -239,11 +239,11 @@ distribute:
 
         int ret = RENAME(fifo_push)(dist, cloned);
         av_buffer_unref(&dist);
-        if (ret != AVERROR(ENOBUFS)) {
+        if (ret == AVERROR(ENOMEM)) {
             sp_bufferlist_iter_halt(ctx->dests);
             err = ret;
             break;
-        } else if (!err) {
+        } else if (ret && !err) {
             err = AVERROR(ENOBUFS);
         }
     }

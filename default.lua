@@ -82,6 +82,16 @@ state = {
                 pix_fmts = "nv12",
             },
         },
+        drawtext = {
+            filter = "drawtext",
+            options = {
+                text = "Testing stuff",
+                x = 0,
+                y = 0,
+                fontcolor = "White",
+                fontsize = 90,
+            },
+        },
         amix = {
             name = "mixer", -- Custom name for logging, if missing will be derived from filter name
             filter = "amix",
@@ -241,11 +251,12 @@ function initial_config(...)
     tx.link(state.muxers.file_2, state.encoders.video_2)
     tx.link(state.muxers.file_2, state.encoders.audio_2)
 
-    tx.link(state.encoders.video_1, state.filters.format)
-    tx.link(state.encoders.video_2, state.filters.format)
+    tx.link(state.encoders.video_1, state.filters.drawtext)
+    tx.link(state.encoders.video_2, state.filters.drawtext)
     tx.link(state.encoders.audio_1, state.filters.amix)
     tx.link(state.encoders.audio_2, state.filters.amix)
 
+    tx.link(state.filters.drawtext, state.filters.format)
     tx.link(state.filters.format, state.filters.overlay)
     tx.link(state.filters.overlay, state.filters.crop, "screen")
     tx.link(state.filters.overlay, state.filters.scale, "camera")
@@ -267,6 +278,7 @@ function initial_config(...)
     tx.ctrl(state.filters.scale, "start")
     tx.ctrl(state.filters.overlay, "start")
     tx.ctrl(state.filters.format, "start")
+    tx.ctrl(state.filters.drawtext, "start")
     tx.ctrl(state.filters.amix, "start")
     tx.ctrl(state.encoders.video_1, "start")
     tx.ctrl(state.encoders.video_2, "start")

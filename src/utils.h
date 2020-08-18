@@ -138,7 +138,7 @@ static av_always_inline type *create_ ##shortname(ctx *dctx)                   \
     return sctx;                                                               \
 }                                                                              \
                                                                                \
-static av_always_inline void remove_ ##shortname(ctx *dctx, type *entry)       \
+static av_unused av_always_inline void remove_ ##shortname(ctx *dctx, type *entry)       \
 {                                                                              \
     for (int i = 0; i < dctx->num; i++) {                                      \
         if (dctx->array[i] != entry)                                           \
@@ -156,7 +156,7 @@ static av_always_inline void remove_ ##shortname(ctx *dctx, type *entry)       \
     }                                                                          \
 }                                                                              \
                                                                                \
-static av_always_inline type *get_at_index_ ##shortname(ctx *dctx, int idx)    \
+static av_unused av_always_inline type *get_at_index_ ##shortname(ctx *dctx, int idx)    \
 {                                                                              \
     if (idx > (dctx->num - 1))                                                 \
         return NULL;                                                           \

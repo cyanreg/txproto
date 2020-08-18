@@ -244,7 +244,7 @@ distribute:
             err = ret;
             break;
         } else if (ret && !err) {
-            err = AVERROR(ENOBUFS);
+            err = ret;
         }
     }
 

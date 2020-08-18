@@ -110,7 +110,7 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
         LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
         err = lua_parse_table_to_avopt(ctx, L, dst);                          \
         if (err < 0)                                                          \
-            LUA_ERROR("Unable to parse options: %s!", av_err2str(err));       \
+            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
         lua_pop(L, 1);                                                        \
     } while (0)
 
@@ -119,7 +119,16 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
         LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
         err = lua_parse_table_to_avdict(L, &dst);                             \
         if (err < 0)                                                          \
-            LUA_ERROR("Unable to parse options: %s!", av_err2str(err));       \
+            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
+        lua_pop(L, 1);                                                        \
+    } while (0)
+
+#define GET_OPTS_LIST(dst, key)                                               \
+    do {                                                                      \
+        LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
+        err = lua_parse_table_to_list(L, &dst);                               \
+        if (err < 0)                                                          \
+            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
         lua_pop(L, 1);                                                        \
     } while (0)
 
@@ -193,6 +202,28 @@ static int lua_parse_table_to_avopt(MainContext *ctx, lua_State *L, void *dst)
 
         lua_pop(L, 1);
     }
+
+    return 0;
+}
+
+static int lua_parse_table_to_list(lua_State *L, char ***dst)
+{
+    lua_pushnil(L);
+
+    char **str = NULL;
+    int num = 0;
+
+    while (lua_next(L, -2)) {
+        if (!lua_isstring(L, -1))
+            return AVERROR(EINVAL);
+        str = av_realloc(str, sizeof(*str) * (num + 1));
+        str[num++] = av_strdup(lua_tostring(L, -1));
+        lua_pop(L, 1);
+    }
+
+    str = av_realloc(str, sizeof(*str) * (num + 1));
+    str[num++] = NULL;
+    *dst = str;
 
     return 0;
 }
@@ -354,7 +385,6 @@ static int lua_create_io(lua_State *L)
 
     ctx->api_fns[i]->init_io(ctx->api_ctx[i], entry, opts);
     sp_bufferlist_append_noref(ctx->lua_buf_refs, entry);
-//    av_dict_free(&opts);
 
     lua_pushlightuserdata(L, entry);
 
@@ -377,10 +407,28 @@ static int lua_create_filter(lua_State *L)
     const char *name = NULL;
     GET_OPT_STR(name, "name");
 
+    const char *filter = NULL;
+    GET_OPT_STR(filter, "filter");
+
     AVDictionary *opts = NULL;
     GET_OPTS_DICT(opts, "options");
 
-    err = sp_init_filter_single(fctx_ref, name, opts, NULL, AV_HWDEVICE_TYPE_NONE);
+    enum AVPixelFormat req_fmt = AV_PIX_FMT_NONE;
+    const char *temp_str = NULL;
+    GET_OPT_STR(temp_str, "pix_fmt");
+    if (temp_str) {
+        req_fmt = av_get_pix_fmt(temp_str);
+        if (req_fmt == AV_PIX_FMT_NONE && strcmp(temp_str, "none"))
+            LUA_ERROR("Invalid pixel format \"%s\"!\n", temp_str);
+    }
+
+    char **in_pads = NULL;
+    GET_OPTS_LIST(in_pads, "input_pads");
+
+    char **out_pads = NULL;
+    GET_OPTS_LIST(out_pads, "output_pads");
+
+    err = sp_init_filter_single(fctx_ref, name, filter, in_pads, out_pads, req_fmt, opts, NULL, AV_HWDEVICE_TYPE_NONE);
     if (err < 0)
         LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
 
@@ -397,10 +445,8 @@ typedef struct SPLinkSourceEncoderCtx {
 static int api_link_src_enc_cb(AVBufferRef *opaque, void *src_ctx)
 {
     SPLinkSourceEncoderCtx *ctx = (SPLinkSourceEncoderCtx *)opaque->data;
-
     IOSysEntry *sctx = (IOSysEntry *)ctx->src_ref->data;
     EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
-
     return sp_frame_fifo_mirror(ectx->src_frames, sctx->frames);
 }
 
@@ -408,6 +454,70 @@ static void api_link_src_enc_free(void *opaque, uint8_t *data)
 {
     SPLinkSourceEncoderCtx *ctx = (SPLinkSourceEncoderCtx *)data;
     av_buffer_unref(&ctx->src_ref);
+    av_buffer_unref(&ctx->enc_ref);
+    av_free(data);
+}
+
+typedef struct SPLinkSourceFilterCtx {
+    AVBufferRef *src_ref;
+    AVBufferRef *filt_ref;
+    const char *filt_pad;
+} SPLinkSourceFilterCtx;
+
+static int api_link_src_filt_cb(AVBufferRef *opaque, void *src_ctx)
+{
+    SPLinkSourceFilterCtx *ctx = (SPLinkSourceFilterCtx *)opaque->data;
+    IOSysEntry *sctx = (IOSysEntry *)ctx->src_ref->data;
+    return sp_map_fifo_to_pad(ctx->filt_ref, sctx->frames, ctx->filt_pad, 0);
+}
+
+static void api_link_src_filt_free(void *opaque, uint8_t *data)
+{
+    SPLinkSourceFilterCtx *ctx = (SPLinkSourceFilterCtx *)data;
+    av_buffer_unref(&ctx->src_ref);
+    av_buffer_unref(&ctx->filt_ref);
+    av_free(data);
+}
+
+typedef struct SPLinkFilterFilterCtx {
+    AVBufferRef *src_ref;
+    AVBufferRef *dst_ref;
+    const char *src_filt_pad;
+    const char *dst_filt_pad;
+} SPLinkFilterFilterCtx;
+
+static int api_link_filt_filt_cb(AVBufferRef *opaque, void *src_ctx)
+{
+    SPLinkFilterFilterCtx *ctx = (SPLinkFilterFilterCtx *)opaque->data;
+    return sp_map_pad_to_pad(ctx->dst_ref, ctx->dst_filt_pad,
+                             ctx->src_ref, ctx->src_filt_pad);
+}
+
+static void api_link_filt_filt_free(void *opaque, uint8_t *data)
+{
+    SPLinkFilterFilterCtx *ctx = (SPLinkFilterFilterCtx *)data;
+    av_buffer_unref(&ctx->src_ref);
+    av_buffer_unref(&ctx->dst_ref);
+    av_free(data);
+}
+
+typedef struct SPLinkFilterEncoderCtx {
+    AVBufferRef *filt_ref;
+    AVBufferRef *enc_ref;
+    const char *filt_pad;
+} SPLinkFilterEncoderCtx;
+
+static int api_link_filt_enc_cb(AVBufferRef *opaque, void *src_ctx)
+{
+    SPLinkFilterEncoderCtx *ctx = (SPLinkFilterEncoderCtx *)opaque->data;
+    EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
+    return sp_map_fifo_to_pad(ctx->filt_ref, ectx->src_frames, ctx->filt_pad, 1);
+}
+
+static void api_link_filt_enc_free(void *opaque, uint8_t *data)
+{
+    SPLinkFilterEncoderCtx *ctx = (SPLinkFilterEncoderCtx *)data;
+    av_buffer_unref(&ctx->filt_ref);
     av_buffer_unref(&ctx->enc_ref);
     av_free(data);
 }
@@ -446,8 +556,19 @@ static int lua_link_objects(lua_State *L)
 
     pthread_mutex_lock(&ctx->lock);
 
-    if (lua_gettop(L) != 2)
-        LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
+    int nargs = lua_gettop(L);
+    if (nargs != 2 && nargs != 3 && nargs != 4)
+        LUA_ERROR("Invalid number of arguments, expected 2, 3 or 4, got %i!", nargs);
+
+    const char *extra_args[2] = { 0 };
+    for (; nargs > 2; nargs--) {
+        if (!lua_isstring(L, -1))
+            LUA_ERROR("Invalid argument, expected \"string\", got \"%s\"!",
+                      lua_typename(L, lua_type(L, -1)));
+        extra_args[nargs - 3] = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+
     if (!lua_istable(L, -2) && !lua_islightuserdata(L, -2))
         LUA_ERROR("Invalid argument, expected \"table\" or \"lightuserdata\", got \"%s\"!", lua_typename(L, lua_type(L, -2)));
     if (!lua_istable(L, -1) && !lua_islightuserdata(L, -1))
@@ -526,18 +647,18 @@ static int lua_link_objects(lua_State *L)
         LUA_INTERFACE_END(0);
     } else if (dst_class->category == AV_CLASS_CATEGORY_ENCODER &&
                src_class->category == AV_CLASS_CATEGORY_FILTER) {
-#if 0
-//        IOSysEntry *sctx = (IOSysEntry *)src_ctx_ref->data;
+        FilterContext *fctx = (FilterContext *)src_ctx_ref->data;
         EncodingContext *ectx = (EncodingContext *)dst_ctx_ref->data;
 
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkSourceEncoderCtx, link_src_enc, api_link_src_enc_free, NULL)
-        link_src_enc->src_ref = av_buffer_ref(src_ctx_ref);
-        link_src_enc->enc_ref = av_buffer_ref(dst_ctx_ref);
+        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkFilterEncoderCtx, link_filt_enc, api_link_filt_enc_free, NULL)
+        link_filt_enc->filt_ref = av_buffer_ref(src_ctx_ref);
+        link_filt_enc->enc_ref = av_buffer_ref(dst_ctx_ref);
+        link_filt_enc->filt_pad = av_strdup(extra_args[0]);
 
         enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_TYPE_LINK | SP_EVENT_ON_COMMIT;
-        AVBufferRef *link_event = sp_event_create(api_link_src_enc_cb, NULL,
-                                                  flags, link_src_enc_ref,
-                                                  sp_event_gen_identifier(sctx, ectx, SP_EVENT_TYPE_LINK));
+        AVBufferRef *link_event = sp_event_create(api_link_filt_enc_cb, NULL,
+                                                  flags, link_filt_enc_ref,
+                                                  sp_event_gen_identifier(fctx, ectx, SP_EVENT_TYPE_LINK));
 
         err = sp_bufferlist_append_event(ctx->commit_list, link_event);
         av_buffer_unref(&link_event);
@@ -546,14 +667,61 @@ static int lua_link_objects(lua_State *L)
             LUA_ERROR("Error linking: %s\n", av_err2str(err));
 
         LUA_INTERFACE_END(0);
-#endif
-    } else if (dst_class->category == AV_CLASS_CATEGORY_ENCODER &&
+    } else if (dst_class->category == AV_CLASS_CATEGORY_FILTER &&
                (src_class->category == AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT ||
                 src_class->category == AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT ||
                 src_class->category == AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT)) {
+        IOSysEntry *sctx = (IOSysEntry *)src_ctx_ref->data;
+        FilterContext *fctx = (FilterContext *)dst_ctx_ref->data;
 
+        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkSourceFilterCtx, link_src_filt, api_link_src_filt_free, NULL)
+        link_src_filt->src_ref = av_buffer_ref(src_ctx_ref);
+        link_src_filt->filt_ref = av_buffer_ref(dst_ctx_ref);
+        link_src_filt->filt_pad = av_strdup(extra_args[0]);
+
+        enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_TYPE_LINK | SP_EVENT_ON_COMMIT;
+        AVBufferRef *link_event = sp_event_create(api_link_src_filt_cb, NULL,
+                                                  flags, link_src_filt_ref,
+                                                  sp_event_gen_identifier(sctx, fctx, SP_EVENT_TYPE_LINK));
+
+        err = sp_bufferlist_append_event(ctx->commit_list, link_event);
+        av_buffer_unref(&link_event);
+
+        if (err < 0)
+            LUA_ERROR("Error linking: %s\n", av_err2str(err));
+
+        LUA_INTERFACE_END(0);
     } else if (dst_class->category == AV_CLASS_CATEGORY_FILTER &&
                src_class->category == AV_CLASS_CATEGORY_FILTER) {
+        FilterContext *f1ctx = (FilterContext *)src_ctx_ref->data;
+        FilterContext *f2ctx = (FilterContext *)dst_ctx_ref->data;
+
+        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkFilterFilterCtx, link_filt_filt, api_link_filt_filt_free, NULL)
+        link_filt_filt->src_ref = av_buffer_ref(src_ctx_ref);
+        link_filt_filt->dst_ref = av_buffer_ref(dst_ctx_ref);
+
+        if (extra_args[0])
+            link_filt_filt->src_filt_pad = av_strdup(extra_args[0]);
+        else if (extra_args[1])
+            link_filt_filt->src_filt_pad = av_strdup(extra_args[1]);
+
+        if (extra_args[1])
+            link_filt_filt->dst_filt_pad = av_strdup(extra_args[1]);
+        else if (extra_args[0])
+            link_filt_filt->dst_filt_pad = av_strdup(extra_args[0]);
+
+        enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_TYPE_LINK | SP_EVENT_ON_COMMIT;
+        AVBufferRef *link_event = sp_event_create(api_link_filt_filt_cb, NULL,
+                                                  flags, link_filt_filt_ref,
+                                                  sp_event_gen_identifier(f1ctx, f2ctx, SP_EVENT_TYPE_LINK));
+
+        err = sp_bufferlist_append_event(ctx->commit_list, link_event);
+        av_buffer_unref(&link_event);
+
+        if (err < 0)
+            LUA_ERROR("Error linking: %s\n", av_err2str(err));
+
+        LUA_INTERFACE_END(0);
     }
 
     LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",
@@ -766,7 +934,8 @@ static int lua_ctrl(lua_State *L)
         src_class->category != AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT &&
         src_class->category != AV_CLASS_CATEGORY_DEVICE_AUDIO_OUTPUT &&
         src_class->category != AV_CLASS_CATEGORY_ENCODER &&
-        src_class->category != AV_CLASS_CATEGORY_MUXER)
+        src_class->category != AV_CLASS_CATEGORY_MUXER &&
+        src_class->category != AV_CLASS_CATEGORY_FILTER)
         LUA_ERROR("Invalid class, expected video/audio input/output, muxer or encoder, got \"%s\"!\n",
                   sp_map_class_to_string(src_class->category));
 
@@ -794,6 +963,8 @@ static int lua_ctrl(lua_State *L)
         fn = sp_encoder_ctrl;
     } else if (src_class->category == AV_CLASS_CATEGORY_MUXER) {
         fn = sp_muxer_ctrl;
+    } else if (src_class->category == AV_CLASS_CATEGORY_FILTER) {
+        fn = sp_filter_ctrl;
     } else {
         IOSysEntry *sctx = (IOSysEntry *)src_ctx_ref->data;
         fn = sctx->ctrl;
@@ -1400,15 +1571,17 @@ end:
     av_free(ctx->api_fns);
     av_free(ctx->api_ctx);
 
-    if (ctx->lua) {
-        luaL_unref(ctx->lua, LUA_REGISTRYINDEX, ctx->source_update_cb_ref);
-        lua_close(ctx->lua);
-    }
-
     sp_bufferlist_free(&ctx->lua_buf_refs);
 
     sp_bufferlist_free(&ctx->commit_list);
     sp_bufferlist_free(&ctx->discard_list);
+
+    if (ctx->lua) {
+        if (ctx->source_update_cb_ref != LUA_NOREF &&
+            ctx->source_update_cb_ref != LUA_REFNIL)
+            luaL_unref(ctx->lua, LUA_REGISTRYINDEX, ctx->source_update_cb_ref);
+        lua_close(ctx->lua);
+    }
 
     pthread_mutex_destroy(&ctx->lock);
     av_dict_free(&sp_component_log_levels);

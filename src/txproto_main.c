@@ -424,13 +424,21 @@ static int lua_create_filter(lua_State *L)
             LUA_ERROR("Invalid pixel format \"%s\"!\n", temp_str);
     }
 
+    enum AVHWDeviceType hwctx_type = AV_HWDEVICE_TYPE_NONE;
+    GET_OPT_STR(temp_str, "hwctx");
+    if (temp_str) {
+        hwctx_type = av_hwdevice_find_type_by_name(temp_str);
+        if (hwctx_type == AV_HWDEVICE_TYPE_NONE && strcmp(temp_str, "none"))
+            LUA_ERROR("Invalid hardware context \"%s\"!\n", temp_str);
+    }
+
     char **in_pads = NULL;
     GET_OPTS_LIST(in_pads, "input_pads");
 
     char **out_pads = NULL;
     GET_OPTS_LIST(out_pads, "output_pads");
 
-    err = sp_init_filter_single(fctx_ref, name, filter, in_pads, out_pads, req_fmt, opts, NULL, AV_HWDEVICE_TYPE_NONE);
+    err = sp_init_filter_single(fctx_ref, name, filter, in_pads, out_pads, req_fmt, opts, NULL, hwctx_type);
     if (err < 0)
         LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
 

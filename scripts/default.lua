@@ -65,23 +65,6 @@ state = {
                 h = 360,
             },
         },
-        overlay = {
-            filter = "overlay",
-            options = {
-                x = 0,
-                y = 0,
-            },
-            input_pads = { -- Custom pad names, will be set but completely ignored if filter has only 1 input pad
-                "screen",
-                "camera",
-            },
-        },
-        format = {
-            filter = "format",
-            options = {
-                pix_fmts = "nv12",
-            },
-        },
         drawtext = {
             filter = "drawtext",
             options = {
@@ -106,7 +89,17 @@ state = {
                 "output",
             },
         }
-    }
+    },
+    graphs = {
+        overlay = {
+            name = "overlay",
+            graph = "overlay=x=0:y=0,format=nv12",
+            input_pads = { -- Custom pad names, will be set but completely ignored if filter has only 1 input pad
+                "screen",
+                "camera",
+            },
+        },
+    },
 }
 
 function dump_table_to_string(node, tree, indentation)
@@ -246,6 +239,10 @@ function initial_config(...)
         tx.create_filter(filter)
     end
 
+    for name,graph in pairs(state.graphs) do
+        tx.create_filtergraph(graph)
+    end
+
     tx.link(state.muxers.file_1, state.encoders.video_1)
     tx.link(state.muxers.file_1, state.encoders.audio_1)
     tx.link(state.muxers.file_2, state.encoders.video_2)
@@ -256,10 +253,9 @@ function initial_config(...)
     tx.link(state.encoders.audio_1, state.filters.amix)
     tx.link(state.encoders.audio_2, state.filters.amix)
 
-    tx.link(state.filters.drawtext, state.filters.format)
-    tx.link(state.filters.format, state.filters.overlay)
-    tx.link(state.filters.overlay, state.filters.crop, "screen")
-    tx.link(state.filters.overlay, state.filters.scale, "camera")
+    tx.link(state.filters.drawtext, state.graphs.overlay)
+    tx.link(state.graphs.overlay, state.filters.crop, "screen")
+    tx.link(state.graphs.overlay, state.filters.scale, "camera")
     tx.link(state.filters.crop, video_source)
     tx.link(state.filters.scale, video_cam)
 
@@ -276,8 +272,7 @@ function initial_config(...)
     tx.ctrl(audio_mic, "start")
     tx.ctrl(state.filters.crop, "start")
     tx.ctrl(state.filters.scale, "start")
-    tx.ctrl(state.filters.overlay, "start")
-    tx.ctrl(state.filters.format, "start")
+    tx.ctrl(state.graphs.overlay, "start")
     tx.ctrl(state.filters.drawtext, "start")
     tx.ctrl(state.filters.amix, "start")
     tx.ctrl(state.encoders.video_1, "start")

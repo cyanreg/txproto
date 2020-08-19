@@ -164,9 +164,20 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
 
 static void add_pads(FilterContext *ctx, int is_out, AVFilterInOut *fio, int first_init)
 {
+    int cust_pad_name_end = 0;
+    char **cust_pad_name = is_out ? ctx->out_pad_names : ctx->in_pad_names;
+
     int index = 0;
-    for (; fio; fio = fio->next)
-        add_pad(ctx, is_out, index++, fio->filter_ctx, fio->pad_idx, fio->name, first_init);
+    for (; fio; fio = fio->next) {
+        const char *pad_name = fio->name;
+        if (cust_pad_name && !cust_pad_name_end) {
+            if (cust_pad_name[index])
+                pad_name = cust_pad_name[index];
+            else
+                cust_pad_name_end = 1;
+        }
+        add_pad(ctx, is_out, index++, fio->filter_ctx, fio->pad_idx, pad_name, first_init);
+    }
 }
 
 static void add_pads_direct(FilterContext *ctx, int is_out, AVFilterContext *fctx,

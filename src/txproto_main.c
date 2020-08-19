@@ -447,6 +447,52 @@ static int lua_create_filter(lua_State *L)
     LUA_INTERFACE_END(0);
 }
 
+static int lua_create_filtergraph(lua_State *L)
+{
+    int err;
+    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(LUA_PUB_PREFIX".create_filtergraph")
+    LUA_INTERFACE_BOILERPLATE();
+
+    AVBufferRef *fctx_ref = sp_filter_alloc();
+    sp_bufferlist_append_noref(ctx->lua_buf_refs, fctx_ref);
+
+    LUA_SET_CLEANUP(fctx_ref);
+
+    const char *name = NULL;
+    GET_OPT_STR(name, "name");
+
+    const char *graph = NULL;
+    GET_OPT_STR(graph, "graph");
+
+    AVDictionary *opts = NULL;
+    GET_OPTS_DICT(opts, "options");
+
+    enum AVHWDeviceType hwctx_type = AV_HWDEVICE_TYPE_NONE;
+    const char *temp_str = NULL;
+    GET_OPT_STR(temp_str, "hwctx");
+    if (temp_str) {
+        hwctx_type = av_hwdevice_find_type_by_name(temp_str);
+        if (hwctx_type == AV_HWDEVICE_TYPE_NONE && strcmp(temp_str, "none"))
+            LUA_ERROR("Invalid hardware context \"%s\"!\n", temp_str);
+    }
+
+    char **in_pads = NULL;
+    GET_OPTS_LIST(in_pads, "input_pads");
+
+    char **out_pads = NULL;
+    GET_OPTS_LIST(out_pads, "output_pads");
+
+    err = sp_init_filter_graph(fctx_ref, name, graph, in_pads, out_pads, opts, hwctx_type);
+    if (err < 0)
+        LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
+
+    SET_OPT_LIGHTUSERDATA(fctx_ref, LUA_PRIV_PREFIX "_priv");
+
+    LUA_INTERFACE_END(0);
+}
+
 typedef struct SPLinkSourceEncoderCtx {
     AVBufferRef *src_ref;
     AVBufferRef *enc_ref;
@@ -1108,7 +1154,7 @@ static const struct luaL_Reg lua_lib_fns[] = {
     { "create_muxer", lua_create_muxer },
     { "create_encoder", lua_create_encoder },
     { "create_filter", lua_create_filter },
-//    { "create_filterchain", lua_create_filterchain },
+    { "create_filtergraph", lua_create_filtergraph },
 
     { "link", lua_link_objects },
 //    { "unlink", lua_unlink_objects },

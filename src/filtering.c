@@ -476,7 +476,8 @@ static void *filtering_thread(void *data)
             }
 
             err = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame,
-                                               AV_BUFFERSRC_FLAG_PUSH);
+                                               AV_BUFFERSRC_FLAG_PUSH | AV_BUFFERSRC_FLAG_KEEP_REF);
+            av_frame_free(&in_frame);
             if (err < 0) {
                 av_log(ctx, AV_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
                 goto end;
@@ -517,6 +518,7 @@ static void *filtering_thread(void *data)
                     out_pad->dropped_frames_msg_state = 0;
                 }
             }
+            av_frame_free(&filt_frame);
         }
     }
 

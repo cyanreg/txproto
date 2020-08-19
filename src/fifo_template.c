@@ -192,7 +192,6 @@ int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
 
     int err = 0;
     AVBufferRef *dist = NULL;
-    TYPE *in_clone = CLONE_FN(in);
 
     SNAME *ctx = (SNAME *)dst->data;
     pthread_mutex_lock(&ctx->lock);
@@ -205,7 +204,6 @@ int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
         (ctx->num_queued > (ctx->max_queued + 1))) {
         if (!(ctx->block_flags & FRENAME(BLOCK_MAX_OUTPUT))) {
             err = AVERROR(ENOBUFS);
-            FREE_FN(&in_clone);
             goto unlock;
         }
 
@@ -218,26 +216,17 @@ int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
     if (!fq) {
         ctx->queued_alloc_size = oalloc;
         err = AVERROR(ENOMEM);
-        FREE_FN(&in_clone);
         goto unlock;
     }
 
     ctx->queued = fq;
-    ctx->queued[ctx->num_queued++] = in_clone;
+    ctx->queued[ctx->num_queued++] = CLONE_FN(in);
 
     pthread_cond_signal(&ctx->cond_in);
 
 distribute:
     while ((dist = sp_bufferlist_iter_ref(ctx->dests))) {
-        TYPE *cloned = CLONE_FN(in_clone);
-        if (in_clone && !cloned) {
-            err = AVERROR(ENOMEM);
-            av_buffer_unref(&dist);
-            sp_bufferlist_iter_halt(ctx->dests);
-            break;
-        }
-
-        int ret = RENAME(fifo_push)(dist, cloned);
+        int ret = RENAME(fifo_push)(dist, in);
         av_buffer_unref(&dist);
         if (ret == AVERROR(ENOMEM)) {
             sp_bufferlist_iter_halt(ctx->dests);

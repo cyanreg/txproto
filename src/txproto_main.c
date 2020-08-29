@@ -1302,6 +1302,8 @@ int main(int argc, char *argv[])
     ctx->epoch_value = ATOMIC_VAR_INIT(0);
     ctx->source_update_cb_ref = LUA_NOREF;
 
+    AVDictionary *lua_globals = NULL;
+
     /* Options */
     int disable_repl = 0;
     const char *script_name = NULL;
@@ -1429,7 +1431,6 @@ int main(int argc, char *argv[])
     luaL_setfuncs(ctx->lua, lua_lib_fns, 1);
     lua_setglobal(ctx->lua, LUA_PUB_PREFIX);
 
-    AVDictionary *lua_globals = NULL;
     lua_pushglobaltable(ctx->lua);
     lua_pushnil(ctx->lua);
     while (lua_next(ctx->lua, -2)) {

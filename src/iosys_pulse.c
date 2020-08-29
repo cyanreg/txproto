@@ -133,6 +133,9 @@ static const uint64_t pa_to_lavu_ch_map(const pa_channel_map *ch_map)
     for (int i = 0; i < ch_map->channels; i++)
         map |= channel_map[ch_map->map[i]];
 
+    if (!map)
+        map = av_get_default_channel_layout(ch_map->channels);
+
     return map;
 }
 
@@ -340,8 +343,12 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     /* Check for crazy layouts */
     uint64_t lavu_ch_map = pa_to_lavu_ch_map(&req_map);
-    if (av_get_default_channel_layout(req_map.channels) != lavu_ch_map)
-        pa_channel_map_init_stereo(&req_map);
+    if (av_get_default_channel_layout(req_map.channels) != lavu_ch_map) {
+        if (req_map.channels == 1)
+            pa_channel_map_init_mono(&req_map);
+        else
+            pa_channel_map_init_stereo(&req_map);
+    }
 
     priv->stream = pa_stream_new(ctx->pa_context, PROJECT_NAME, &req_ss, &req_map);
     if (!priv->stream) {
@@ -439,6 +446,13 @@ typedef struct PulseIOCtrlCtx {
     atomic_int_fast64_t *epoch;
 } PulseIOCtrlCtx;
 
+static void pulse_ioctx_ctrl_free(void *opaque, uint8_t *data)
+{
+    PulseIOCtrlCtx *event = (PulseIOCtrlCtx *)data;
+    av_dict_free(&event->opts);
+    av_free(data);
+}
+
 static int pulse_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
 {
     PulseIOCtrlCtx *event = (PulseIOCtrlCtx *)opaque->data;
@@ -480,7 +494,7 @@ static int pulse_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg
         return AVERROR(ENOTSUP);
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(PulseIOCtrlCtx, ctrl_ctx, av_buffer_default_free, NULL)
+    SP_EVENT_BUFFER_CTX_ALLOC(PulseIOCtrlCtx, ctrl_ctx, pulse_ioctx_ctrl_free, NULL)
 
     ctrl_ctx->ctrl = ctrl;
     if (ctrl & SP_EVENT_CTRL_OPTS)

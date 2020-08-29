@@ -423,18 +423,19 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     pthread_mutex_destroy(&ctx_ref_lock);
 }
 
-static int find_render_node(char *node, size_t maxlen)
+static int find_render_node(char **node)
 {
     drmDevice *devices[64];
 
     int n = drmGetDevices2(0, devices, SP_ARRAY_ELEMS(devices));
-    for (int i = 0; i < n; i++) {
+    for (int i = (n - 1); i >= 0; i--) {
         drmDevice *dev = devices[i];
         if (!(dev->available_nodes & (1 << DRM_NODE_RENDER)))
             continue;
-
-        strncpy(node, dev->nodes[DRM_NODE_RENDER], maxlen - 1);
-        node[maxlen - 1] = '\0';
+        av_freep(node);
+        *node = av_strdup(dev->nodes[DRM_NODE_RENDER]);
+        if (!(*node))
+            return AVERROR(ENOMEM);
         drmFreeDevices(devices, n);
         return 0;
     }
@@ -446,16 +447,18 @@ static int find_render_node(char *node, size_t maxlen)
 static int init_drm_hwcontext(WaylandCtx *ctx)
 {
     int err;
-    char render_node[256];
+    char *render_node = NULL;
 
-    if ((err = find_render_node(render_node, sizeof(render_node)))) {
+    if ((err = find_render_node(&render_node))) {
         av_log(ctx, AV_LOG_ERROR, "Failed to find a DRM device: %s!\n",
                av_err2str(err));
         return err;
     }
 
-    if ((err = av_hwdevice_ctx_create(&ctx->drm_device_ref, AV_HWDEVICE_TYPE_DRM,
-                                      render_node, NULL, 0))) {
+    err = av_hwdevice_ctx_create(&ctx->drm_device_ref, AV_HWDEVICE_TYPE_DRM,
+                                 render_node, NULL, 0);
+    av_free(render_node);
+    if (err < 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device %s: %s!\n",
                render_node, av_err2str(err));
         return err;

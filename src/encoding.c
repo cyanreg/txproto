@@ -70,8 +70,16 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
             ctx->avctx->height = ctx->height;
         }
 
-        if (ctx->pix_fmt != AV_PIX_FMT_NONE)
+        if (ctx->pix_fmt != AV_PIX_FMT_NONE) {
             ctx->avctx->pix_fmt = ctx->pix_fmt;
+        } else {
+            const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(ctx->avctx->pix_fmt);
+            if (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) {
+                AVBufferRef *input_frames_ref = conf->hw_frames_ctx;
+                AVHWFramesContext *hwfc = (AVHWFramesContext *)input_frames_ref->data;
+                ctx->avctx->pix_fmt = hwfc->sw_format;
+            }
+        }
 
         if (fe->avg_frame_rate.num && fe->avg_frame_rate.den)
             ctx->avctx->framerate = fe->avg_frame_rate;

@@ -563,10 +563,12 @@ static int sp_filter_init_graph(FilterContext *ctx)
         return err;
     }
 
-    char *graph_dump = avfilter_graph_dump(ctx->graph, NULL);
-    if (graph_dump)
-        av_log(NULL, AV_LOG_INFO, "\n%s", graph_dump);
-    av_free(graph_dump);
+    if (ctx->dump_graph) {
+        char *graph_dump = avfilter_graph_dump(ctx->graph, NULL);
+        if (graph_dump)
+            av_log(NULL, AV_LOG_INFO, "\n%s", graph_dump);
+        av_free(graph_dump);
+    }
 
     pthread_create(&ctx->filter_thread, NULL, filtering_thread, ctx);
 
@@ -579,6 +581,13 @@ typedef struct FilterIOCtrlCtx {
     atomic_int_fast64_t *epoch;
 } FilterIOCtrlCtx;
 
+static void filter_ioctx_ctrl_free(void *opaque, uint8_t *data)
+{
+    FilterIOCtrlCtx *event = (FilterIOCtrlCtx *)data;
+    av_dict_free(&event->opts);
+    av_free(data);
+}
+
 static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
 {
     FilterIOCtrlCtx *event = (FilterIOCtrlCtx *)opaque->data;
@@ -590,6 +599,20 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         for (int i = 0; i < ctx->num_in_pads; i++)
             sp_frame_fifo_push(ctx->in_pads[i]->fifo, NULL);
         pthread_join(ctx->filter_thread, NULL);
+    } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        const char *tmp_val = NULL;
+        if ((tmp_val = dict_get(event->opts, "dump_graph")))
+            if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
+                ctx->dump_graph = 1;
+        if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
+            long int len = strtol(tmp_val, NULL, 10);
+            if (len < 0) {
+                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+            } else {
+                for (int i = 0; i < ctx->num_in_pads; i++)
+                    sp_frame_fifo_set_max_queued(ctx->in_pads[i]->fifo, len);
+            }
+        }
     } else {
         return AVERROR(ENOTSUP);
     }
@@ -617,11 +640,14 @@ int sp_filter_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
         return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+    } else if (ctrl & ~(SP_EVENT_CTRL_START |
+                        SP_EVENT_CTRL_STOP |
+                        SP_EVENT_CTRL_OPTS |
+                        SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(FilterIOCtrlCtx, ctrl_ctx, av_buffer_default_free, NULL)
+    SP_EVENT_BUFFER_CTX_ALLOC(FilterIOCtrlCtx, ctrl_ctx, filter_ioctx_ctrl_free, NULL)
 
     ctrl_ctx->ctrl = ctrl;
     if (ctrl & SP_EVENT_CTRL_OPTS)

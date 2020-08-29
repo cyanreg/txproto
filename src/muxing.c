@@ -43,12 +43,9 @@ static void *muxing_thread(void *arg)
 
     ctx->avf->flags |= AVFMT_FLAG_AUTO_BSF;
 
-    const char *low_latency_val = NULL;
-    if ((low_latency_val = dict_get(ctx->priv_options, "low_latency"))) {
-        if (strtol(low_latency_val, NULL, 10) != 0) {
-            ctx->avf->flags |= AVFMT_FLAG_FLUSH_PACKETS | AVFMT_FLAG_NOBUFFER;
-            ctx->avf->pb->min_packet_size = 0;
-        }
+    if (ctx->low_latency) {
+        ctx->avf->flags |= AVFMT_FLAG_FLUSH_PACKETS | AVFMT_FLAG_NOBUFFER;
+        ctx->avf->pb->min_packet_size = 0;
     }
 
 	err = avformat_write_header(ctx->avf, NULL);
@@ -65,8 +62,8 @@ static void *muxing_thread(void *arg)
 
     pthread_mutex_unlock(&ctx->lock);
 
-    /* Debug print */
-//    av_dump_format(ctx->avf, 0, ctx->out_url, 1);
+    if (ctx->dump_info)
+        av_dump_format(ctx->avf, 0, ctx->out_url, 1);
 
     int flush = 0;
     int fmt_can_flush = ctx->avf->oformat->flags & AVFMT_ALLOW_FLUSH;
@@ -281,6 +278,13 @@ typedef struct MuxerIOCtrlCtx {
     atomic_int_fast64_t *epoch;
 } MuxerIOCtrlCtx;
 
+static void muxer_ioctx_ctrl_free(void *opaque, uint8_t *data)
+{
+    MuxerIOCtrlCtx *event = (MuxerIOCtrlCtx *)data;
+    av_dict_free(&event->opts);
+    av_free(data);
+}
+
 static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
 {
     MuxerIOCtrlCtx *event = (MuxerIOCtrlCtx *)opaque->data;
@@ -298,6 +302,21 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         if (atomic_load(&ctx->running)) {
             sp_packet_fifo_push(ctx->src_packets, NULL);
             pthread_join(ctx->muxing_thread, NULL);
+        }
+    } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        const char *tmp_val = NULL;
+        if ((tmp_val = dict_get(event->opts, "low_latency")))
+            if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
+                ctx->low_latency = 1;
+        if ((tmp_val = dict_get(event->opts, "dump_info")))
+            if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
+                ctx->dump_info = 1;
+        if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
+            long int len = strtol(tmp_val, NULL, 10);
+            if (len < 0)
+                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+            else
+                sp_packet_fifo_set_max_queued(ctx->src_packets, len);
         }
     } else {
         return AVERROR(ENOTSUP);
@@ -326,11 +345,14 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
         return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+    } else if (ctrl & ~(SP_EVENT_CTRL_START |
+                        SP_EVENT_CTRL_STOP |
+                        SP_EVENT_CTRL_OPTS |
+                        SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(MuxerIOCtrlCtx, ctrl_ctx, av_buffer_default_free, NULL)
+    SP_EVENT_BUFFER_CTX_ALLOC(MuxerIOCtrlCtx, ctrl_ctx, muxer_ioctx_ctrl_free, NULL)
 
     ctrl_ctx->ctrl = ctrl;
     if (ctrl & SP_EVENT_CTRL_OPTS)
@@ -465,7 +487,6 @@ static void muxer_free(void *opaque, uint8_t *data)
 
     avformat_free_context(ctx->avf);
 
-    av_dict_free(&ctx->priv_options);
     av_free((void *)ctx->class->class_name);
     av_free(ctx->class);
 

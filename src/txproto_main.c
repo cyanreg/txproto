@@ -281,7 +281,15 @@ static int lua_create_muxer(lua_State *L)
 
     SET_OPT_LIGHTUSERDATA(mctx_ref, LUA_PRIV_PREFIX "_priv");
     GET_OPTS_CLASS(mctx->avf, "options");
-    GET_OPTS_DICT(mctx->priv_options, "priv_options");
+
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_muxer_ctrl(mctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!\n", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
 
     LUA_INTERFACE_END(0);
 }
@@ -317,7 +325,6 @@ static int lua_create_encoder(lua_State *L)
     SET_OPT_LIGHTUSERDATA(ectx_ref, LUA_PRIV_PREFIX "_priv");
     GET_OPTS_CLASS(ectx->avctx, "options");
     GET_OPTS_CLASS(ectx->swr, "resampler_options");
-    GET_OPTS_DICT(ectx->priv_options, "priv_options");
 
     SET_OPT_INT(ectx->width, "width");
     SET_OPT_INT(ectx->height, "height");
@@ -346,6 +353,15 @@ static int lua_create_encoder(lua_State *L)
         if (!ectx->sample_fmt)
             LUA_ERROR("Invalid channel layout \"%s\"!\n", temp_str);
     }
+
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_encoder_ctrl(ectx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!\n", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
 
     LUA_INTERFACE_END(0);
 }
@@ -442,6 +458,15 @@ static int lua_create_filter(lua_State *L)
     if (err < 0)
         LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
 
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_filter_ctrl(fctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!\n", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
+
     SET_OPT_LIGHTUSERDATA(fctx_ref, LUA_PRIV_PREFIX "_priv");
 
     LUA_INTERFACE_END(0);
@@ -487,6 +512,15 @@ static int lua_create_filtergraph(lua_State *L)
     err = sp_init_filter_graph(fctx_ref, name, graph, in_pads, out_pads, opts, hwctx_type);
     if (err < 0)
         LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
+
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_filter_ctrl(fctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!\n", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
 
     SET_OPT_LIGHTUSERDATA(fctx_ref, LUA_PRIV_PREFIX "_priv");
 

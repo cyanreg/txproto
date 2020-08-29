@@ -25,7 +25,8 @@ typedef struct MuxingContext {
     int64_t epoch;
     const char *out_url;
     const char *out_format;
-    AVDictionary *priv_options;
+    int low_latency;
+    int dump_info;
 
     AVBufferRef *src_packets;
 

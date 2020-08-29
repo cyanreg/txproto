@@ -530,7 +530,15 @@ fail:
 typedef struct EncoderIOCtrlCtx {
     enum SPEventType ctrl;
     AVDictionary *opts;
+    atomic_int_fast64_t *epoch;
 } EncoderIOCtrlCtx;
+
+static void encoder_ioctx_ctrl_free(void *opaque, uint8_t *data)
+{
+    EncoderIOCtrlCtx *event = (EncoderIOCtrlCtx *)data;
+    av_dict_free(&event->opts);
+    av_free(data);
+}
 
 static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
 {
@@ -548,6 +556,15 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         if (atomic_load(&ctx->running)) {
             sp_frame_fifo_push(ctx->src_frames, NULL);
             pthread_join(ctx->encoding_thread, NULL);
+        }
+    } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        const char *tmp_val = NULL;
+        if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
+            long int len = strtol(tmp_val, NULL, 10);
+            if (len < 0)
+                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+            else
+                sp_packet_fifo_set_max_queued(ctx->src_frames, len);
         }
     } else {
         return AVERROR(ENOTSUP);
@@ -576,15 +593,20 @@ int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
         return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+    } else if (ctrl & ~(SP_EVENT_CTRL_START |
+                        SP_EVENT_CTRL_STOP |
+                        SP_EVENT_CTRL_OPTS |
+                        SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(EncoderIOCtrlCtx, ctrl_ctx, av_buffer_default_free, ctx)
+    SP_EVENT_BUFFER_CTX_ALLOC(EncoderIOCtrlCtx, ctrl_ctx, encoder_ioctx_ctrl_free, ctx)
 
     ctrl_ctx->ctrl = ctrl;
     if (ctrl & SP_EVENT_CTRL_OPTS)
         av_dict_copy(&ctrl_ctx->opts, arg, 0);
+    if (ctrl & SP_EVENT_CTRL_START)
+        ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
         int ret = encoder_ioctx_ctrl_cb(ctrl_ctx_ref, ctx);
@@ -679,7 +701,6 @@ static void encoder_free(void *opaque, uint8_t *data)
 
     avcodec_free_context(&ctx->avctx);
 
-    av_dict_free(&ctx->priv_options);
     av_free((void *)ctx->class->class_name);
     av_free(ctx->class);
 

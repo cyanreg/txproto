@@ -20,7 +20,6 @@ typedef struct EncodingContext {
     AVBufferRef *dst_packets;
     AVCodec *codec;
     int need_global_header; /* Will be forced 0 on config reinit */
-    AVDictionary *priv_options;
 
     /* Events */
     SPBufferList *events;

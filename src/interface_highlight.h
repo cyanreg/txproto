@@ -192,7 +192,7 @@ static int win_input_highlight(void *wctx, uint64_t val)
         if ((x0 != x1) && (y0 != y1)) {
             sp_log(win, SP_LOG_VERBOSE, "Selected area at (%i, %i) %ix%i\n",
                    x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-            res = (SPRect){ x0, y0, x1, y1 };
+            res = (SPRect){ x0, y0, x1 - x0, y1 - y0 };
             has_sel = 1;
         }
         /* Fallthrough */

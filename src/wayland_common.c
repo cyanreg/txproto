@@ -445,25 +445,51 @@ static int find_render_node(char **node)
     return AVERROR(ENOSYS);
 }
 
+static void drm_device_free(AVHWDeviceContext *hwdev)
+{
+    AVDRMDeviceContext *hwctx = hwdev->hwctx;
+    close(hwctx->fd);
+}
+
 static int init_drm_hwcontext(WaylandCtx *ctx)
 {
     int err;
-    char *render_node = NULL;
+    ctx->drm_device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
+    if (!ctx->drm_device_ref)
+        return AVERROR(ENOMEM);
 
+    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->drm_device_ref->data;
+    AVDRMDeviceContext *hwctx = ref_data->hwctx;
+
+    char *render_node = NULL;
     if ((err = find_render_node(&render_node))) {
         sp_log(ctx, SP_LOG_ERROR, "Failed to find a DRM device: %s!\n",
                av_err2str(err));
+        av_buffer_unref(&ctx->drm_device_ref);
         return err;
     }
 
-    err = av_hwdevice_ctx_create(&ctx->drm_device_ref, AV_HWDEVICE_TYPE_DRM,
-                                 render_node, NULL, 0);
-    av_free(render_node);
-    if (err < 0) {
+    hwctx->fd = open(render_node, O_RDWR);
+    if (hwctx->fd < 0) {
         sp_log(ctx, SP_LOG_ERROR, "Failed to open DRM device %s: %s!\n",
                render_node, av_err2str(err));
+        av_buffer_unref(&ctx->drm_device_ref);
+        av_free(render_node);
+        return AVERROR(errno);
+    }
+
+    ref_data->free = drm_device_free;
+
+    err = av_hwdevice_ctx_init(ctx->drm_device_ref);
+    if (err < 0) {
+        sp_log(ctx, SP_LOG_ERROR, "Failed to init DRM device %s: %s!\n",
+               render_node, av_err2str(err));
+        av_buffer_unref(&ctx->drm_device_ref);
+        av_free(render_node);
         return err;
     }
+
+    av_free(render_node);
 
     return 0;
 }

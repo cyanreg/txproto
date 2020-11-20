@@ -42,7 +42,7 @@ int sp_map_fifo_to_pad(AVBufferRef *ctx_ref, AVBufferRef *fifo,
                 if (!strcmp(ctx->out_pads[pad_idx]->name, name))
                     break;
             if (pad_idx == ctx->num_out_pads) {
-                av_log(ctx, AV_LOG_ERROR, "Output pad with name \"%s\" not found!\n", name);
+                sp_log(ctx, SP_LOG_ERROR, "Output pad with name \"%s\" not found!\n", name);
                 return AVERROR(EINVAL);
             }
         }
@@ -53,7 +53,7 @@ int sp_map_fifo_to_pad(AVBufferRef *ctx_ref, AVBufferRef *fifo,
                 if (!strcmp(ctx->in_pads[pad_idx]->name, name))
                     break;
             if (pad_idx == ctx->num_in_pads) {
-                av_log(ctx, AV_LOG_ERROR, "Input pad with name \"%s\" not found!\n", name);
+                sp_log(ctx, SP_LOG_ERROR, "Input pad with name \"%s\" not found!\n", name);
                 return AVERROR(EINVAL);
             }
         }
@@ -74,7 +74,7 @@ int sp_map_pad_to_pad(AVBufferRef *dst_ref, const char *dst_pad,
             if (!strcmp(src->out_pads[src_pad_idx]->name, src_pad))
                 break;
         if (src_pad_idx == src->num_out_pads) {
-            av_log(src, AV_LOG_ERROR, "Output pad with name \"%s\" not found!\n", src_pad);
+            sp_log(src, SP_LOG_ERROR, "Output pad with name \"%s\" not found!\n", src_pad);
             return AVERROR(EINVAL);
         }
     }
@@ -127,19 +127,19 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
         /* Graph recreation case: reassociate an existing pad. */
         if (pad->filter) {
             /* Collision due to duplicate names. */
-            av_log(ctx, AV_LOG_ERROR, "More than one pad with label \"%s\"!\n", name);
+            sp_log(ctx, SP_LOG_ERROR, "More than one pad with label \"%s\"!\n", name);
             ctx->err = AVERROR(EINVAL);
             return;
         }
         if (pad->is_out != is_out || pad->type != type) {
             /* libavfilter graph parser behavior not deterministic. */
-            av_log(ctx, AV_LOG_ERROR, "Pad \"%s\" changed type or direction!\n", name);
+            sp_log(ctx, SP_LOG_ERROR, "Pad \"%s\" changed type or direction!\n", name);
             ctx->err = AVERROR(EINVAL);
             return;
         }
     } else {
         if (!first_init) {
-            av_log(ctx, AV_LOG_ERROR, "Pad \"%s\" added after filter init!\n", name);
+            sp_log(ctx, SP_LOG_ERROR, "Pad \"%s\" added after filter init!\n", name);
             ctx->err = AVERROR(EINVAL);
             return;
         }
@@ -204,7 +204,7 @@ static int re_create_filtering(FilterContext *ctx, int first_init)
 
     ctx->graph = avfilter_graph_alloc();
     if (!ctx->graph) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to allocate, no memory!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to allocate, no memory!\n");
         err = AVERROR(ENOMEM);
         goto end;
     }
@@ -218,7 +218,7 @@ static int re_create_filtering(FilterContext *ctx, int first_init)
                                                             ftype, "filter");
 
         if (!filt) {
-            av_log(ctx, AV_LOG_ERROR, "Filter \"%s\" not found!\n", ctx->graph_str);
+            sp_log(ctx, SP_LOG_ERROR, "Filter \"%s\" not found!\n", ctx->graph_str);
             err = AVERROR(EINVAL);
             goto end;
         }
@@ -227,7 +227,7 @@ static int re_create_filtering(FilterContext *ctx, int first_init)
 
         err = avfilter_init_str(filt, NULL);
         if (err) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to init filter: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to init filter: %s!\n", av_err2str(err));
             goto end;
         }
 
@@ -238,7 +238,7 @@ static int re_create_filtering(FilterContext *ctx, int first_init)
 
         err = avfilter_graph_parse2(ctx->graph, ctx->graph_str, &in, &out);
         if (err) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to parse filter graph: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to parse filter graph: %s!\n", av_err2str(err));
             goto end;
         }
 
@@ -263,17 +263,17 @@ static int rename_ctx(FilterContext *ctx, const char *name, const char *filt)
         if (!new_name)
             return AVERROR(ENOMEM);
     } else {
-        int len = strlen(ctx->class->class_name) + 1 + strlen(filt) + 1;
+        int len = strlen(sp_class_get_name(ctx)) + 1 + strlen(filt) + 1;
         new_name = av_mallocz(len);
         if (!new_name)
             return AVERROR(ENOMEM);
-        av_strlcpy(new_name, ctx->class->class_name, len);
+        av_strlcpy(new_name, sp_class_get_name(ctx), len);
         av_strlcat(new_name, ":", len);
         av_strlcat(new_name, filt, len);
     }
 
-    av_free((void *)ctx->class->class_name);
-    ctx->class->class_name = new_name;
+    sp_class_set_name(ctx, new_name);
+
     return 0;
 }
 
@@ -328,7 +328,7 @@ static void attempt_derive_device(FilterContext *ctx, AVBufferRef *frames_ref)
     err = av_hwdevice_ctx_create_derived(&ctx->hw_device_ref, ctx->device_type,
                                          input_device_ref, 0);
     if (err < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Could not derive hardware device: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Could not derive hardware device: %s!\n",
                av_err2str(err));
         if (ctx->hw_device_ref)
             av_buffer_unref(&ctx->hw_device_ref);
@@ -364,12 +364,12 @@ static int init_pads(FilterContext *ctx)
 
         if ((err = avfilter_graph_create_filter(&pad->buffer, dst_filter,
                                                 name, NULL, NULL, ctx->graph))) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to create pad graph: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to create pad graph: %s!\n", av_err2str(err));
             goto error;
         }
 
         if ((err = avfilter_link(pad->filter, pad->filter_pad, pad->buffer, 0))) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to link graph: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to link graph: %s!\n", av_err2str(err));
             goto error;
         }
     }
@@ -381,6 +381,8 @@ static int init_pads(FilterContext *ctx)
 
         av_frame_free(&pad->in_fmt);
 
+        sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure pad \"%s\"...\n",
+               pad->name);
         AVFrame *in_fmt = sp_frame_fifo_peek(pad->fifo);
         pad->in_fmt = av_frame_alloc();
         av_frame_copy_props(pad->in_fmt, in_fmt);
@@ -424,7 +426,7 @@ static int init_pads(FilterContext *ctx)
         }
 
         if (!pad->buffer) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to create buffer for input pad %s!\n", pad->name);
+            sp_log(ctx, SP_LOG_ERROR, "Unable to create buffer for input pad %s!\n", pad->name);
             av_free(params);
             err = AVERROR(ENOMEM);
             goto error;
@@ -433,17 +435,17 @@ static int init_pads(FilterContext *ctx)
         err = av_buffersrc_parameters_set(pad->buffer, params);
         av_free(params);
         if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to set buffer params: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to set buffer params: %s!\n", av_err2str(err));
             goto error;
         }
 
         if ((err = avfilter_init_str(pad->buffer, NULL)) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to initialize filter: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to initialize filter: %s!\n", av_err2str(err));
             goto error;
         }
 
         if ((err = avfilter_link(pad->buffer, 0, pad->filter, pad->filter_pad)) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to link graph: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Unable to link graph: %s!\n", av_err2str(err));
             goto error;
         }
     }
@@ -463,11 +465,18 @@ static void *filtering_thread(void *data)
 
     sp_set_thread_name_self("filtering");
 
+    sp_log(ctx, SP_LOG_VERBOSE, "Filter initialized!\n");
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
+
     while (1) {
+        pthread_mutex_lock(&ctx->lock);
+
         for (int i = 0; i < ctx->num_in_pads; i++) {
             FilterPad *in_pad = ctx->in_pads[i];
-            if (!flushing && (av_buffersrc_get_nb_failed_requests(in_pad->buffer) < 1))
+            if (!flushing && (av_buffersrc_get_nb_failed_requests(in_pad->buffer) < 1)) {
+                pthread_mutex_unlock(&ctx->lock);
                 continue;
+            }
 
             AVFrame *in_frame = NULL;
             if (!flushing) {
@@ -479,7 +488,8 @@ static void *filtering_thread(void *data)
                                                AV_BUFFERSRC_FLAG_PUSH | AV_BUFFERSRC_FLAG_KEEP_REF);
             av_frame_free(&in_frame);
             if (err < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
+                sp_log(ctx, SP_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
+                pthread_mutex_unlock(&ctx->lock);
                 goto end;
             }
         }
@@ -492,12 +502,14 @@ static void *filtering_thread(void *data)
             if (err == AVERROR(EAGAIN)) {
                 av_frame_free(&filt_frame);
             } else if (err == AVERROR_EOF) {
-                av_log(ctx, AV_LOG_INFO, "Filter flushed!\n");
+                sp_log(ctx, SP_LOG_VERBOSE, "Filter flushed!\n");
                 av_frame_free(&filt_frame);
+                pthread_mutex_unlock(&ctx->lock);
                 goto end;
             } else if (err < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error pulling filtered frame: %s!\n", av_err2str(err));
+                sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame: %s!\n", av_err2str(err));
                 av_frame_free(&filt_frame);
+                pthread_mutex_unlock(&ctx->lock);
                 goto end;
             } else {
                 filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
@@ -509,17 +521,19 @@ static void *filtering_thread(void *data)
                 else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
                     fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
 
+                sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO on pad \"%s\", pts = %f\n",
+                       out_pad->name, av_q2d(fe->time_base) * filt_frame->pts);
                 int ret = sp_frame_fifo_push(out_pad->fifo, filt_frame);
                 if (ret == AVERROR(ENOBUFS)) {
                     out_pad->dropped_frames++;
-                    av_log_once(ctx, AV_LOG_WARNING, AV_LOG_DEBUG, &out_pad->dropped_frames_msg_state,
-                                "Dropping filtered frame (%i dropped)!\n", out_pad->dropped_frames);
-                } else if (!ret) {
-                    out_pad->dropped_frames_msg_state = 0;
+                    sp_log(ctx, SP_LOG_WARN,
+                           "Dropping filtered frame (%i dropped)!\n", out_pad->dropped_frames);
                 }
             }
             av_frame_free(&filt_frame);
         }
+
+        pthread_mutex_unlock(&ctx->lock);
     }
 
 end:
@@ -535,6 +549,10 @@ static int sp_filter_init_graph(FilterContext *ctx)
     if (err)
         return err;
 
+    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+    if (err < 0)
+        return err;
+
     if ((err = init_pads(ctx)))
         return err;
 
@@ -542,7 +560,7 @@ static int sp_filter_init_graph(FilterContext *ctx)
         err = av_hwdevice_ctx_create(&ctx->hw_device_ref, ctx->device_type,
                                      NULL, NULL, 0);
         if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not init hardware device: %s!\n",
+            sp_log(ctx, SP_LOG_ERROR, "Could not init hardware device: %s!\n",
                    av_err2str(err));
             return err;
         }
@@ -557,7 +575,7 @@ static int sp_filter_init_graph(FilterContext *ctx)
     }
 
     if ((err = avfilter_graph_config(ctx->graph, NULL)) < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to configure graph: %s!\n", av_err2str(err));
+        sp_log(ctx, SP_LOG_ERROR, "Unable to configure graph: %s!\n", av_err2str(err));
         free_graph(ctx);
         ctx->err = err;
         return err;
@@ -566,11 +584,11 @@ static int sp_filter_init_graph(FilterContext *ctx)
     if (ctx->dump_graph) {
         char *graph_dump = avfilter_graph_dump(ctx->graph, NULL);
         if (graph_dump)
-            av_log(NULL, AV_LOG_INFO, "\n%s", graph_dump);
+            sp_log(NULL, SP_LOG_INFO, "\n%s", graph_dump);
         av_free(graph_dump);
     }
 
-    pthread_create(&ctx->filter_thread, NULL, filtering_thread, ctx);
+    sp_log(ctx, SP_LOG_DEBUG, "Filter configured!\n");
 
     return err;
 }
@@ -588,18 +606,29 @@ static void filter_ioctx_ctrl_free(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     FilterIOCtrlCtx *event = (FilterIOCtrlCtx *)opaque->data;
     FilterContext *ctx = src_ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
-        return sp_filter_init_graph(ctx);
+        if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
+            int ret = sp_filter_init_graph(ctx);
+            if (ret < 0)
+                return ret;
+        }
+        ctx->epoch = atomic_load(event->epoch);
+        if (!ctx->filter_thread)
+            pthread_create(&ctx->filter_thread, NULL, filtering_thread, ctx);
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
-        for (int i = 0; i < ctx->num_in_pads; i++)
-            sp_frame_fifo_push(ctx->in_pads[i]->fifo, NULL);
-        pthread_join(ctx->filter_thread, NULL);
+        if (ctx->filter_thread) {
+            for (int i = 0; i < ctx->num_in_pads; i++)
+                sp_frame_fifo_push(ctx->in_pads[i]->fifo, NULL);
+            pthread_join(ctx->filter_thread, NULL);
+            ctx->filter_thread = 0;
+        }
     } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        pthread_mutex_lock(&ctx->lock);
         const char *tmp_val = NULL;
         if ((tmp_val = dict_get(event->opts, "dump_graph")))
             if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
@@ -607,17 +636,35 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
             long int len = strtol(tmp_val, NULL, 10);
             if (len < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+                sp_log(ctx, SP_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
             } else {
                 for (int i = 0; i < ctx->num_in_pads; i++)
                     sp_frame_fifo_set_max_queued(ctx->in_pads[i]->fifo, len);
             }
         }
+        pthread_mutex_unlock(&ctx->lock);
+    } else if (event->ctrl & SP_EVENT_CTRL_COMMAND) {
+        char result[4096];
+        const AVDictionaryEntry *e = NULL;
+        const char *target = dict_get(event->opts, "sp_filter_target");
+
+        target = target ? target : "all";
+
+        while ((e = av_dict_get(event->opts, "", e, AV_DICT_IGNORE_SUFFIX))) {
+            if (!strcmp(e->key, "sp_filter_target"))
+                continue;
+
+            int ret = avfilter_graph_send_command(ctx->graph, target, e->key, e->value,
+                                                  result, sizeof(result), 0);
+            sp_log(ctx, SP_LOG_VERBOSE, "Filter (%s) response to command %s=%s: %s%s%s\n",
+                   target, e->key, e->value, av_err2str(ret), strlen(result) ? " - " : "", result);
+        }
+
     } else {
         return AVERROR(ENOTSUP);
     }
 
-    return 0;    
+    return 0;
 }
 
 int sp_filter_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
@@ -625,52 +672,58 @@ int sp_filter_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     FilterContext *ctx = (FilterContext *)ctx_ref->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        av_log(ctx, AV_LOG_DEBUG, "Comitting!\n");
-        return sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_COMMIT);
+        sp_log(ctx, SP_LOG_DEBUG, "Comitting!\n");
+        return sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        av_log(ctx, AV_LOG_DEBUG, "Discarding!\n");
-        sp_bufferlist_discard_new_events(ctx->events);
+        sp_log(ctx, SP_LOG_DEBUG, "Discarding!\n");
+        sp_eventlist_discard(ctx->events);
     } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         char *fstr = sp_event_flags_to_str_buf(arg);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_event(ctx->events, arg);
+        return sp_eventlist_add(ctx, ctx->events, arg);
     } else if (ctrl & SP_EVENT_CTRL_DEP) {
         char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
-    } else if (ctrl & ~(SP_EVENT_CTRL_START |
-                        SP_EVENT_CTRL_STOP |
-                        SP_EVENT_CTRL_OPTS |
-                        SP_EVENT_FLAG_IMMEDIATE)) {
+        return sp_eventlist_add_with_dep(ctx, ctx->events, arg, ctrl);
+    } else if ((ctrl & SP_EVENT_CTRL_MASK) & ~(SP_EVENT_CTRL_COMMAND |
+                                               SP_EVENT_CTRL_START   |
+                                               SP_EVENT_CTRL_STOP    |
+                                               SP_EVENT_CTRL_OPTS)) {
         return AVERROR(ENOTSUP);
     }
 
     SP_EVENT_BUFFER_CTX_ALLOC(FilterIOCtrlCtx, ctrl_ctx, filter_ioctx_ctrl_free, NULL)
 
     ctrl_ctx->ctrl = ctrl;
-    if (ctrl & SP_EVENT_CTRL_OPTS)
+    if (ctrl & (SP_EVENT_CTRL_OPTS | SP_EVENT_CTRL_COMMAND))
         av_dict_copy(&ctrl_ctx->opts, arg, 0);
     if (ctrl & SP_EVENT_CTRL_START)
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = filter_ioctx_ctrl_cb(ctrl_ctx_ref, ctx);
+        int ret = filter_ioctx_ctrl_cb(ctrl_ctx_ref, ctx, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
 
-    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | ctrl;
+    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | ctrl;
+    if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_INIT) &&
+        ctrl & SP_EVENT_CTRL_COMMAND)
+        flags |= SP_EVENT_ON_INIT;
+    else
+        flags |= SP_EVENT_ON_COMMIT;
+
     AVBufferRef *ctrl_event = sp_event_create(filter_ioctx_ctrl_cb, NULL,
                                               flags, ctrl_ctx_ref,
                                               sp_event_gen_identifier(ctx, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(ctx->events, ctrl_event);
+    int err = sp_eventlist_add(ctx, ctx->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
@@ -688,9 +741,11 @@ static void filter_free(void *opaque, uint8_t *data)
     for (int i = 0; i < ctx->num_out_pads; i++)
         sp_frame_fifo_unmirror_all(ctx->out_pads[i]->fifo);
 
-    for (int i = 0; i < ctx->num_in_pads; i++)
-        sp_frame_fifo_push(ctx->in_pads[i]->fifo, NULL);
-    pthread_join(ctx->filter_thread, NULL);
+    if (ctx->filter_thread) {
+        for (int i = 0; i < ctx->num_in_pads; i++)
+            sp_frame_fifo_push(ctx->in_pads[i]->fifo, NULL);
+        pthread_join(ctx->filter_thread, NULL);
+    }
 
     if (ctx->in_pad_names) {
         for (int i = 0; ctx->in_pad_names[i]; i++)
@@ -704,8 +759,9 @@ static void filter_free(void *opaque, uint8_t *data)
         av_freep(&ctx->out_pad_names);
     }
 
-    av_free((void *)ctx->class->class_name);
-    av_free(ctx->class);
+    pthread_mutex_destroy(&ctx->lock);
+
+    sp_class_free(ctx);
 }
 
 AVBufferRef *sp_filter_alloc(void)
@@ -714,8 +770,7 @@ AVBufferRef *sp_filter_alloc(void)
     if (!ctx)
         return NULL;
 
-    int err = sp_alloc_class(ctx, "lavfi", AV_CLASS_CATEGORY_FILTER,
-                             &ctx->log_lvl_offset, NULL);
+    int err = sp_class_alloc(ctx, "lavfi", SP_TYPE_FILTER, NULL);
     if (err < 0) {
         av_free(ctx);
         return NULL;
@@ -724,11 +779,12 @@ AVBufferRef *sp_filter_alloc(void)
     AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
                                             filter_free, NULL, 0);
     if (!ctx_ref) {
-        sp_free_class(ctx);
+        sp_class_free(ctx);
         av_free(ctx);
         return NULL;
     }
 
+    pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
 
     return ctx_ref;

@@ -6,12 +6,14 @@
 
 #include "iosys_common.h"
 #include "utils.h"
+#include "logging.h"
 
 #include "../config.h"
 
+const IOSysAPI src_lavd;
+
 typedef struct LavdCtx {
-    AVClass *class;
-    int log_lvl_offset;
+    SPClass *class;
 
     SPBufferList *events;
     SPBufferList *entries;
@@ -43,7 +45,7 @@ static void *lavd_thread(void *s)
     IOSysEntry *entry = s;
     LavdCaptureCtx *priv = entry->io_priv;
 
-    sp_set_thread_name_self(priv->avf->iformat->name);
+    sp_set_thread_name_self(sp_class_get_name(entry));
 
     while (!flushed) {
         AVPacket *pkt = NULL;
@@ -54,7 +56,7 @@ static void *lavd_thread(void *s)
 
         err = av_read_frame(priv->avf, pkt);
         if (err) {
-            av_log(entry, AV_LOG_ERROR, "Unable to read frame: %s!\n", av_err2str(err));
+            sp_log(entry, SP_LOG_ERROR, "Unable to read frame: %s!\n", av_err2str(err));
             goto end;
         }
 
@@ -69,23 +71,23 @@ send:
         err = avcodec_send_packet(priv->avctx, pkt);
         av_packet_free(&pkt);
         if (err == AVERROR_EOF) {
-            av_log(entry, AV_LOG_INFO, "Decoder flushed!\n");
+            sp_log(entry, SP_LOG_INFO, "Decoder flushed!\n");
             err = 0;
             break; /* decoder flushed */
         } else if (err && (err != AVERROR(EAGAIN))) {
-            av_log(entry, AV_LOG_ERROR, "Unable to decode frame: %s!\n", av_err2str(err));
+            sp_log(entry, SP_LOG_ERROR, "Unable to decode frame: %s!\n", av_err2str(err));
             goto end;
         }
 
         AVFrame *frame = av_frame_alloc();
         err = avcodec_receive_frame(priv->avctx, frame);
         if (err == AVERROR_EOF) {
-            av_log(entry, AV_LOG_INFO, "Decoder flushed!\n");
+            sp_log(entry, SP_LOG_INFO, "Decoder flushed!\n");
             av_frame_free(&frame);
             err = 0;
             break;
         } else if (err && (err != AVERROR(EAGAIN))) {
-            av_log(entry, AV_LOG_ERROR, "Unable to get decoded frame: %s!\n", av_err2str(err));
+            sp_log(entry, SP_LOG_ERROR, "Unable to get decoded frame: %s!\n", av_err2str(err));
             av_frame_free(&frame);
             goto end;
         }
@@ -115,7 +117,7 @@ typedef struct LavdIOCtrlCtx {
     atomic_int_fast64_t *epoch;
 } LavdIOCtrlCtx;
 
-static int lavd_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static int lavd_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     LavdIOCtrlCtx *event = (LavdIOCtrlCtx *)opaque->data;
 
@@ -140,9 +142,9 @@ static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        return sp_bufferlist_dispatch_events(iosys_entry->events, iosys_entry, SP_EVENT_ON_COMMIT);
+        return sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_bufferlist_discard_new_events(iosys_entry->events);
+        sp_eventlist_discard(iosys_entry->events);
         return 0;
     } else if (ctrl & SP_EVENT_CTRL_OPTS) {
         AVDictionary *dict = arg;
@@ -159,7 +161,7 @@ static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = lavd_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry);
+        int ret = lavd_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
@@ -170,10 +172,10 @@ static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
                                               sp_event_gen_identifier(iosys_entry, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(iosys_entry, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(iosys_entry->events, ctrl_event);
+    int err = sp_eventlist_add(iosys_entry, iosys_entry->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
@@ -198,19 +200,21 @@ static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
     priv->src = (AVInputFormat *)iosys_entry->api_priv;
     priv->src_name = av_strdup(priv->src->name);
 
-    err = avformat_open_input(&priv->avf, iosys_entry->name, priv->src, &opts);
+    err = avformat_open_input(&priv->avf, sp_class_get_name(iosys_entry), priv->src, &opts);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to open context for source \"%s\": %s\n",
+        sp_log(ctx, SP_LOG_ERROR, "Unable to open context for source \"%s\": %s\n",
                priv->src->name, av_err2str(err));
         return err;
     }
 
     err = avformat_find_stream_info(priv->avf, NULL);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to get stream info for source \"%s\": %s\n",
+        sp_log(ctx, SP_LOG_ERROR, "Unable to get stream info for source \"%s\": %s\n",
                priv->src->name, av_err2str(err));
         return err;
     }
+
+    sp_class_set_name(iosys_entry, priv->avf->iformat->name);
 
     AVCodecParameters *codecpar = priv->avf->streams[0]->codecpar;
 
@@ -224,7 +228,7 @@ static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
 
     err = avcodec_open2(priv->avctx, codec, NULL);
 	if (err) {
-		av_log(ctx, AV_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
+		sp_log(ctx, SP_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
 		return err;
 	}
 
@@ -270,18 +274,18 @@ static void destroy_entry(void *opaque, uint8_t *data)
 
     sp_bufferlist_free(&entry->events);
 
-    av_free(entry->name);
     av_free(entry->desc);
-    sp_free_class(entry);
+    sp_class_free(entry);
 }
 
 static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
                        AVClassCategory category)
 {
-    const AVCRC *crc_tab = av_crc_get_table(AV_CRC_32_IEEE);
-    uint32_t src_crc = av_crc(crc_tab, UINT32_MAX, (void *)&cur, sizeof(cur));
+    if (cur && strcmp(cur->name, "fbdev"))
+        return;
 
-    src_crc = av_crc(crc_tab, src_crc, (void *)&dev_info, sizeof(dev_info));
+    const AVCRC *crc_tab = av_crc_get_table(AV_CRC_32_IEEE);
+    uint32_t src_crc = av_crc(crc_tab, UINT32_MAX, (void *)cur, sizeof(cur));
 
     uint32_t idx = sp_iosys_gen_identifier(ctx, src_crc, category);
 
@@ -296,34 +300,23 @@ static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
                                      destroy_entry, ctx, 0);
 
         if (!dev_info) {
-            entry->name = av_strdup(cur->name);
+            sp_class_set_name(entry, cur->name);
             entry->desc = av_strdup(cur->long_name);
         } else {
-            entry->name = av_strdup(dev_info->device_name);
+            sp_class_set_name(entry, dev_info->device_name);
             entry->desc = av_strdup(dev_info->device_description);
         }
 
         entry->api_priv = cur;
         entry->events = sp_bufferlist_new();
-        entry->parent = ctx;
         entry->identifier = idx;
 
-        sp_alloc_class(entry, cur->name, category,
-                       &entry->log_lvl_offset, &entry->parent);
+        sp_class_alloc(entry, cur->name, sp_avcategory_to_type(category), ctx);
 
-        sp_bufferlist_dispatch_events(ctx->events, entry_ref->data,
-                                      SP_EVENT_ON_CHANGE | category);
+        sp_eventlist_dispatch(entry_ref->data, ctx->events,
+                              SP_EVENT_ON_CHANGE | category, entry_ref->data);
+
         sp_bufferlist_append(ctx->entries, entry_ref);
-    } else {
-        IOSysEntry *entry = (IOSysEntry *)entry_ref->data;
-        int change = 0;
-        if (cur->name && strcmp(entry->name, cur->name))
-            change |= 1;
-        if (cur->long_name && strcmp(entry->desc, cur->long_name))
-            change |= 1;
-        if (change)
-            sp_bufferlist_dispatch_events(ctx->events, entry_ref->data,
-                                          SP_EVENT_ON_CHANGE | category);
     }
 }
 
@@ -345,7 +338,7 @@ start:
 
         int err = avdevice_list_input_sources(cur, NULL, NULL, &list);
         if ((err && (err != AVERROR(ENOSYS)))) {
-            av_log(ctx, AV_LOG_DEBUG, "Unable to retrieve device list for source \"%s\": %s\n",
+            sp_log(ctx, SP_LOG_DEBUG, "Unable to retrieve device list for source \"%s\": %s\n",
                    cur->name, av_err2str(err));
             continue;
         }
@@ -357,7 +350,7 @@ start:
 
         int nb_devs = list->nb_devices;
         if (!nb_devs) {
-            av_log(ctx, AV_LOG_DEBUG, "Device \"%s\" has no entries in its devices list.\n", cur->name);
+            sp_log(ctx, SP_LOG_DEBUG, "Device \"%s\" has no entries in its devices list.\n", cur->name);
             avdevice_free_list_devices(&list);
             continue;
         }
@@ -400,19 +393,20 @@ static int lavd_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         AVBufferRef *event = arg;
         char *fstr = sp_event_flags_to_str_buf(event);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
 
         if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
             /* Bring up the new event to speed with current affairs */
             SPBufferList *tmp_event = sp_bufferlist_new();
-            sp_bufferlist_append_event(tmp_event, event);
+            sp_eventlist_add(ctx, tmp_event, event);
 
             update_entries(ctx);
 
             AVBufferRef *obj = NULL;
             while ((obj = sp_bufferlist_iter_ref(ctx->entries))) {
-                sp_bufferlist_dispatch_events(tmp_event, obj->data, SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE);
+                sp_eventlist_dispatch(obj->data, tmp_event,
+                                      SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE, obj->data);
                 av_buffer_unref(&obj);
             }
 
@@ -420,7 +414,7 @@ static int lavd_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         }
 
         /* Add it to the list now to receive events dynamically */
-        err = sp_bufferlist_append_event(ctx->events, event);
+        err = sp_eventlist_add(ctx, ctx->events, event);
         if (err < 0)
             return err;
     }
@@ -441,7 +435,7 @@ static void lavd_uninit(void *opaque, uint8_t *data)
     atomic_store(&ctx->quit, 1);
     pthread_join(ctx->source_update, NULL);
 
-    sp_free_class(ctx);
+    sp_class_free(ctx);
     av_free(ctx);
 }
 
@@ -471,14 +465,7 @@ static int lavd_init(AVBufferRef **s)
         goto fail;
     }
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    err = sp_alloc_class(ctx, "libavdevice", AV_CLASS_CATEGORY_NA,
-                         &ctx->log_lvl_offset, NULL);
+    err = sp_class_alloc(ctx, src_lavd.name, SP_TYPE_CONTEXT, NULL);
     if (err < 0)
         goto fail;
 
@@ -498,7 +485,7 @@ fail:
 }
 
 const IOSysAPI src_lavd = {
-    .name      = "libavdevice",
+    .name      = "lavd",
     .ctrl      = lavd_ctrl,
     .init_sys  = lavd_init,
     .ref_entry = lavd_ref_entry,

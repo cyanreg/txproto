@@ -6,6 +6,7 @@
 #include <libavutil/hwcontext.h>
 
 #include "utils.h"
+#include "logging.h"
 
 typedef struct FilterPad {
     struct FilterContext *main;
@@ -20,15 +21,13 @@ typedef struct FilterPad {
 
     /* Output only */
     int dropped_frames;
-    int dropped_frames_msg_state;
 
     AVBufferRef *fifo;
     AVFrame *in_fmt; /* Used to track format changes */
 } FilterPad;
 
 typedef struct FilterContext {
-    AVClass *class;
-    int log_lvl_offset;
+    SPClass *class;
 
     SPBufferList *events;
     AVFilterGraph *graph;
@@ -60,6 +59,9 @@ typedef struct FilterContext {
 
     /* I/O thread */
     pthread_t filter_thread;
+    pthread_mutex_t lock;
+
+    int64_t epoch;
 
     /* Failure */
     int err;

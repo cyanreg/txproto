@@ -28,7 +28,7 @@ static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 
     int err = swr_init(ctx->swr);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Could not init swr context: %s!\n", av_err2str(err));
+        sp_log(ctx, SP_LOG_ERROR, "Could not init swr context: %s!\n", av_err2str(err));
         swr_free(&ctx->swr);
         return err;
     }
@@ -136,14 +136,14 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         err = av_hwdevice_ctx_create_derived(&enc_device_ref, hwcfg->device_type,
                                              input_device_ref, 0);
         if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not derive hardware device: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Could not derive hardware device: %s!\n", av_err2str(err));
             goto end;
         }
     } else {
         err = av_hwdevice_ctx_create(&enc_device_ref, hwcfg->device_type,
                                      NULL, NULL, 0);
         if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not init hardware device: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Could not init hardware device: %s!\n", av_err2str(err));
             goto end;
         }
     }
@@ -155,7 +155,7 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
         err = av_hwframe_ctx_create_derived(&ctx->enc_frames_ref, hwcfg->pix_fmt,
                                             enc_device_ref, input_frames_ref, 0);
         if (err < 0)
-            av_log(ctx, AV_LOG_WARNING, "Could not derive hardware frames context: %s!\n",
+            sp_log(ctx, SP_LOG_WARN, "Could not derive hardware frames context: %s!\n",
                    av_err2str(err));
         else
             goto set;
@@ -176,7 +176,7 @@ static int init_hwcontext(EncodingContext *ctx, AVFrame *conf)
 
     err = av_hwframe_ctx_init(ctx->enc_frames_ref);
     if (err < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Could not init hardware frames context: %s!\n", av_err2str(err));
+        sp_log(ctx, SP_LOG_ERROR, "Could not init hardware frames context: %s!\n", av_err2str(err));
         goto end;
     }
 
@@ -200,13 +200,18 @@ end:
     return err;
 }
 
-static int context_full_init(EncodingContext *ctx)
+static int context_full_config(EncodingContext *ctx)
 {
     int err;
 
+    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+    if (err < 0)
+        return err;
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
     AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
     if (!conf) {
-        av_log(ctx, AV_LOG_ERROR, "No input frame to configure with!\n");
+        sp_log(ctx, SP_LOG_ERROR, "No input frame to configure with!\n");
         return AVERROR(EINVAL);
     }
 
@@ -236,14 +241,13 @@ static int context_full_init(EncodingContext *ctx)
 
     err = avcodec_open2(ctx->avctx, ctx->codec, NULL);
 	if (err < 0) {
-		av_log(ctx, AV_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
+		sp_log(ctx, SP_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
 		return err;
 	}
 
     av_frame_free(&conf);
 
-    atomic_store(&ctx->initialized, 1);
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_CHANGE);
+    sp_log(ctx, SP_LOG_VERBOSE, "Encoder configured!\n");
 
     return 0;
 }
@@ -265,7 +269,7 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
     av_frame_free(input);
 
     if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Error pushing audio for resampling: %s!\n", av_err2str(ret));
+        sp_log(ctx, SP_LOG_ERROR, "Error pushing audio for resampling: %s!\n", av_err2str(ret));
         return ret;
     }
 
@@ -287,7 +291,7 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
 
     AVFrame *out_frame = NULL;
     if (!(out_frame = av_frame_alloc())) {
-        av_log(ctx, AV_LOG_ERROR, "Error allocating frame!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Error allocating frame!\n");
         return AVERROR(ENOMEM);
     }
 
@@ -302,7 +306,7 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
     /* Get frame buffer */
     ret = av_frame_get_buffer(out_frame, 0);
     if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(ret));
+        sp_log(ctx, SP_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(ret));
         av_frame_free(&out_frame);
         return ret;
     }
@@ -310,7 +314,7 @@ static int audio_process_frame(EncodingContext *ctx, AVFrame **input, int flush)
     /* Resample */
     ret = swr_convert_frame(ctx->swr, out_frame, NULL);
     if (ret < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Error pulling resampled audio: %s!\n", av_err2str(ret));
+        sp_log(ctx, SP_LOG_ERROR, "Error pulling resampled audio: %s!\n", av_err2str(ret));
         av_frame_free(&out_frame);
         return ret;
     }
@@ -355,7 +359,7 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
 
             err = av_hwframe_map(mapped_frame, in_f, AV_HWFRAME_MAP_READ);
             if (err < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error mapping: %s!\n", av_err2str(err));
+                sp_log(ctx, SP_LOG_ERROR, "Error mapping: %s!\n", av_err2str(err));
                 return err;
             }
 
@@ -386,7 +390,7 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
 
                 err = av_hwframe_get_buffer(ctx->enc_frames_ref, tx_frame, 0);
                 if (err < 0) {
-                    av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
+                    sp_log(ctx, SP_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
                     return err;
                 }
             } else {
@@ -395,14 +399,14 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
 
                 err = av_frame_get_buffer(tx_frame, 4096);
                 if (err < 0) {
-                    av_log(ctx, AV_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
+                    sp_log(ctx, SP_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));
                     return err;
                 }
             }
 
             err = av_hwframe_transfer_data(tx_frame, in_f, 0);
             if (err < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error transferring: %s!\n", av_err2str(err));
+                sp_log(ctx, SP_LOG_ERROR, "Error transferring: %s!\n", av_err2str(err));
                 return err;
             }
 
@@ -450,15 +454,11 @@ static void *encoding_thread(void *arg)
     EncodingContext *ctx = arg;
     int ret = 0, flush = 0;
 
-    pthread_mutex_lock(&ctx->lock);
+    sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    sp_set_thread_name_self(ctx->class->class_name);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
 
-    ret = context_full_init(ctx);
-    if (ret < 0)
-        goto fail;
-
-    pthread_mutex_unlock(&ctx->lock);
+    sp_log(ctx, SP_LOG_VERBOSE, "Encoder initialized!\n");
 
     do {
         pthread_mutex_lock(&ctx->lock);
@@ -491,7 +491,7 @@ static void *encoding_thread(void *arg)
         ret = avcodec_send_frame(ctx->avctx, frame);
         av_frame_free(&frame);
         if (ret < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
+            sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
             pthread_mutex_unlock(&ctx->lock);
             goto fail;
         }
@@ -509,12 +509,15 @@ static void *encoding_thread(void *arg)
                 ret = 0;
                 break;
             } else if (ret < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
+                sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
                 pthread_mutex_unlock(&ctx->lock);
                 goto fail;
             }
 
-            out_pkt->stream_index = ctx->encoder_id;
+            out_pkt->stream_index = sp_class_get_id(ctx);
+
+            sp_log(ctx, SP_LOG_TRACE, "Pushing packet to FIFO, pts = %f\n",
+                   av_q2d(ctx->avctx->time_base) * out_pkt->pts);
 
             sp_packet_fifo_push(ctx->dst_packets, out_pkt);
             av_packet_free(&out_pkt);
@@ -524,7 +527,7 @@ static void *encoding_thread(void *arg)
     } while (!ctx->err);
 
 end:
-    av_log(ctx, AV_LOG_INFO, "Stream flushed!\n");
+    sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");
 
     return NULL;
 
@@ -548,29 +551,32 @@ static void encoder_ioctx_ctrl_free(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     EncoderIOCtrlCtx *event = (EncoderIOCtrlCtx *)opaque->data;
     EncodingContext *ctx = src_ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
-        pthread_mutex_lock(&ctx->lock);
-        if (!atomic_load(&ctx->running)) {
-            atomic_store(&ctx->running, 1);
-            pthread_create(&ctx->encoding_thread, NULL, encoding_thread, ctx);
+        if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
+            int ret = context_full_config(ctx);
+            if (ret < 0)
+                return ret;
         }
-        pthread_mutex_unlock(&ctx->lock);
+        ctx->epoch = atomic_load(event->epoch);
+        if (!ctx->encoding_thread)
+            pthread_create(&ctx->encoding_thread, NULL, encoding_thread, ctx);
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
-        if (atomic_load(&ctx->running)) {
+        if (ctx->encoding_thread) {
             sp_frame_fifo_push(ctx->src_frames, NULL);
             pthread_join(ctx->encoding_thread, NULL);
+            ctx->encoding_thread = 0;
         }
     } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
         const char *tmp_val = NULL;
         if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
             long int len = strtol(tmp_val, NULL, 10);
             if (len < 0)
-                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+                sp_log(ctx, SP_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
             else
                 sp_packet_fifo_set_max_queued(ctx->src_frames, len);
         }
@@ -578,7 +584,7 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         return AVERROR(ENOTSUP);
     }
 
-    return 0;    
+    return 0;
 }
 
 int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
@@ -586,24 +592,24 @@ int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        av_log(ctx, AV_LOG_DEBUG, "Comitting!\n");
-        return sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_COMMIT);
+        sp_log(ctx, SP_LOG_DEBUG, "Comitting!\n");
+        return sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        av_log(ctx, AV_LOG_DEBUG, "Discarding!\n");
-        sp_bufferlist_discard_new_events(ctx->events);
+        sp_log(ctx, SP_LOG_DEBUG, "Discarding!\n");
+        sp_eventlist_discard(ctx->events);
     } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         char *fstr = sp_event_flags_to_str_buf(arg);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_event(ctx->events, arg);
+        return sp_eventlist_add(ctx, ctx->events, arg);
      } else if (ctrl & SP_EVENT_CTRL_DEP) {
         char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
+        return sp_eventlist_add_with_dep(ctx, ctx->events, arg, ctrl);
     } else if (ctrl & ~(SP_EVENT_CTRL_START |
-                        SP_EVENT_CTRL_STOP |
-                        SP_EVENT_CTRL_OPTS |
+                        SP_EVENT_CTRL_STOP  |
+                        SP_EVENT_CTRL_OPTS  |
                         SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }
@@ -617,7 +623,7 @@ int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = encoder_ioctx_ctrl_cb(ctrl_ctx_ref, ctx);
+        int ret = encoder_ioctx_ctrl_cb(ctrl_ctx_ref, ctx, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
@@ -628,10 +634,10 @@ int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
                                               sp_event_gen_identifier(ctx, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(ctx->events, ctrl_event);
+    int err = sp_eventlist_add(ctx, ctx->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
@@ -645,7 +651,7 @@ int sp_encoder_init(AVBufferRef *ctx_ref)
     EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
 
     if (!ctx->codec) {
-        av_log(ctx, AV_LOG_ERROR, "Missing codec!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Missing codec!\n");
         return AVERROR(EINVAL);
     }
 
@@ -661,19 +667,18 @@ int sp_encoder_init(AVBufferRef *ctx_ref)
             goto fail;
         }
     } else {
-        int len = strlen(ctx->class->class_name) + 1 + strlen(ctx->codec->name) + 1;
+        int len = strlen(sp_class_get_name(ctx)) + 1 + strlen(ctx->codec->name) + 1;
         new_name = av_mallocz(len);
         if (!new_name) {
             err = AVERROR(ENOMEM);
             goto fail;
         }
-        av_strlcpy(new_name, ctx->class->class_name, len);
+        av_strlcpy(new_name, sp_class_get_name(ctx), len);
         av_strlcat(new_name, ":", len);
         av_strlcat(new_name, ctx->codec->name, len);
     }
 
-    av_free((void *)ctx->class->class_name);
-    ctx->class->class_name = new_name;
+    sp_class_set_name(ctx, new_name);
     ctx->name = new_name;
 
     return 0;
@@ -690,7 +695,7 @@ static void encoder_free(void *opaque, uint8_t *data)
     sp_frame_fifo_unmirror_all(ctx->src_frames);
     sp_frame_fifo_unmirror_all(ctx->dst_packets);
 
-    if (atomic_load(&ctx->running)) {
+    if (ctx->encoding_thread) {
         sp_frame_fifo_push(ctx->src_frames, NULL);
         pthread_join(ctx->encoding_thread, NULL);
     }
@@ -698,7 +703,7 @@ static void encoder_free(void *opaque, uint8_t *data)
     av_buffer_unref(&ctx->src_frames);
     av_buffer_unref(&ctx->dst_packets);
 
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_DESTROY);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
     sp_bufferlist_free(&ctx->events);
 
     if (ctx->swr)
@@ -709,10 +714,10 @@ static void encoder_free(void *opaque, uint8_t *data)
 
     avcodec_free_context(&ctx->avctx);
 
-    av_free((void *)ctx->class->class_name);
-    av_free(ctx->class);
-
     pthread_mutex_destroy(&ctx->lock);
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Encoder destroyed!\n");
+    sp_class_free(ctx);
 }
 
 AVBufferRef *sp_encoder_alloc(void)
@@ -724,19 +729,11 @@ AVBufferRef *sp_encoder_alloc(void)
     AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
                                             encoder_free, NULL, 0);
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
+    int err = sp_class_alloc(ctx, "lavc", SP_TYPE_ENCODER, NULL);
+    if (err < 0) {
         av_buffer_unref(&ctx_ref);
         return NULL;
     }
-
-    *ctx->class = (AVClass) {
-        .class_name   = av_strdup("lavc"),
-        .item_name    = av_default_item_name,
-        .get_category = av_default_get_category,
-        .version      = LIBAVUTIL_VERSION_INT,
-        .category     = AV_CLASS_CATEGORY_ENCODER,
-    };
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->pix_fmt = AV_PIX_FMT_NONE;
@@ -745,10 +742,6 @@ AVBufferRef *sp_encoder_alloc(void)
 
     ctx->src_frames = sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
     ctx->dst_packets = sp_packet_fifo_create(ctx, 0, 0);
-    ctx->initialized = ATOMIC_VAR_INIT(0);
-    ctx->running = ATOMIC_VAR_INIT(0);
-
-    sp_gen_random_data(&ctx->encoder_id, sizeof(ctx->encoder_id), sizeof(ctx->encoder_id) - 1);
 
     return ctx_ref;
 }

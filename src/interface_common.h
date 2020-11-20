@@ -5,7 +5,11 @@
 
 #include "fifo_frame.h"
 
-int interface_init(void **s);
+int sp_interface_init(AVBufferRef **s);
+
+AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
+                                        AVBufferRef *event);
+
 int interface_send_fifo_to_main(void *s, AVBufferRef *fifo);
 
 enum MouseStyle {

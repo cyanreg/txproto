@@ -113,7 +113,7 @@ static int load_cursor_theme(WaylandGraphicsCtx *ctx, int scaling)
     ctx->cursor.theme = wl_cursor_theme_load(NULL, size * scaling,
                                              ctx->wl->shm_interface);
     if (!ctx->cursor.theme) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to load cursor theme!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to load cursor theme!\n");
         return AVERROR(EINVAL);
     }
 
@@ -144,7 +144,7 @@ static int set_cursor(WaylandGraphicsCtx *ctx, enum MouseStyle style)
     case MSTYLE_BOTTOM_RIGHT: style_name = "bottom_right_corner"; break;
 
     default:
-        av_log(ctx, AV_LOG_ERROR, "Invalid cursor style!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Invalid cursor style!\n");
     case MSTYLE_NONE:
         wl_pointer_set_cursor(ctx->cursor.pointer, ctx->cursor.pointer_id,
                               NULL, 0, 0);
@@ -162,7 +162,7 @@ static int set_cursor(WaylandGraphicsCtx *ctx, enum MouseStyle style)
     struct wl_cursor *st = wl_cursor_theme_get_cursor(ctx->cursor.theme,
                                                       style_name);
     if (!st) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to load cursor theme!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to load cursor theme!\n");
         return AVERROR(EINVAL);
     }
 
@@ -421,13 +421,13 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
     close(fd);
 
     if (!ctx->keyboard.xkb_map) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to create XKB keymap\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to create XKB keymap\n");
         return;
     }
 
     ctx->keyboard.xkb_state = xkb_state_new(ctx->keyboard.xkb_map);
     if (!ctx->keyboard.xkb_state) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to create XKB state\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to create XKB state\n");
         xkb_keymap_unref(ctx->keyboard.xkb_map);
         ctx->keyboard.xkb_map = NULL;
         return;
@@ -467,7 +467,7 @@ static uint64_t lookupkey(int key)
         sp_key = key;
 
     if (!sp_key) {
-        for (int i = 0; i < FF_ARRAY_ELEMS(keymap); i++) {
+        for (int i = 0; i < SP_ARRAY_ELEMS(keymap); i++) {
             if (keymap[i].xkb == key) {
                 sp_key = keymap[i].sp;
                 break;
@@ -616,8 +616,8 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
     surf->scaling = scale;
 
     IOSysEntry *out = (IOSysEntry *)ref->data;
-    av_log(surf->main, AV_LOG_INFO, "Surface %s entered output 0x%x, new scale = %i\n",
-           surf->title, out->identifier, scale);
+    sp_log(surf->main, SP_LOG_DEBUG, "Surface \"%s\" entered output \"%s\", scale = %i\n",
+           surf->title, sp_class_get_name(out), scale);
 
     av_buffer_unref(&ref);
 }
@@ -638,8 +638,8 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
     sp_bufferlist_pop(surf->visible_outs, buflist_max_scale, &scale);
     surf->scaling = scale;
 
-    av_log(surf->main, AV_LOG_INFO, "Surface %s gone from output 0x%x, new scale = %i\n",
-           surf->title, out->identifier, scale);
+    sp_log(surf->main, SP_LOG_DEBUG, "Surface \"%s\" gone from output \"%s\", new scale = %i\n",
+           surf->title, sp_class_get_name(out), scale);
 
     av_buffer_unref(&ref);
 }
@@ -910,7 +910,7 @@ static int surface_init(void *s, void **wctx, void *ref_wctx, InterfaceCB *cb,
 
     VkResult ret = vkCreateWaylandSurfaceKHR(inst, &spawn_info, NULL, vksurf);
     if (ret != VK_SUCCESS) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to init a Vulkan Wayland surface!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to init a Vulkan Wayland surface!\n");
         return AVERROR_EXTERNAL;
     }
 
@@ -954,7 +954,8 @@ static void uninit(void **s)
     WaylandGraphicsCtx *ctx = *s;
 
     av_buffer_unref(&ctx->wl_ref);
-    FREE_CLASSED(&ctx);
+    sp_class_free(ctx);
+    av_free(ctx);
 }
 
 static int init(void **s, AVBufferRef **device_ref, const char **vk_inst_ext,
@@ -977,7 +978,7 @@ static int init(void **s, AVBufferRef **device_ref, const char **vk_inst_ext,
 
     ctx->keyboard.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!ctx->keyboard.xkb_ctx) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to init XKB!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to init XKB!\n");
         err = AVERROR(ENOMEM);
         goto fail;
     }

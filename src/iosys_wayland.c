@@ -13,12 +13,18 @@
 #include "wayland_common.h"
 
 #include "utils.h"
+#include "logging.h"
 #include "iosys_common.h"
 #include "../config.h"
 
+#ifdef HAVE_GBM
+#include <gbm.h>
+#endif
+
+const IOSysAPI src_wayland;
+
 typedef struct WaylandCaptureCtx {
-    AVClass *class;
-    int log_lvl_offset;
+    SPClass *class;
     WaylandCtx *wl;
 
     AVBufferRef *wl_ref;
@@ -36,10 +42,10 @@ typedef struct WaylandCapturePriv {
     AVBufferRef *main_ref;
 
     int64_t epoch;
+    int oneshot;
 
     /* Stats */
     int dropped_frames;
-    int dropped_frames_msg_state;
 
     /* Framerate limiting */
     AVRational frame_rate;
@@ -65,11 +71,24 @@ typedef struct WaylandCapturePriv {
     /* Screencopy stuff */
     struct {
         struct zwlr_screencopy_frame_v1 *frame_obj;
-        AVBufferPool *pool;
-        uint32_t stride;
-        uint32_t format;
-        int width;
-        int height;
+        struct {
+            int got_info;
+            AVBufferPool *pool;
+            uint32_t stride;
+            uint32_t format;
+            int width;
+            int height;
+        } shm;
+        struct {
+            int got_info;
+            AVBufferRef *frames_ref;
+#ifdef HAVE_GBM
+            struct gbm_device *gbm_dev;
+#endif
+            uint32_t format;
+            int width;
+            int height;
+        } dmabuf;
     } scrcpy;
 } WaylandCapturePriv;
 
@@ -105,7 +124,7 @@ static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format *drm_format,
 #undef FMTDBL
     };
 
-    for (int i = 0; i < FF_ARRAY_ELEMS(format_map); i++) {
+    for (int i = 0; i < SP_ARRAY_ELEMS(format_map); i++) {
         if (drm_format && format_map[i].src_drm == *drm_format) {
             *drm_format = format_map[i].stripped_drm;
             return format_map[i].dst;
@@ -126,9 +145,10 @@ static void cleanup_state(IOSysEntry *entry, struct zwlr_export_dmabuf_frame_v1 
     av_frame_free(&priv->frame);
 
     if (err < 0)
-        sp_bufferlist_dispatch_events(entry->events, entry, SP_EVENT_ON_ERROR);
+        sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_ERROR, NULL);
 
-    av_buffer_pool_uninit(&priv->scrcpy.pool);
+    av_buffer_pool_uninit(&priv->scrcpy.shm.pool);
+    av_buffer_unref(&priv->scrcpy.dmabuf.frames_ref);
     av_buffer_unref(&priv->dmabuf.frames_ref);
 
     if (df) {
@@ -255,6 +275,8 @@ static int attach_drm_frames_ref(IOSysEntry *entry, AVFrame *f,
             hwfc->sw_format == sw_format) {
             goto attach;
         }
+        if (priv->dmabuf.frames_ref)
+            sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_CHANGE, NULL);
         av_buffer_unref(&priv->dmabuf.frames_ref);
     }
 
@@ -273,7 +295,7 @@ static int attach_drm_frames_ref(IOSysEntry *entry, AVFrame *f,
 
     err = av_hwframe_ctx_init(priv->dmabuf.frames_ref);
     if (err) {
-        av_log(entry, AV_LOG_ERROR, "AVHWFramesContext init failed: %s!\n",
+        sp_log(entry, SP_LOG_ERROR, "AVHWFramesContext init failed: %s!\n",
                av_err2str(err));
         goto fail;
     }
@@ -309,7 +331,7 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     enum AVPixelFormat sw_fmt = drm_wl_fmt_to_pixfmt(&desc->layers[0].format, NULL);
 
     if (sw_fmt == AV_PIX_FMT_NONE) {
-        av_log(entry, AV_LOG_ERROR, "Unsupported DMABUF format!\n");
+        sp_log(entry, SP_LOG_ERROR, "Unsupported DMABUF format!\n");
         err = AVERROR(ENOTSUP);
         goto fail;
     }
@@ -339,14 +361,25 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     if ((err = attach_drm_frames_ref(entry, priv->frame, sw_fmt)))
         goto fail;
 
+    sp_log(entry, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",
+           av_q2d(fe->time_base) * priv->frame->pts);
+
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
     err = sp_frame_fifo_push(entry->frames, priv->frame);
     av_frame_free(&priv->frame);
     if (err == AVERROR(ENOBUFS)) {
-        av_log(entry, AV_LOG_WARNING, "Dropping frame!\n");
+        priv->dropped_frames++;
+        sp_log(entry, SP_LOG_WARN, "Dropping frame (%i dropped so far)!\n",
+               priv->dropped_frames);
+
+        SPGenericData entries[] = {
+            D_TYPE("dropped_frames", NULL, priv->dropped_frames),
+            { 0 },
+        };
+        sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_STATS, entries);
     } else if (err) {
-        av_log(entry, AV_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
+        sp_log(entry, SP_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
                av_err2str(err));
         goto fail;
     }
@@ -387,26 +420,26 @@ static void dmabuf_frame_cancel(void *data, struct zwlr_export_dmabuf_frame_v1 *
     pthread_mutex_lock(&priv->frame_obj_lock);
 
     if (reason == ZWLR_EXPORT_DMABUF_FRAME_V1_CANCEL_REASON_PERMANENT) {
-        av_log(entry, AV_LOG_ERROR, "Capture failed!\n");
+        sp_log(entry, SP_LOG_ERROR, "Capture failed!\n");
         cleanup_state(entry, frame, NULL, AVERROR_EXTERNAL);
     } else {
-        av_log(priv->main, AV_LOG_WARNING, "Frame cancelled!\n");
+        sp_log(priv->main, SP_LOG_WARN, "Frame cancelled!\n");
         schedule_frame(entry);
     }
 
     pthread_mutex_unlock(&priv->frame_obj_lock);
 }
 
-typedef struct WaylandCopyFrame {
+typedef struct WaylandSHMCopyFrame {
     struct wl_buffer *buffer;
     void *data;
     void *mapped;
     size_t size;
-} WaylandCopyFrame;
+} WaylandSHMCopyFrame;
 
-static void scrcpy_frame_free(void *opaque, uint8_t *data)
+static void scrcpy_shm_frame_free(void *opaque, uint8_t *data)
 {
-    WaylandCopyFrame *f = (WaylandCopyFrame *)data;
+    WaylandSHMCopyFrame *f = (WaylandSHMCopyFrame *)data;
 	munmap(f->mapped, f->size);
 	wl_buffer_destroy(f->buffer);
 	av_free(f);
@@ -417,22 +450,22 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
     IOSysEntry *entry = (IOSysEntry *)opaque;
     WaylandCapturePriv *priv = entry->io_priv;
 
-    WaylandCopyFrame *f = av_malloc(sizeof(WaylandCopyFrame));
+    WaylandSHMCopyFrame *f = av_malloc(sizeof(WaylandSHMCopyFrame));
 
 #define FRAME_MEM_ALIGN 4096
 
-    f->size = priv->scrcpy.stride * priv->scrcpy.height + FRAME_MEM_ALIGN;
+    f->size = priv->scrcpy.shm.stride * priv->scrcpy.shm.height + FRAME_MEM_ALIGN;
 
     char name[255];
     snprintf(name, sizeof(name), PROJECT_NAME "_%ix%i_s%i_f0x%x",
-             priv->scrcpy.width, priv->scrcpy.height,
-             priv->scrcpy.stride, priv->scrcpy.format);
+             priv->scrcpy.shm.width, priv->scrcpy.shm.height,
+             priv->scrcpy.shm.stride, priv->scrcpy.shm.format);
 
     int fd = memfd_create(name, MFD_ALLOW_SEALING);
 
     if (posix_fallocate(fd, 0, f->size)) {
         close(fd);
-        av_log(entry, AV_LOG_ERROR, "posix_fallocate failed: %i!\n", errno);
+        sp_log(entry, SP_LOG_ERROR, "posix_fallocate failed: %i!\n", errno);
         return NULL;
     }
 
@@ -442,7 +475,7 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
     f->mapped = mmap(NULL, f->size, PROT_READ | PROT_WRITE,
                      MAP_SHARED | MAP_NORESERVE, fd, 0);
     if (f->mapped == MAP_FAILED) {
-        av_log(entry, AV_LOG_ERROR, "mmap failed!\n");
+        sp_log(entry, SP_LOG_ERROR, "mmap failed!\n");
         close(fd);
         return NULL;
     }
@@ -453,19 +486,19 @@ static AVBufferRef *shm_pool_alloc(void *opaque, int size)
     pool = wl_shm_create_pool(priv->main->wl->shm_interface, fd, f->size);
     close(fd);
     f->buffer = wl_shm_pool_create_buffer(pool, (uintptr_t)f->data - (uintptr_t)f->mapped,
-                                          priv->scrcpy.width,  priv->scrcpy.height,
-                                          priv->scrcpy.stride, priv->scrcpy.format);
+                                          priv->scrcpy.shm.width,  priv->scrcpy.shm.height,
+                                          priv->scrcpy.shm.stride, priv->scrcpy.shm.format);
     wl_shm_pool_destroy(pool);
 
 #undef FRAME_MEM_ALIGN
 
-    return av_buffer_create((uint8_t *)f, sizeof(WaylandCopyFrame),
-                            scrcpy_frame_free, NULL, 0);
+    return av_buffer_create((uint8_t *)f, sizeof(WaylandSHMCopyFrame),
+                            scrcpy_shm_frame_free, NULL, 0);
 }
 
-static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
-                               enum wl_shm_format format, uint32_t width, uint32_t height,
-                               uint32_t stride)
+static void scrcpy_frame_info_shm(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                                  enum wl_shm_format format, uint32_t width, uint32_t height,
+                                  uint32_t stride)
 {
     int err;
     IOSysEntry *entry = (IOSysEntry *)data;
@@ -473,53 +506,27 @@ static void scrcpy_give_buffer(void *data, struct zwlr_screencopy_frame_v1 *fram
 
     pthread_mutex_lock(&priv->frame_obj_lock);
 
-    if ((stride != priv->scrcpy.stride) || (height != priv->scrcpy.height) ||
-        (format != priv->scrcpy.format) || (width  != priv->scrcpy.width)) {
-        av_buffer_pool_uninit(&priv->scrcpy.pool);
+    if ((stride != priv->scrcpy.shm.stride) || (height != priv->scrcpy.shm.height) ||
+        (format != priv->scrcpy.shm.format) || (width  != priv->scrcpy.shm.width)) {
+        if (priv->scrcpy.shm.pool)
+            sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_CHANGE, NULL);
+        av_buffer_pool_uninit(&priv->scrcpy.shm.pool);
 
-        priv->scrcpy.width  = width;
-        priv->scrcpy.height = height;
-        priv->scrcpy.stride = stride;
-        priv->scrcpy.format = format;
+        priv->scrcpy.shm.width  = width;
+        priv->scrcpy.shm.height = height;
+        priv->scrcpy.shm.stride = stride;
+        priv->scrcpy.shm.format = format;
 
-        priv->scrcpy.pool = av_buffer_pool_init2(sizeof(WaylandCopyFrame), entry,
-                                                 shm_pool_alloc, NULL);
+        priv->scrcpy.shm.pool = av_buffer_pool_init2(sizeof(WaylandSHMCopyFrame), entry,
+                                                     shm_pool_alloc, NULL);
 
-        if (!priv->scrcpy.pool) {
+        if (!priv->scrcpy.shm.pool) {
             err = AVERROR(ENOMEM);
             goto fail;
         }
     }
 
-    priv->frame = av_frame_alloc();
-    if (!priv->frame) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    priv->frame->width = width;
-    priv->frame->height = height;
-    priv->frame->linesize[0] = stride;
-    priv->frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
-    if (!priv->frame->opaque_ref) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    priv->frame->buf[0] = av_buffer_pool_get(priv->scrcpy.pool);
-    if (!priv->frame->buf[0]) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    priv->frame->sample_aspect_ratio = av_make_q(1, 1);
-    priv->frame->format = drm_wl_fmt_to_pixfmt(NULL, &format);
-    frame_set_colorspace(priv->frame, priv->frame->format);
-
-    WaylandCopyFrame *cpf = (WaylandCopyFrame *)priv->frame->buf[0]->data;
-    priv->frame->data[0] = cpf->data;
-
-    zwlr_screencopy_frame_v1_copy(frame, cpf->buffer);
+    priv->scrcpy.shm.got_info = 1;
 
     pthread_mutex_unlock(&priv->frame_obj_lock);
 
@@ -530,8 +537,206 @@ fail:
     pthread_mutex_unlock(&priv->frame_obj_lock);
 }
 
-static void scrcpy_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
-                         uint32_t flags)
+#ifdef HAVE_GBM
+typedef struct WaylandDMABUFCopyFrame {
+    struct wl_buffer *buffer;
+    struct gbm_bo *bo;
+} WaylandDMABUFCopyFrame;
+
+static void scrcpy_dmabuf_frame_free(void *opaque, uint8_t *data)
+{
+    WaylandDMABUFCopyFrame *f = (WaylandDMABUFCopyFrame *)opaque;
+    gbm_bo_destroy(f->bo);
+	wl_buffer_destroy(f->buffer);
+	av_free(data);
+	av_free(f);
+}
+
+static AVBufferRef *dmabuf_pool_alloc(void *opaque, int size)
+{
+    IOSysEntry *entry = (IOSysEntry *)opaque;
+    WaylandCapturePriv *priv = entry->io_priv;
+
+    AVDRMFrameDescriptor *desc = av_malloc(sizeof(AVDRMFrameDescriptor));
+    WaylandDMABUFCopyFrame *f = av_malloc(sizeof(WaylandDMABUFCopyFrame));
+
+    f->bo = gbm_bo_create(priv->scrcpy.dmabuf.gbm_dev,
+                          priv->scrcpy.dmabuf.width,
+                          priv->scrcpy.dmabuf.height,
+                          priv->scrcpy.dmabuf.format,
+                          GBM_BO_USE_LINEAR | GBM_BO_USE_RENDERING);
+
+    struct zwp_linux_buffer_params_v1 *params;
+    params = zwp_linux_dmabuf_v1_create_params(priv->main->wl->dmabuf);
+
+    int fd = gbm_bo_get_fd(f->bo);
+    uint32_t off = gbm_bo_get_offset(f->bo, 0);
+    uint32_t bo_stride = gbm_bo_get_stride(f->bo);
+    uint64_t mod = gbm_bo_get_modifier(f->bo);
+
+    desc->nb_objects = 1;
+    desc->objects[0].fd = fd;
+    desc->objects[0].size = lseek(desc->objects[0].fd, 0, SEEK_END);
+    desc->objects[0].format_modifier = mod;
+
+    desc->nb_layers = 1;
+    desc->layers[0].format = priv->scrcpy.dmabuf.format;
+    desc->layers[0].nb_planes = 1;
+    desc->layers[0].planes[0].object_index = 0;
+    desc->layers[0].planes[0].offset = 0;
+    desc->layers[0].planes[0].pitch = bo_stride;
+
+    zwp_linux_buffer_params_v1_add(params, fd, 0, off, bo_stride,
+                                   mod >> 32, mod & 0xffffffff);
+
+    f->buffer = zwp_linux_buffer_params_v1_create_immed(params,
+                                                        priv->scrcpy.dmabuf.width,
+                                                        priv->scrcpy.dmabuf.height,
+                                                        priv->scrcpy.dmabuf.format,
+                                                        0x0);
+
+    return av_buffer_create((uint8_t *)desc, sizeof(AVDRMFrameDescriptor),
+                            scrcpy_dmabuf_frame_free, f, 0);
+}
+
+static void scrcpy_frames_ref_free(AVHWFramesContext *hwfc)
+{
+    av_buffer_pool_uninit(&hwfc->pool);
+}
+
+static void scrcpy_frame_info_dmabuf(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                                     uint32_t format, uint32_t width, uint32_t height)
+{
+    int err;
+    IOSysEntry *entry = (IOSysEntry *)data;
+    WaylandCapturePriv *priv = entry->io_priv;
+
+    pthread_mutex_lock(&priv->frame_obj_lock);
+
+    if ((width  != priv->scrcpy.dmabuf.width) || (height != priv->scrcpy.dmabuf.height) ||
+        (format != priv->scrcpy.dmabuf.format)) {
+        if (priv->scrcpy.dmabuf.frames_ref)
+            sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_CHANGE, NULL);
+
+        av_buffer_unref(&priv->scrcpy.dmabuf.frames_ref);
+
+        priv->scrcpy.dmabuf.width  = width;
+        priv->scrcpy.dmabuf.height = height;
+        priv->scrcpy.dmabuf.format = format;
+
+        priv->scrcpy.dmabuf.frames_ref = av_hwframe_ctx_alloc(priv->main->wl->drm_device_ref);
+        if (!priv->scrcpy.dmabuf.frames_ref) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
+
+        AVHWFramesContext *hwfc = (AVHWFramesContext *)priv->scrcpy.dmabuf.frames_ref->data;
+
+        hwfc->free = scrcpy_frames_ref_free;
+        hwfc->user_opaque = priv;
+        hwfc->format = AV_PIX_FMT_DRM_PRIME;
+        hwfc->width = width;
+        hwfc->height = height;
+        hwfc->sw_format = drm_wl_fmt_to_pixfmt(&format, NULL);
+
+        hwfc->pool = av_buffer_pool_init2(sizeof(AVDRMFrameDescriptor), entry,
+                                          dmabuf_pool_alloc, NULL);
+        if (!hwfc->pool) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
+
+        err = av_hwframe_ctx_init(priv->scrcpy.dmabuf.frames_ref);
+        if (err < 0)
+            goto fail;
+    }
+
+    priv->scrcpy.dmabuf.got_info = 1;
+
+    pthread_mutex_unlock(&priv->frame_obj_lock);
+
+    return;
+
+fail:
+    cleanup_state(entry, NULL, frame, err);
+    pthread_mutex_unlock(&priv->frame_obj_lock);
+}
+#else
+static void scrcpy_frame_info_dmabuf(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                                     uint32_t format, uint32_t width, uint32_t height)
+{
+
+}
+#endif
+
+static void scrcpy_frame_info_done(void *data, struct zwlr_screencopy_frame_v1 *frame)
+{
+    int err;
+    struct wl_buffer *dst;
+    IOSysEntry *entry = (IOSysEntry *)data;
+    WaylandCapturePriv *priv = entry->io_priv;
+
+    pthread_mutex_lock(&priv->frame_obj_lock);
+
+    priv->frame = av_frame_alloc();
+    if (!priv->frame) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+#ifdef HAVE_GBM
+    if (priv->capture_mode == CAP_MODE_SCRCPY_DMABUF) {
+        err = av_hwframe_get_buffer(priv->scrcpy.dmabuf.frames_ref, priv->frame, 0);
+        if (err < 0)
+            goto fail;
+
+        AVHWFramesContext *hwfc = (AVHWFramesContext *)priv->frame->hw_frames_ctx->data;
+        frame_set_colorspace(priv->frame, hwfc->sw_format);
+
+        WaylandDMABUFCopyFrame *cpf = av_buffer_pool_buffer_get_opaque(priv->frame->buf[0]);
+        dst = cpf->buffer;
+    } else
+#endif
+    {
+        uint32_t wlfmt = priv->scrcpy.shm.format;
+        priv->frame->width = priv->scrcpy.shm.width;
+        priv->frame->height = priv->scrcpy.shm.height;
+        priv->frame->linesize[0] = priv->scrcpy.shm.stride;
+        priv->frame->format = drm_wl_fmt_to_pixfmt(NULL, &wlfmt);
+        frame_set_colorspace(priv->frame, priv->frame->format);
+
+        priv->frame->buf[0] = av_buffer_pool_get(priv->scrcpy.shm.pool);
+        if (!priv->frame->buf[0]) {
+            err = AVERROR(ENOMEM);
+            goto fail;
+        }
+
+        WaylandSHMCopyFrame *cpf = (WaylandSHMCopyFrame *)priv->frame->buf[0]->data;
+        priv->frame->data[0] = cpf->data;
+        dst = cpf->buffer;
+    }
+
+    priv->frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
+    if (!priv->frame->opaque_ref) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    priv->frame->sample_aspect_ratio = av_make_q(1, 1);
+
+    zwlr_screencopy_frame_v1_copy(frame, dst);
+
+    pthread_mutex_unlock(&priv->frame_obj_lock);
+
+    return;
+
+fail:
+    cleanup_state(entry, NULL, frame, err);
+    pthread_mutex_unlock(&priv->frame_obj_lock);
+}
+
+static void scrcpy_frame_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                               uint32_t flags)
 {
     IOSysEntry *entry = (IOSysEntry *)data;
     WaylandCapturePriv *priv = entry->io_priv;
@@ -539,7 +744,8 @@ static void scrcpy_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
     pthread_mutex_lock(&priv->frame_obj_lock);
 
     /* Horizontal flipping - we can do it */
-    if (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) {
+    if (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT &&
+        !priv->frame->hw_frames_ctx) {
         /* Increment the data pointer to the last line */
         priv->frame->data[0] += priv->frame->linesize[0] * (priv->frame->height - 1);
         /* Invert the stride */
@@ -549,9 +755,15 @@ static void scrcpy_flags(void *data, struct zwlr_screencopy_frame_v1 *frame,
     pthread_mutex_unlock(&priv->frame_obj_lock);
 }
 
-static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
-                         uint32_t tv_sec_hi, uint32_t tv_sec_lo,
-                         uint32_t tv_nsec)
+static void scrcpy_frame_damages(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                                 uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+
+}
+
+static void scrcpy_frame_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
+                               uint32_t tv_sec_hi, uint32_t tv_sec_lo,
+                               uint32_t tv_nsec)
 {
     IOSysEntry *entry = (IOSysEntry *)data;
     WaylandCapturePriv *priv = entry->io_priv;
@@ -576,14 +788,25 @@ static void scrcpy_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     priv->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
                                      av_gettime_relative() - priv->epoch);
 
+    sp_log(entry, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",
+           av_q2d(fe->time_base) * priv->frame->pts);
+
     /* We don't do this check at the start on since there's still some chance
      * whatever's consuming the FIFO will be done by now. */
     int err = sp_frame_fifo_push(entry->frames, priv->frame);
     av_frame_free(&priv->frame);
     if (err == AVERROR(ENOBUFS)) {
-        av_log(entry, AV_LOG_WARNING, "Dropping frame!\n");
+        priv->dropped_frames++;
+        sp_log(entry, SP_LOG_WARN, "Dropping frame (%i dropped so far)!\n",
+               priv->dropped_frames);
+
+        SPGenericData entries[] = {
+            D_TYPE("dropped_frames", NULL, priv->dropped_frames),
+            { 0 },
+        };
+        sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_STATS, entries);
     } else if (err) {
-        av_log(entry, AV_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
+        sp_log(entry, SP_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
                av_err2str(err));
         goto fail;
     }
@@ -617,44 +840,28 @@ fail:
     pthread_mutex_unlock(&priv->frame_obj_lock);
 }
 
-static void scrcpy_fail(void *data, struct zwlr_screencopy_frame_v1 *frame)
+static void scrcpy_frame_fail(void *data, struct zwlr_screencopy_frame_v1 *frame)
 {
     IOSysEntry *entry = (IOSysEntry *)data;
     WaylandCapturePriv *priv = entry->io_priv;
 
     pthread_mutex_lock(&priv->frame_obj_lock);
 
-    av_log(entry, AV_LOG_ERROR, "Copy failed!\n");
+    sp_log(entry, SP_LOG_ERROR, "Copy failed!\n");
     cleanup_state(entry, NULL, frame, AVERROR_EXTERNAL);
 
     pthread_mutex_unlock(&priv->frame_obj_lock);
 }
 
-static void scrcpy_damage(void *data, struct zwlr_screencopy_frame_v1 *frame,
-                          uint32_t x, uint32_t y, uint32_t w, uint32_t h)
-{
-
-}
-
-static void scrcpy_dmabuf_info(void *data, struct zwlr_screencopy_frame_v1 *frame,
-                               uint32_t format, uint32_t width, uint32_t height)
-{
-
-}
-
-static void scrcpy_dmabuf_done(void *data, struct zwlr_screencopy_frame_v1 *frame)
-{
-
-}
-
 static const struct zwlr_screencopy_frame_v1_listener scrcpy_frame_listener = {
-	.buffer       = scrcpy_give_buffer,
-	.flags        = scrcpy_flags,
-	.ready        = scrcpy_ready,
-	.failed       = scrcpy_fail,
-	.damage       = scrcpy_damage,
-	.linux_dmabuf = scrcpy_dmabuf_info,
-	.buffer_done  = scrcpy_dmabuf_done,
+    .buffer       = scrcpy_frame_info_shm,
+    .linux_dmabuf = scrcpy_frame_info_dmabuf,
+    .buffer_done  = scrcpy_frame_info_done,
+
+    .flags        = scrcpy_frame_flags,
+    .damage       = scrcpy_frame_damages,
+    .ready        = scrcpy_frame_ready,
+    .failed       = scrcpy_frame_fail,
 };
 
 static const struct zwlr_export_dmabuf_frame_v1_listener dmabuf_frame_listener = {
@@ -686,11 +893,18 @@ static void scrcpy_register_cb(IOSysEntry *entry)
                                                   priv->capture_cursor, api_priv->output);
     zwlr_screencopy_frame_v1_add_listener(f, &scrcpy_frame_listener, entry);
     priv->scrcpy.frame_obj = f;
+    priv->scrcpy.shm.got_info = 0;
+    priv->scrcpy.dmabuf.got_info = 0;
 }
 
 static void schedule_frame(IOSysEntry *entry)
 {
     WaylandCapturePriv *priv = entry->io_priv;
+    if (priv->oneshot && priv->oneshot++ >= 2) {
+        cleanup_state(entry, NULL, NULL, 0);
+        sp_frame_fifo_push(entry->frames, NULL);
+        return;
+    }
     int capture_mode = priv->capture_mode;
     if (capture_mode == CAP_MODE_DMABUF)
         dmabuf_register_cb(entry);
@@ -704,7 +918,33 @@ typedef struct WLCaptureIOCtrlCtx {
     atomic_int_fast64_t *epoch;
 } WLCaptureIOCtrlCtx;
 
-static int wlcapture_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static void destroy_capture(WaylandCapturePriv *priv)
+{
+    pthread_mutex_lock(&priv->frame_obj_lock);
+
+    /* Destroying the frame objects should destroy everything */
+    if (priv->scrcpy.frame_obj)
+        zwlr_screencopy_frame_v1_destroy(priv->scrcpy.frame_obj);
+
+    /* av_frame_free also destroys the callback */
+    if (priv->dmabuf.frame_obj && !priv->frame)
+        zwlr_export_dmabuf_frame_v1_destroy(priv->dmabuf.frame_obj);
+
+    av_frame_free(&priv->frame);
+
+    pthread_mutex_unlock(&priv->frame_obj_lock);
+
+    /* Free anything allocated */
+    av_buffer_pool_uninit(&priv->scrcpy.shm.pool);
+    av_buffer_unref(&priv->scrcpy.dmabuf.frames_ref);
+    av_buffer_unref(&priv->dmabuf.frames_ref);
+#ifdef HAVE_GBM
+    gbm_device_destroy(priv->scrcpy.dmabuf.gbm_dev);
+    priv->scrcpy.dmabuf.gbm_dev = NULL;
+#endif
+}
+
+static int wlcapture_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     WLCaptureIOCtrlCtx *event = (WLCaptureIOCtrlCtx *)opaque->data;
 
@@ -715,7 +955,7 @@ static int wlcapture_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         priv->epoch = atomic_load(event->epoch);
         schedule_frame(entry);
         wl_display_flush(priv->main->wl->display);
-        return 0;
+        return sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
         pthread_mutex_lock(&priv->frame_obj_lock);
         cleanup_state(entry, priv->dmabuf.frame_obj, priv->scrcpy.frame_obj, 0);
@@ -731,13 +971,35 @@ static int wlcapture_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void 
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        return sp_bufferlist_dispatch_events(iosys_entry->events, iosys_entry, SP_EVENT_ON_COMMIT);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Comitting!\n");
+        return sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_bufferlist_discard_new_events(iosys_entry->events);
-        return 0;
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Discarding!\n");
+        sp_eventlist_discard(iosys_entry->events);
+    } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
+        char *fstr = sp_event_flags_to_str_buf(arg);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_eventlist_add(iosys_entry, iosys_entry->events, arg);
+    } else if (ctrl & SP_EVENT_CTRL_DEP) {
+        char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_eventlist_add_with_dep(iosys_entry, iosys_entry->events, arg, ctrl);
     } else if (ctrl & SP_EVENT_CTRL_OPTS) {
         AVDictionary *dict = arg;
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+        AVDictionaryEntry *dict_entry = NULL;
+        while ((dict_entry = av_dict_get(dict, "", dict_entry, AV_DICT_IGNORE_SUFFIX))) {
+            if (strcmp(dict_entry->key, "capture_cursor") &&
+                strcmp(dict_entry->key, "capture_mode")   &&
+                strcmp(dict_entry->key, "framerate_num")  &&
+                strcmp(dict_entry->key, "framerate_den")  &&
+                strcmp(dict_entry->key, "oneshot")) {
+                sp_log(iosys_entry, SP_LOG_ERROR, "Option \"%s\" not found!\n", dict_entry->key);
+                return AVERROR(EINVAL);
+            }
+        }
+    } else if ((ctrl & SP_EVENT_CTRL_MASK) & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
         return AVERROR(ENOTSUP);
     }
 
@@ -750,7 +1012,7 @@ static int wlcapture_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void 
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = wlcapture_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry);
+        int ret = wlcapture_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
@@ -761,41 +1023,16 @@ static int wlcapture_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void 
                                               sp_event_gen_identifier(iosys_entry, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(iosys_entry, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(iosys_entry->events, ctrl_event);
+    int err = sp_eventlist_add(iosys_entry, iosys_entry->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
 
     return 0;
 }
-
-#if 0
-static void destroy_capture(void *opaque, uint8_t *data)
-{
-    WaylandCapturePriv *ctx = (WaylandCapturePriv *)data;
-
-    pthread_mutex_lock(&ctx->frame_obj_lock);
-
-    /* Destroying the frame objects should destroy everything */
-    if (ctx->scrcpy.frame_obj)
-        zwlr_screencopy_frame_v1_destroy(ctx->scrcpy.frame_obj);
-
-    /* av_frame_free also destroys the callback */
-    if (ctx->dmabuf.frame_obj && !ctx->frame)
-        zwlr_export_dmabuf_frame_v1_destroy(ctx->dmabuf.frame_obj);
-
-    av_frame_free(&ctx->frame);
-
-    pthread_mutex_unlock(&ctx->frame_obj_lock);
-
-    /* Free anything allocated */
-    av_buffer_pool_uninit(&ctx->scrcpy.pool);
-    av_buffer_unref(&ctx->dmabuf.frames_ref);
-}
-#endif
 
 static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
                              AVDictionary *opts)
@@ -805,7 +1042,7 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
 
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
     if (iosys_entry->io_priv) {
-        av_log(iosys_entry, AV_LOG_ERROR, "Entry is being already captured!\n");
+        sp_log(iosys_entry, SP_LOG_ERROR, "Entry is being already captured!\n");
         return AVERROR(EINVAL);
     }
 
@@ -815,6 +1052,8 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
 
     pthread_mutex_init(&priv->frame_obj_lock, NULL);
 
+    const char *oneshot_str = dict_get(opts, "oneshot");
+    priv->oneshot = oneshot_str ? !strcmp(oneshot_str, "1") : 0;
     priv->capture_mode = CAP_MODE_SCRCPY;
     priv->capture_cursor = 1;
 
@@ -827,11 +1066,14 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
             priv->capture_mode = CAP_MODE_DMABUF;
         } else if (!strcmp(mode_str, "screencopy")) {
             priv->capture_mode = CAP_MODE_SCRCPY;
+#ifdef HAVE_GBM
         } else if (!strcmp(mode_str, "screencopy-dmabuf")) {
             priv->capture_mode = CAP_MODE_SCRCPY_DMABUF;
+#endif
         } else {
-            av_log(iosys_entry, AV_LOG_ERROR, "Unsupported capture mode \"%s\"!\n", mode_str);
+            sp_log(iosys_entry, SP_LOG_ERROR, "Unsupported capture mode \"%s\"!\n", mode_str);
             av_free(priv);
+            err = AVERROR(EINVAL);
             goto end;
         }
     }
@@ -843,14 +1085,14 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
         framerate_req.den = strtol(dict_get(opts, "framerate_den"), NULL, 10);
 
     if (priv->capture_mode == CAP_MODE_DMABUF && !ctx->wl->dmabuf_export_manager) {
-        av_log(ctx, AV_LOG_ERROR, "DMABUF capture protocol unavailable!\n");
+        sp_log(ctx, SP_LOG_ERROR, "DMABUF capture protocol unavailable!\n");
         err = AVERROR(ENOTSUP);
         goto end;
     }
 
-    if ((priv->capture_mode == CAP_MODE_SCRCPY || priv->capture_mode == CAP_MODE_SCRCPY_DMABUF) &&
-        !ctx->wl->screencopy_export_manager) {
-        av_log(ctx, AV_LOG_ERROR, "Screencopy protocol unavailable!\n");
+    if (!ctx->wl->screencopy_export_manager && (priv->capture_mode == CAP_MODE_SCRCPY ||
+        priv->capture_mode == CAP_MODE_SCRCPY_DMABUF)) {
+        sp_log(ctx, SP_LOG_ERROR, "Screencopy protocol unavailable!\n");
         err = AVERROR(ENOTSUP);
         goto end;
     }
@@ -858,7 +1100,7 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
     if ((framerate_req.num && !framerate_req.den) ||
         (framerate_req.den && !framerate_req.num) ||
         (av_cmp_q(framerate_req, iosys_entry->framerate) > 0)) {
-        av_log(ctx, AV_LOG_ERROR, "Invalid framerate!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Invalid framerate!\n");
         err = AVERROR(EINVAL);
         goto end;
     } else if ((framerate_req.num && framerate_req.den) &&
@@ -874,6 +1116,14 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
     priv->main_ref = av_buffer_ref(ctx_ref);
     priv->main = (WaylandCaptureCtx *)priv->main_ref->data;
 
+#ifdef HAVE_GBM
+    AVHWDeviceContext *dev_ctx = (AVHWDeviceContext *)priv->main->wl->drm_device_ref->data;
+    AVDRMDeviceContext *pdev_ctx = dev_ctx->hwctx;
+
+    if (!priv->scrcpy.dmabuf.gbm_dev)
+        priv->scrcpy.dmabuf.gbm_dev = gbm_create_device(pdev_ctx->fd);
+#endif
+
 end:
     return err;
 }
@@ -886,17 +1136,19 @@ static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg
     if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         AVBufferRef *event = arg;
         char *fstr = sp_event_flags_to_str_buf(event);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
 
         if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
             /* Bring up the new event to speed with current affairs */
             SPBufferList *tmp_event = sp_bufferlist_new();
-            sp_bufferlist_append_event(tmp_event, event);
+            sp_eventlist_add(ctx, tmp_event, event);
 
             AVBufferRef *obj = NULL;
             while ((obj = sp_bufferlist_iter_ref(ctx->wl->output_list))) {
-                sp_bufferlist_dispatch_events(tmp_event, obj->data, SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE);
+                sp_eventlist_dispatch(obj->data, tmp_event,
+                                      SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE,
+                                      obj->data);
                 av_buffer_unref(&obj);
             }
 
@@ -904,7 +1156,7 @@ static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg
         }
 
         /* Add it to the list now to receive events dynamically */
-        err = sp_bufferlist_append_event(ctx->events, event);
+        err = sp_eventlist_add(ctx, ctx->events, event);
         if (err < 0)
             return err;
     }
@@ -915,19 +1167,19 @@ static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg
 static AVBufferRef *wlcapture_ref_entry(AVBufferRef *ctx_ref, uint32_t identifier)
 {
     WaylandCaptureCtx *ctx = (WaylandCaptureCtx *)ctx_ref->data;
-    return sp_bufferlist_pop(ctx->wl->output_list, sp_bufferlist_iosysentry_by_id, &identifier);
+    return sp_bufferlist_ref(ctx->wl->output_list, sp_bufferlist_iosysentry_by_id, &identifier);
 }
 
 static void wlcapture_uninit(void *opaque, uint8_t *data)
 {
     WaylandCaptureCtx *ctx = (WaylandCaptureCtx *)data;
 
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_DESTROY);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
     sp_bufferlist_free(&ctx->events);
 
     av_buffer_unref(&ctx->wl_ref);
 
-    sp_free_class(ctx);
+    sp_class_free(ctx);
     av_free(ctx);
 }
 
@@ -945,44 +1197,37 @@ static int wlcapture_init(AVBufferRef **s)
         return AVERROR(ENOMEM);
     }
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    err = sp_alloc_class(ctx, "wlcapture", AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
-                         &ctx->log_lvl_offset, &ctx->wl);
-    if (err < 0)
-        goto fail;
-
     err = sp_wayland_create(&ctx->wl_ref);
     if (err < 0)
         goto fail;
 
     ctx->wl = (WaylandCtx *)ctx->wl_ref->data;
 
+    err = sp_class_alloc(ctx, src_wayland.name, SP_TYPE_VIDEO_SOURCE, ctx->wl);
+    if (err < 0)
+        goto fail;
+
     if (!ctx->wl->dmabuf_export_manager && !ctx->wl->screencopy_export_manager) {
-        av_log(ctx, AV_LOG_WARNING, "Compositor doesn't support any capture protocol!\n");
+        sp_log(ctx, SP_LOG_WARN, "Compositor doesn't support any capture protocol!\n");
         err = AVERROR(ENOTSUP);
         goto fail;
     }
 
     if (!ctx->wl->dmabuf_export_manager) {
-        av_log(ctx, AV_LOG_WARNING, "Compositor doesn't support the %s protocol, "
+        sp_log(ctx, SP_LOG_INFO, "Compositor doesn't support the %s protocol, "
                "display DMABUF capture unavailable!\n",
                zwlr_export_dmabuf_manager_v1_interface.name);
     } else {
-        av_log(ctx, AV_LOG_INFO, "Compositor supports the %s protocol\n",
+        sp_log(ctx, SP_LOG_DEBUG, "Compositor supports the %s protocol\n",
                zwlr_export_dmabuf_manager_v1_interface.name);
     }
 
     if (!ctx->wl->screencopy_export_manager) {
-        av_log(ctx, AV_LOG_WARNING, "Compositor doesn't support the %s protocol, "
+        sp_log(ctx, SP_LOG_INFO, "Compositor doesn't support the %s protocol, "
                "display screencopy capture unavailable!\n",
                zwlr_screencopy_manager_v1_interface.name);
     } else {
-        av_log(ctx, AV_LOG_INFO, "Compositor supports the %s protocol\n",
+        sp_log(ctx, SP_LOG_DEBUG, "Compositor supports the %s protocol\n",
                zwlr_screencopy_manager_v1_interface.name);
     }
 
@@ -999,7 +1244,7 @@ static int wlcapture_init(AVBufferRef **s)
 fail:
     av_buffer_unref(&ctx_ref);
 
-    return err; 
+    return err;
 }
 
 const IOSysAPI src_wayland = {

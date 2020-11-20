@@ -39,8 +39,11 @@ static enum MouseStyle mouse_move_highlight(void *wctx, int x, int y)
     uint32_t flags = win->highlight.flags;
     int count = 1, delta_x = 0, delta_y = 0;
 
-    if (win->cursor.x >= 0) delta_x = x - win->cursor.x;
-    if (win->cursor.y >= 0) delta_y = y - win->cursor.y;
+    if (win->cursor.x >= 0)
+        delta_x = x - win->cursor.x;
+
+    if (win->cursor.y >= 0)
+        delta_y = y - win->cursor.y;
 
     win->cursor.x = x;
     win->cursor.y = y;
@@ -63,10 +66,22 @@ static enum MouseStyle mouse_move_highlight(void *wctx, int x, int y)
         int left_border   = FFMIN(win->highlight.x0, win->highlight.x1);
         int bottom_border = FFMAX(win->highlight.y0, win->highlight.y1);
         int right_border  = FFMAX(win->highlight.x0, win->highlight.x1);
-        if (abs(win->cursor.x - left_border)   < HBORDER_RESIZE) left   = 1;
-        if (abs(win->cursor.x - right_border)  < HBORDER_RESIZE) right  = 1;
-        if (abs(win->cursor.y - top_border)    < HBORDER_RESIZE) top    = 1;
-        if (abs(win->cursor.y - bottom_border) < HBORDER_RESIZE) bottom = 1;
+        if (abs(win->cursor.x - left_border)   < HBORDER_RESIZE &&
+            (win->cursor.y > top_border    - HBORDER_RESIZE) &&
+            (win->cursor.y < bottom_border + HBORDER_RESIZE))
+            left   = 1;
+        if (abs(win->cursor.x - right_border)  < HBORDER_RESIZE &&
+            (win->cursor.y > top_border    - HBORDER_RESIZE) &&
+            (win->cursor.y < bottom_border + HBORDER_RESIZE))
+            right  = 1;
+        if (abs(win->cursor.y - top_border)    < HBORDER_RESIZE &&
+            (win->cursor.x > left_border   - HBORDER_RESIZE) &&
+            (win->cursor.x < right_border  + HBORDER_RESIZE))
+            top    = 1;
+        if (abs(win->cursor.y - bottom_border) < HBORDER_RESIZE &&
+            (win->cursor.x > left_border   - HBORDER_RESIZE) &&
+            (win->cursor.x < right_border  + HBORDER_RESIZE))
+            bottom = 1;
 
         /* All */
         if (left && right && top && bottom) { style = MSTYLE_CROSS; goto end; }
@@ -100,24 +115,35 @@ static int win_input_highlight(void *wctx, uint64_t val)
     uint64_t flags = val & SP_KEY_FLAG_MASK;
     val &= ~SP_KEY_FLAG_MASK;
 
+    int has_sel = 0;
+    SPRect res;
+
     switch (val) {
     case SP_KEY_MOUSE_LEFT:
         if ((flags & SP_KEY_FLAG_DOWN) && !win->highlight.flags &&
             (win->highlight.x0 >= 0) && (win->highlight.x1 >= 0) &&
             (win->highlight.y0 >= 0) && (win->highlight.y1 >= 0)) {
-            if (abs(win->cursor.x - win->highlight.x0) < HBORDER_RESIZE) {
+            if (abs(win->cursor.x - win->highlight.x0) < HBORDER_RESIZE &&
+                (win->cursor.y > win->highlight.y0 - HBORDER_RESIZE) &&
+                (win->cursor.y < win->highlight.y1 + HBORDER_RESIZE)) {
                 win->cursor.x = win->highlight.x0;
                 win->highlight.flags |= HFLAG_TRACK_X0;
             }
-            if (abs(win->cursor.x - win->highlight.x1) < HBORDER_RESIZE) {
+            if (abs(win->cursor.x - win->highlight.x1) < HBORDER_RESIZE &&
+                (win->cursor.y > win->highlight.y0 - HBORDER_RESIZE) &&
+                (win->cursor.y < win->highlight.y1 + HBORDER_RESIZE)) {
                 win->cursor.x = win->highlight.x1;
                 win->highlight.flags |= HFLAG_TRACK_X1;
             }
-            if (abs(win->cursor.y - win->highlight.y0) < HBORDER_RESIZE) {
+            if (abs(win->cursor.y - win->highlight.y0) < HBORDER_RESIZE &&
+                (win->cursor.x > win->highlight.x0 - HBORDER_RESIZE) &&
+                (win->cursor.x < win->highlight.x1 + HBORDER_RESIZE)) {
                 win->cursor.y = win->highlight.y0;
                 win->highlight.flags |= HFLAG_TRACK_Y0;
             }
-            if (abs(win->cursor.y - win->highlight.y1) < HBORDER_RESIZE) {
+            if (abs(win->cursor.y - win->highlight.y1) < HBORDER_RESIZE &&
+                (win->cursor.x > win->highlight.x0 - HBORDER_RESIZE) &&
+                (win->cursor.x < win->highlight.x1 + HBORDER_RESIZE)) {
                 win->cursor.y = win->highlight.y1;
                 win->highlight.flags |= HFLAG_TRACK_Y1;
             }
@@ -164,9 +190,10 @@ static int win_input_highlight(void *wctx, uint64_t val)
         int x1 = FFMAX(win->highlight.x0, win->highlight.x1);
         int y1 = FFMAX(win->highlight.y0, win->highlight.y1);
         if ((x0 != x1) && (y0 != y1)) {
-            av_log(win->main, AV_LOG_INFO, "Selected area at (%i, %i) %ix%i\n",
+            sp_log(win, SP_LOG_VERBOSE, "Selected area at (%i, %i) %ix%i\n",
                    x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-            /* Send to source */
+            res = (SPRect){ x0, y0, x1, y1 };
+            has_sel = 1;
         }
         /* Fallthrough */
     case 'c':
@@ -180,6 +207,9 @@ static int win_input_highlight(void *wctx, uint64_t val)
         win->highlight.flags = 0x0;
         pthread_mutex_unlock(&win->lock);
         win->main->sys->surf_destroy(&win->wctx);
+        SPGenericData rect[] = { D_TYPE("region", NULL, res), { 0 } };
+        sp_eventlist_dispatch(win, win->events, SP_EVENT_ON_DESTROY,
+                              has_sel ? &rect : NULL);
         return 0;
     };
 
@@ -252,8 +282,8 @@ static int render_highlight(void *wctx)
         .repr = { 0 },
         .color = { 0 },
         .src_rect.x0 = 0,
-        .src_rect.x1 = 0,
-        .src_rect.y0 = pltex_params.w,
+        .src_rect.y0 = 0,
+        .src_rect.x1 = pltex_params.w,
         .src_rect.y1 = pltex_params.h,
     };
 
@@ -275,9 +305,9 @@ static int render_highlight(void *wctx)
     struct pl_render_target target = { 0 };
     pl_render_target_from_swapchain(&target, &frame);
     target.dst_rect.x0 = x0;
-    target.dst_rect.x1 = x1;
+    target.dst_rect.x1 = x1 + 10;
     target.dst_rect.y0 = y0;
-    target.dst_rect.y1 = y1;
+    target.dst_rect.y1 = y1 + 10;
 
     pl_render_image(win->pl_renderer, &plimg, &target, &render_params);
 

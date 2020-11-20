@@ -38,7 +38,6 @@ typedef struct PulseCtx {
 
 typedef struct PulsePriv {
     PulseCtx *main;
-    AVBufferRef *main_ref;
     pa_stream *stream;
 
     /* Pulse info */
@@ -52,6 +51,9 @@ typedef struct PulsePriv {
     uint32_t master_sink_index; /* Sink inputs only */
 
     int64_t epoch;
+
+    AVBufferPool *pool;
+    int pool_entry_size;
 
     /* Stats */
     int dropped_samples;
@@ -67,12 +69,6 @@ typedef struct PulsePriv {
     AVRational time_base;
 } PulsePriv;
 
-/**
- * \brief waits for a pulseaudio operation to finish, frees it and
- *        unlocks the mainloop
- * \param op operation to wait for
- * \return 1 if operation has finished normally (DONE state), 0 otherwise
- */
 static int waitop(PulseCtx *ctx, pa_operation *op)
 {
     if (!op) {
@@ -86,7 +82,7 @@ static int waitop(PulseCtx *ctx, pa_operation *op)
     }
     pa_operation_unref(op);
     pa_threaded_mainloop_unlock(ctx->pa_mainloop);
-    return state != PA_OPERATION_DONE;
+    return state != PA_OPERATION_DONE ? AVERROR_EXTERNAL : 0;
 }
 
 static void stream_success_cb(pa_stream *stream, int success, void *data)
@@ -139,6 +135,30 @@ static const uint64_t pa_to_lavu_ch_map(const pa_channel_map *ch_map)
     return map;
 }
 
+static int frame_get_pool_buffer(PulsePriv *priv, AVFrame *f)
+{
+    int ret = av_samples_get_buffer_size(&f->linesize[0], f->channels,
+                                         f->nb_samples, f->format, 0);
+    if (ret < 0)
+        return ret;
+
+    if (!priv->pool || ret > priv->pool_entry_size) {
+        av_buffer_pool_uninit(&priv->pool);
+        priv->pool = av_buffer_pool_init2(ret, NULL, NULL, NULL);
+    }
+
+    AVBufferRef *buf = av_buffer_pool_get(priv->pool);
+    if (!buf)
+        return AVERROR(ENOMEM);
+
+    /* This assumes data is not planar */
+    f->buf[0] = buf;
+    f->data[0] = f->buf[0]->data;
+    f->extended_data = f->data;
+
+    return 0;
+}
+
 static void stream_read_cb(pa_stream *stream, size_t size, void *data)
 {
     const void *buffer;
@@ -147,15 +167,16 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     const pa_sample_spec *ss = pa_stream_get_sample_spec(stream);
     const pa_channel_map *ch_map = pa_stream_get_channel_map(stream);
 
-    /* Read the samples */
+    /* NOTE: this will NEVER return data more than once per call, regardless
+     * of what some other pulse API users do or think. Stop testing for it. */
     if (pa_stream_peek(stream, &buffer, &size) < 0) {
-        av_log(iosys_entry, AV_LOG_WARNING, "Unable to get samples from PA: %s\n",
+        sp_log(iosys_entry, SP_LOG_ERROR, "Unable to get samples from PA: %s\n",
                pa_strerror(pa_context_errno(priv->main->pa_context)));
         return;
     }
 
     /* There's no data */
-    if (!buffer && !size)
+    if (!size)
         return;
 
     AVFrame *f          = av_frame_alloc();
@@ -170,13 +191,28 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     fe->time_base       = av_make_q(1, 1000000);
     fe->bits_per_sample = format_map[ss->format].bits_per_sample;
 
-    /* Allocate the frame */
-    av_frame_get_buffer(f, 0);
+    /* Allocate the frame. */
+    frame_get_pool_buffer(priv, f);
 
-    if (buffer)
-        memcpy(f->data[0], buffer, size);
-    else /* There's a hole */
+    /* Copy samples */
+    if (buffer) {
+        if (fe->bits_per_sample == 24) {
+            /* *sigh*
+             * Pulseaudio's definition of PA_SAMPLE_S24_32 is to have the padding
+             * in the MSB's. This is completely stupid and against what everyone
+             * sane does. So we have an easy-to-SIMD copy that hopefully compilers
+             * get right and actually SIMD. */
+            size >>= 2;
+            const uint32_t *src = buffer;
+            int32_t *dst = (int32_t *)f->data[0];
+            for (int i = 0; i < size; i++)
+                dst[i] = src[i] << 8;
+        } else {
+            memcpy(f->data[0], buffer, size);
+        }
+    } else { /* There's a hole */
         av_samples_set_silence(f->data, 0, f->nb_samples, f->channels, f->format);
+    }
 
     if (!priv->delay)
         priv->delay = av_gettime_relative() - priv->epoch;
@@ -197,12 +233,14 @@ static void stream_read_cb(pa_stream *stream, size_t size, void *data)
     pa_stream_drop(stream);
 
     int nb_samples = f->nb_samples;
+    sp_log(iosys_entry, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f, len = %.2f ms\n",
+           av_q2d(fe->time_base) * f->pts, (1000.0f * nb_samples) / f->sample_rate);
     int err = sp_frame_fifo_push(iosys_entry->frames, f);
     av_frame_free(&f);
     if (err == AVERROR(ENOBUFS)) {
-        av_log(iosys_entry, AV_LOG_WARNING, "Dropping %i samples!\n", nb_samples);
+        sp_log(iosys_entry, SP_LOG_WARN, "Dropping %i samples!\n", nb_samples);
     } else if (err) {
-        av_log(iosys_entry, AV_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
+        sp_log(iosys_entry, SP_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
                av_err2str(err));
         /* Fatal error happens here */
     }
@@ -216,30 +254,31 @@ static void stream_status_cb(pa_stream *stream, void *data)
     const pa_channel_map *ch_map;
     char map_str[256];
 
-    switch (pa_stream_get_state(stream)) {
+    pa_stream_state_t state = pa_stream_get_state(stream);
+    switch (state) {
+    case PA_STREAM_CREATING:
+        sp_log(iosys_entry, SP_LOG_TRACE, "Creating stream...\n");
+        return;
     case PA_STREAM_READY:
         ss = pa_stream_get_sample_spec(stream);
         ch_map = pa_stream_get_channel_map(stream);
         av_get_channel_layout_string(map_str, sizeof(map_str), ss->channels, pa_to_lavu_ch_map(ch_map));
-        av_log(iosys_entry, AV_LOG_VERBOSE, "Capture stream ready, format: %iHz %s %ich %s\n",
+        sp_log(iosys_entry, SP_LOG_VERBOSE, "Stream ready, format: %iHz %s %ich %s\n",
                ss->rate, map_str, ss->channels, av_get_sample_fmt_name(format_map[ss->format].av_format));
-        break;
+        pa_threaded_mainloop_signal(priv->main->pa_mainloop, 0);
+        sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_CONFIG, NULL);
+        return;
+    case PA_STREAM_TERMINATED: /* Clean termination */
+        return;
     case PA_STREAM_UNCONNECTED:
-        return;
-    case PA_STREAM_CREATING:
-        return;
-    case PA_STREAM_FAILED:
-        av_log(iosys_entry, AV_LOG_ERROR, "Capture stream failed: %s!\n",
+    case PA_STREAM_FAILED: /* Unclean termination */
+        sp_log(iosys_entry, SP_LOG_ERROR, "Capture stream failed: %s!\n",
                pa_strerror(pa_context_errno(priv->main->pa_context)));
-        /* Fallthrough */
-    case PA_STREAM_TERMINATED:
-
-        av_log(iosys_entry, AV_LOG_VERBOSE, "Terminating capture stream!\n");
-
+        return;
+    default:
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Unhandled stream state %i\n", state);
         return;
     }
-
-    return;
 }
 
 /* ffmpeg can only operate on native endian sample formats */
@@ -258,35 +297,6 @@ static enum pa_sample_format pulse_remap_to_useful[] = {
     [PA_SAMPLE_S24_32LE]  = PA_SAMPLE_S24_32NE,
     [PA_SAMPLE_S24_32BE]  = PA_SAMPLE_S24_32NE,
 };
-
-#if 0
-static int stop_pulse(void *s, uint64_t identifier)
-{
-    PulseCtx *ctx = s;
-
-    pthread_mutex_lock(&ctx->sources_lock);
-    pthread_mutex_lock(&ctx->capture_ctx_lock);
-
-    for (int i = 0; i < ctx->capture_ctx_num; i++) {
-        PulseIOCtx *cap_ctx = ctx->capture_ctx[i];
-        if (identifier == (uint64_t)ctx->capture_ctx[i]->src) {
-            /* Drain it */
-            pa_threaded_mainloop_lock(ctx->pa_mainloop);
-            waitop(ctx, pa_stream_drain(cap_ctx->stream, stream_success_cb, cap_ctx));
-
-            /* Disconnect */
-            pa_threaded_mainloop_lock(ctx->pa_mainloop);
-            pa_stream_disconnect(cap_ctx->stream);
-            pa_threaded_mainloop_unlock(ctx->pa_mainloop);
-        }
-    }
-
-    pthread_mutex_unlock(&ctx->capture_ctx_lock);
-    pthread_mutex_unlock(&ctx->sources_lock);
-
-    return 0;
-}
-#endif
 
 static AVBufferRef *find_entry_by_sink_idx(AVBufferRef *test, void *opaque)
 {
@@ -309,23 +319,21 @@ static AVBufferRef *find_entry_by_monitor_idx(AVBufferRef *test, void *opaque)
 static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary *opts)
 {
     int err = 0;
-    char *target_name = NULL;
     PulseCtx *ctx = (PulseCtx *)ctx_ref->data;
 
     pa_threaded_mainloop_lock(ctx->pa_mainloop);
 
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
     PulsePriv *priv = iosys_entry->api_priv;
-    target_name = av_strdup(iosys_entry->name);
+    const char *target_name = sp_class_get_name(iosys_entry);
 
-    int is_sink = sp_classed_ctx_to_type(iosys_entry) == SP_EVENT_TYPE_SINK;
+    int is_sink = sp_class_get_type(iosys_entry) & SP_TYPE_AUDIO_SINK;
     if (!is_sink)
         iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 0, 0);
     else
         iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 16, FRAME_FIFO_BLOCK_NO_INPUT);
 
-    priv->main_ref = av_buffer_ref(ctx_ref);
-    priv->main = (PulseCtx *)priv->main_ref->data;
+    priv->main = (PulseCtx *)ctx_ref->data;
 
     pa_sample_spec req_ss = priv->ss;
     pa_channel_map req_map = priv->map;
@@ -335,7 +343,7 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     /* We don't care about the rate as we'll have to resample ourselves anyway */
     if (req_ss.rate <= 0) {
-        av_log(ctx, AV_LOG_ERROR, "Source \"%s\" (id: %u) has invalid samplerate!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Source \"%s\" (id: %u) has invalid samplerate!\n",
                priv->name, priv->index);
         err = AVERROR(EINVAL);
         goto fail;
@@ -352,7 +360,7 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     priv->stream = pa_stream_new(ctx->pa_context, PROJECT_NAME, &req_ss, &req_map);
     if (!priv->stream) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to init stream: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Unable to init stream: %s!\n",
                pa_strerror(pa_context_errno(ctx->pa_context)));
         err = AVERROR(EINVAL);
         goto fail;
@@ -360,13 +368,15 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     /* Set the buffer size */
     pa_buffer_attr attr = { -1, -1, -1, -1, -1 };
-    if (dict_get(opts, "buffer_ms"))
-        attr.fragsize = lrintf(strtof(dict_get(opts, "buffer_ms"), NULL) * 1000);
+
+    const char *buffer_ms = dict_get(opts, "buffer_ms");
+    if (buffer_ms && sp_is_number(buffer_ms))
+        attr.fragsize = lrintf(strtof(buffer_ms, NULL) * 1000);
+    else if (!(buffer_ms && strcmp(buffer_ms, "default")))
+        attr.fragsize = 320 * 1000; /* Divisible by frame sizes of both 1024 and 960 */
 
     if (attr.fragsize > 0)
         attr.fragsize = pa_usec_to_bytes(attr.fragsize, &req_ss);
-    else /* 1024 frame size, because codecs */
-        attr.fragsize = 1024 * pa_sample_size(&req_ss) * req_ss.channels;
 
     /* Set stream callbacks */
     pa_stream_set_state_callback(priv->stream, stream_status_cb, iosys_entry);
@@ -377,8 +387,8 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
         AVBufferRef *sink = sp_bufferlist_ref(ctx->entries, find_entry_by_sink_idx,
                                               &priv->master_sink_index);
         if (!sink) {
-            av_log(ctx, AV_LOG_ERROR, "Zombie sink input %s (0x%x, %i) is streaming to "
-                   "a non-existent master sink %i!\n", iosys_entry->name,
+            sp_log(ctx, SP_LOG_ERROR, "Zombie sink input %s (0x%x, %i) is streaming to "
+                   "a non-existent master sink %i!\n", sp_class_get_name(iosys_entry),
                    iosys_entry->identifier, iosys_entry->api_id, priv->master_sink_index);
             err = AVERROR(EINVAL);
             goto fail;
@@ -391,14 +401,14 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
         AVBufferRef *monitor = sp_bufferlist_ref(ctx->entries, find_entry_by_monitor_idx,
                                                  &monitor_source);
         if (!monitor) {
-            av_log(ctx, AV_LOG_ERROR, "Sink has a non-existent monitor source!\n");
+            sp_log(ctx, SP_LOG_ERROR, "Sink has a non-existent monitor source!\n");
             err = AVERROR(EINVAL);
             av_buffer_unref(&sink);
             goto fail;
         }
 
         if (pa_stream_set_monitor_stream(priv->stream, priv->index) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "pa_stream_set_monitor_stream() failed: %s!\n",
+            sp_log(ctx, SP_LOG_ERROR, "pa_stream_set_monitor_stream() failed: %s!\n",
                    pa_strerror(pa_context_errno(ctx->pa_context)));
             err = AVERROR(EINVAL);
             av_buffer_unref(&sink);
@@ -406,7 +416,7 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
             goto fail;
         }
 
-        target_name = av_strdup(((IOSysEntry *)monitor->data)->name);
+        target_name = sp_class_get_name(monitor->data);
         av_buffer_unref(&sink);
         av_buffer_unref(&monitor);
     }
@@ -420,12 +430,24 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
                                    PA_STREAM_DONT_MOVE          |
                                    PA_STREAM_START_CORKED       |
                                    PA_STREAM_NOFLAGS);
-    av_free(target_name);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "pa_stream_connect_record() failed: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "pa_stream_connect_record() failed: %s!\n",
                pa_strerror(pa_context_errno(ctx->pa_context)));
         err = AVERROR(EINVAL);
         goto fail;
+    }
+
+    /* Wait until the stream is ready */
+    while (1) {
+        int state = pa_stream_get_state(priv->stream);
+        if (state == PA_STREAM_READY)
+            break;
+        if (!PA_STREAM_IS_GOOD(state)) {
+            sp_log(ctx, SP_LOG_ERROR, "Stream configure failed: %s!\n",
+                   pa_strerror(state));
+            goto fail;
+        }
+        pa_threaded_mainloop_wait(ctx->pa_mainloop);
     }
 
     pa_threaded_mainloop_unlock(ctx->pa_mainloop);
@@ -434,8 +456,6 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
 fail:
     pa_threaded_mainloop_unlock(ctx->pa_mainloop);
-    av_buffer_unref(&priv->main_ref);
-    av_free(target_name);
 
     return err;
 }
@@ -453,7 +473,7 @@ static void pulse_ioctx_ctrl_free(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-static int pulse_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static int pulse_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     PulseIOCtrlCtx *event = (PulseIOCtrlCtx *)opaque->data;
 
@@ -463,7 +483,10 @@ static int pulse_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
     if (event->ctrl & SP_EVENT_CTRL_START) {
         pa_threaded_mainloop_lock(priv->main->pa_mainloop);
         priv->epoch = atomic_load(event->epoch);
-        return waitop(priv->main, pa_stream_cork(priv->stream, 0, stream_success_cb, priv));
+        int ret = waitop(priv->main, pa_stream_cork(priv->stream, 0, stream_success_cb, priv));
+        if (ret >= 0)
+            sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_INIT, NULL);
+        return ret;
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
         pa_threaded_mainloop_lock(priv->main->pa_mainloop);
         return waitop(priv->main, pa_stream_cork(priv->stream, 1, stream_success_cb, priv));
@@ -477,20 +500,31 @@ static int pulse_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        return sp_bufferlist_dispatch_events(iosys_entry->events, iosys_entry, SP_EVENT_ON_COMMIT);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Comitting!\n");
+        return sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_bufferlist_discard_new_events(iosys_entry->events);
-        return 0;
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Discarding!\n");
+        sp_eventlist_discard(iosys_entry->events);
+    } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
+        char *fstr = sp_event_flags_to_str_buf(arg);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_eventlist_add(iosys_entry, iosys_entry->events, arg);
+    } else if (ctrl & SP_EVENT_CTRL_DEP) {
+        char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
+        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        av_free(fstr);
+        return sp_eventlist_add_with_dep(iosys_entry, iosys_entry->events, arg, ctrl);
     } else if (ctrl & SP_EVENT_CTRL_OPTS) {
         AVDictionary *dict = arg;
         AVDictionaryEntry *dict_entry = NULL;
         while ((dict_entry = av_dict_get(dict, "", dict_entry, AV_DICT_IGNORE_SUFFIX))) {
             if (strcmp(dict_entry->key, "buffer_ms")) {
-                av_log(iosys_entry, AV_LOG_ERROR, "Option \"%s\" not found!\n", dict_entry->key);
+                sp_log(iosys_entry, SP_LOG_ERROR, "Option \"%s\" not found!\n", dict_entry->key);
                 return AVERROR(EINVAL);
             }
         }
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
+    } else if ((ctrl & SP_EVENT_CTRL_MASK) & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
         return AVERROR(ENOTSUP);
     }
 
@@ -503,7 +537,7 @@ static int pulse_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = pulse_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry);
+        int ret = pulse_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
@@ -514,10 +548,10 @@ static int pulse_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg
                                               sp_event_gen_identifier(iosys_entry, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(iosys_entry, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(iosys_entry->events, ctrl_event);
+    int err = sp_eventlist_add(iosys_entry, iosys_entry->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
@@ -525,87 +559,106 @@ static int pulse_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg
     return 0;
 }
 
-#define CALLBACK_BOILERPLATE(stype, entry_type)                                       \
-    PulseCtx *ctx = data;                                                             \
-    SPBufferList *list = ctx->entries;                                                \
-    if (eol)                                                                          \
-        return;                                                                       \
-                                                                                      \
-    uint32_t idx = sp_iosys_gen_identifier(ctx, info->index, entry_type);             \
-    IOSysEntry *entry;                                                                \
-    AVBufferRef *buf = sp_bufferlist_ref(list, sp_bufferlist_iosysentry_by_id, &idx); \
-    const int new_entry = !buf;                                                       \
-    if (!buf) {                                                                       \
-        entry = av_mallocz(sizeof(*entry));                                           \
-        entry->api_priv = av_mallocz(sizeof(PulsePriv));                              \
-        buf = av_buffer_create((uint8_t *)entry, sizeof(*entry),                      \
-                               destroy_entry, ctx, 0);                                \
-    }                                                                                 \
-                                                                                      \
-    entry = (IOSysEntry *)buf->data;                                                  \
-    PulsePriv *priv = (PulsePriv *)entry->api_priv;                                   \
-                                                                                      \
-    if (!new_entry) {                                                                 \
-        int nam = strcmp(entry->name, info->name); /* Name changes */                 \
-        int ss = memcmp(&priv->ss, &info->sample_spec,                                \
-                        sizeof(pa_sample_spec)); /* Sample fmt */                     \
-        int map = memcmp(&priv->map, &info->channel_map,                              \
-                         sizeof(pa_channel_map)); /* Channel map */                   \
-        int lvl = (nam | ss | map) ? AV_LOG_DEBUG : AV_LOG_TRACE;                     \
-        const char *snam = nam ? "name" : "";                                         \
-        const char *sss = ss ? "samplefmt" : "";                                      \
-        const char *smap = map ? "chmap" : "";                                        \
-        av_log(ctx, lvl, "Updating " stype " %s (id: 0x%x) %s %s %s\n",               \
-               info->name, idx, snam, sss, smap);                                     \
-        av_free(entry->name);                                                         \
-        av_free(entry->desc);                                                         \
-    } else {                                                                          \
-        av_log(ctx, AV_LOG_DEBUG, "Adding new " stype " %s (id: 0x%x)\n",             \
-               info->name, idx);                                                      \
-                                                                                      \
-        entry->events = sp_bufferlist_new();                                          \
-        entry->ctrl = pulse_ioctx_ctrl;                                               \
-        entry->parent = ctx;                                                          \
-        sp_alloc_class(entry, info->name,                                             \
-                       entry_type == PULSE_SINK ?                                     \
-                       AV_CLASS_CATEGORY_DEVICE_AUDIO_OUTPUT :                        \
-                       AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT,                          \
-                       &entry->log_lvl_offset, &entry->parent);                       \
-    }                                                                                 \
-                                                                                      \
-    priv->type = entry_type;                                                          \
-    priv->ss = info->sample_spec;                                                     \
-    priv->map = info->channel_map;                                                    \
-                                                                                      \
-    entry->identifier = idx;                                                          \
-    entry->api_id = info->index;                                                      \
-    entry->api = &src_pulse;                                                          \
-    entry->name = av_strdup(info->name);                                              \
-    entry->sample_rate = priv->ss.rate;                                               \
-    entry->channels = priv->ss.channels;                                              \
-    entry->channel_layout = pa_to_lavu_ch_map(&priv->map);                            \
-    entry->sample_fmt = format_map[pulse_remap_to_useful[priv->ss.format]].av_format; \
-    entry->volume = pa_sw_volume_to_linear(info->volume.values[0]);
-
-#define CALLBACK_FOOTER                                                                \
-    sp_bufferlist_dispatch_events(ctx->events, buf->data,                              \
-                                  SP_EVENT_ON_CHANGE | sp_classed_ctx_to_type(entry)); \
-    if (new_entry)                                                                     \
-        sp_bufferlist_append(list, buf);                                               \
-    else                                                                               \
-        av_buffer_unref(&buf);
-
 static void destroy_entry(void *opaque, uint8_t *data)
 {
-    PulseCtx *ctx = (PulseCtx *)opaque;
     IOSysEntry *entry = (IOSysEntry *)data;
+    PulsePriv *priv = entry->api_priv;
+    PulseCtx *ctx = priv->main;
+
+    if (priv->stream) {
+        /* Drain it */
+        pa_threaded_mainloop_lock(ctx->pa_mainloop);
+        waitop(ctx, pa_stream_drain(priv->stream, stream_success_cb, priv));
+
+        /* Disconnect */
+        pa_threaded_mainloop_lock(ctx->pa_mainloop);
+        pa_stream_disconnect(priv->stream);
+        pa_threaded_mainloop_unlock(ctx->pa_mainloop);
+
+        sp_log(entry, SP_LOG_VERBOSE, "Stream flushed and stopped!\n");
+
+        priv->stream = NULL;
+    }
+
+    sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_DESTROY, entry);
 
     sp_bufferlist_free(&entry->events);
+    av_buffer_pool_uninit(&priv->pool);
 
-    av_free(entry->name);
     av_free(entry->desc);
-    sp_free_class(entry);
+    sp_class_free(entry);
 }
+
+#define CALLBACK_BOILERPLATE(stype, entry_type)                                         \
+    PulseCtx *ctx = data;                                                               \
+    SPBufferList *list = ctx->entries;                                                  \
+    if (eol)                                                                            \
+        return;                                                                         \
+                                                                                        \
+    uint32_t idx = sp_iosys_gen_identifier(ctx, info->index, entry_type);               \
+    IOSysEntry *entry;                                                                  \
+    AVBufferRef *buf = sp_bufferlist_ref(list, sp_bufferlist_iosysentry_by_id, &idx);   \
+    const int new_entry = !buf;                                                         \
+    if (!buf) {                                                                         \
+        entry = av_mallocz(sizeof(*entry));                                             \
+        entry->api_priv = av_mallocz(sizeof(PulsePriv));                                \
+        buf = av_buffer_create((uint8_t *)entry, sizeof(*entry),                        \
+                               destroy_entry, ctx, 0);                                  \
+    }                                                                                   \
+                                                                                        \
+    entry = (IOSysEntry *)buf->data;                                                    \
+    PulsePriv *priv = (PulsePriv *)entry->api_priv;                                     \
+                                                                                        \
+    if (!new_entry) {                                                                   \
+        int nam = strcmp(sp_class_get_name(entry), info->name); /* Name changes */      \
+        int ss = memcmp(&priv->ss, &info->sample_spec,                                  \
+                        sizeof(pa_sample_spec)); /* Sample fmt */                       \
+        int map = memcmp(&priv->map, &info->channel_map,                                \
+                         sizeof(pa_channel_map)); /* Channel map */                     \
+        int lvl = (nam | ss | map) ? SP_LOG_DEBUG : SP_LOG_TRACE;                       \
+        int other = !nam && !ss && !map;                                                \
+        sp_log(ctx, lvl, "Updating " stype " %s (id: 0x%x) %s%s%s%s%s%s%s%s%s%s%s%s\n", \
+               info->name, idx,                                                         \
+               nam ? "(" : "", nam ?      "name" : "", nam ? ") " : "",                 \
+               ss ?  "(" : "",  ss ? "samplefmt" : "",  ss ? ") " : "",                 \
+               map ? "(" : "", map ?       "map" : "", map ? ") " : "",                 \
+               other ? "(" : "", other ? "misc" : "", other ? ") " : "");               \
+        av_free(entry->desc);                                                           \
+    } else {                                                                            \
+        sp_log(ctx, SP_LOG_DEBUG, "Adding new " stype " %s (id: 0x%x)\n",               \
+               info->name, idx);                                                        \
+                                                                                        \
+        entry->events = sp_bufferlist_new();                                            \
+        entry->ctrl = pulse_ioctx_ctrl;                                                 \
+                                                                                        \
+        sp_class_alloc(entry, NULL,                                                     \
+                       entry_type == PULSE_SINK ?                                       \
+                       SP_TYPE_AUDIO_BIDIR : SP_TYPE_AUDIO_SOURCE, ctx);                \
+    }                                                                                   \
+                                                                                        \
+    priv->type = entry_type;                                                            \
+    priv->ss = info->sample_spec;                                                       \
+    priv->map = info->channel_map;                                                      \
+                                                                                        \
+    entry->identifier = idx;                                                            \
+    entry->api_id = info->index;                                                        \
+    entry->api = &src_pulse;                                                            \
+    sp_class_set_name(entry, info->name);                                               \
+    entry->sample_rate = priv->ss.rate;                                                 \
+    entry->channels = priv->ss.channels;                                                \
+    entry->channel_layout = pa_to_lavu_ch_map(&priv->map);                              \
+    entry->sample_fmt = format_map[pulse_remap_to_useful[priv->ss.format]].av_format;   \
+    entry->volume = pa_sw_volume_to_linear(info->volume.values[0]);
+
+#define CALLBACK_FOOTER(entry_type)                                                     \
+    sp_eventlist_dispatch(entry, ctx->events,                                           \
+                          SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE |                   \
+                          (entry_type == PULSE_SINK ? SP_EVENT_TYPE_SINK : 0),          \
+                          entry);                                                       \
+    if (new_entry)                                                                      \
+        sp_bufferlist_append_noref(list, buf);                                          \
+    else                                                                                \
+        av_buffer_unref(&buf);
 
 static void sink_cb(pa_context *context, const pa_sink_info *info,
                     int eol, void *data)
@@ -613,7 +666,7 @@ static void sink_cb(pa_context *context, const pa_sink_info *info,
     CALLBACK_BOILERPLATE("sink", PULSE_SINK)
     entry->desc = av_strdup(info->description);
     priv->monitor_source = info->monitor_source;
-    CALLBACK_FOOTER
+    CALLBACK_FOOTER(PULSE_SINK)
 }
 
 static void source_cb(pa_context *context, const pa_source_info *info,
@@ -621,7 +674,7 @@ static void source_cb(pa_context *context, const pa_source_info *info,
 {
     CALLBACK_BOILERPLATE("source", PULSE_SOURCE)
     entry->desc = av_strdup(info->description);
-    CALLBACK_FOOTER
+    CALLBACK_FOOTER(PULSE_SOURCE)
 }
 
 static void sink_input_cb(pa_context *context, const pa_sink_input_info *info,
@@ -630,7 +683,7 @@ static void sink_input_cb(pa_context *context, const pa_sink_input_info *info,
     CALLBACK_BOILERPLATE("sink input", PULSE_SINK_INPUT)
     entry->desc = av_strdup("sink input");
     priv->master_sink_index = info->sink;
-    CALLBACK_FOOTER
+    CALLBACK_FOOTER(PULSE_SINK_INPUT)
 }
 
 static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
@@ -649,18 +702,13 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
                                                  sp_bufferlist_iosysentry_by_id,            \
                                                  &nidx);                                    \
             if (!ref) {                                                                     \
-                av_log(ctx, AV_LOG_INFO, stype " id 0x%x not found!\n", nidx);              \
+                sp_log(ctx, SP_LOG_ERROR, stype " id 0x%x not found!\n", nidx);             \
                 return;                                                                     \
             }                                                                               \
-            IOSysEntry *entry = (IOSysEntry *)ref->data;                                    \
-            entry->gone = 1;                                                                \
-            sp_bufferlist_dispatch_events(ctx->events, ref->data, SP_EVENT_ON_CHANGE |            \
-                                                            sp_classed_ctx_to_type(entry)); \
-            sp_bufferlist_dispatch_events(entry->events, ref->data, SP_EVENT_ON_DESTROY);         \
             av_buffer_unref(&ref);                                                          \
         } else {                                                                            \
             if (!(o = pa_context_get_ ## hook_fn(context, index, callback, ctx))) {         \
-                av_log(ctx, AV_LOG_ERROR, "pa_context_get_" #hook_fn "() failed "           \
+                sp_log(ctx, SP_LOG_ERROR, "pa_context_get_" #hook_fn "() failed "           \
                        "for id %u\n", index);                                               \
                 return;                                                                     \
             }                                                                               \
@@ -685,27 +733,27 @@ static void pulse_state_cb(pa_context *context, void *data)
 
     switch (pa_context_get_state(context)) {
     case PA_CONTEXT_UNCONNECTED:
-        av_log(ctx, AV_LOG_INFO, "PulseAudio reports it is unconnected!\n");
+        sp_log(ctx, SP_LOG_ERROR, "PulseAudio reports it is unconnected!\n");
         break;
     case PA_CONTEXT_CONNECTING:
-        av_log(ctx, AV_LOG_INFO, "Connecting to PulseAudio!\n");
+        sp_log(ctx, SP_LOG_DEBUG, "Connecting to PulseAudio!\n");
         break;
     case PA_CONTEXT_AUTHORIZING:
-        av_log(ctx, AV_LOG_INFO, "Authorizing PulseAudio connection!\n");
+        sp_log(ctx, SP_LOG_TRACE, "Authorizing PulseAudio connection!\n");
         break;
     case PA_CONTEXT_SETTING_NAME:
-        av_log(ctx, AV_LOG_INFO, "Sending client name!\n");
+        sp_log(ctx, SP_LOG_TRACE, "Sending client name!\n");
         break;
     case PA_CONTEXT_FAILED:
-        av_log(ctx, AV_LOG_ERROR, "PulseAudio connection failed: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "PulseAudio connection failed: %s!\n",
                pa_strerror(pa_context_errno(context)));
         pa_context_unref(context);
         break;
     case PA_CONTEXT_TERMINATED:
-        av_log(ctx, AV_LOG_INFO, "PulseAudio connection terminated!\n");
+        sp_log(ctx, SP_LOG_VERBOSE, "PulseAudio connection terminated!\n");
         break;
     case PA_CONTEXT_READY:
-        av_log(ctx, AV_LOG_INFO, "PulseAudio connection ready, arming callbacks!\n");
+        sp_log(ctx, SP_LOG_VERBOSE, "PulseAudio connection ready, arming callbacks!\n");
         pa_operation *o;
 
         /* Subscribe for new updates */
@@ -714,18 +762,18 @@ static void pulse_state_cb(pa_context *context, void *data)
                                                 (PA_SUBSCRIPTION_MASK_SINK       |
                                                  PA_SUBSCRIPTION_MASK_SOURCE     |
                                                  PA_SUBSCRIPTION_MASK_SINK_INPUT), NULL, NULL))) {
-            av_log(ctx, AV_LOG_INFO, "pa_context_subscribe() failed: %s\n",
+            sp_log(ctx, SP_LOG_ERROR, "pa_context_subscribe() failed: %s\n",
                    pa_strerror(pa_context_errno(context)));
             return;
         }
         pa_operation_unref(o);
 
-#define LOAD_INITIAL(hook_fn, callback)                       \
-    if (!(o = hook_fn(context, callback, ctx))) {             \
-        av_log(ctx, AV_LOG_INFO, #hook_fn "() failed: %s!\n", \
-               pa_strerror(pa_context_errno(context)));       \
-        return;                                               \
-    }                                                         \
+#define LOAD_INITIAL(hook_fn, callback)                        \
+    if (!(o = hook_fn(context, callback, ctx))) {              \
+        sp_log(ctx, SP_LOG_ERROR, #hook_fn "() failed: %s!\n", \
+               pa_strerror(pa_context_errno(context)));        \
+        return;                                                \
+    }                                                          \
     pa_operation_unref(o);
 
         LOAD_INITIAL(pa_context_get_sink_info_list, sink_cb)
@@ -758,7 +806,7 @@ static int pulse_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         AVBufferRef *event = arg;
         char *fstr = sp_event_flags_to_str_buf(event);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
 
         if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
@@ -768,17 +816,20 @@ static int pulse_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
 
             /* Bring up the new event to speed with current affairs */
             SPBufferList *tmp_event = sp_bufferlist_new();
-            sp_bufferlist_append_event(tmp_event, event);
+            sp_eventlist_add(ctx, tmp_event, event);
 
             AVBufferRef *obj = NULL;
             while ((obj = sp_bufferlist_iter_ref(ctx->entries))) {
                 IOSysEntry *entry = (IOSysEntry *)obj->data;
-                int is_sink = entry->class->category == AV_CLASS_CATEGORY_DEVICE_AUDIO_OUTPUT;
+                int is_sink = sp_class_get_type(entry) & SP_TYPE_AUDIO_SINK;
                 const char *def = is_sink ? ctx->default_sink_name : ctx->default_source_name;
 
-                entry->is_default = !strcmp(entry->name, def);
+                entry->is_default = !strcmp(sp_class_get_name(entry), def);
 
-                sp_bufferlist_dispatch_events(tmp_event, obj->data, SP_EVENT_ON_CHANGE | sp_classed_ctx_to_type(entry));
+                sp_eventlist_dispatch(entry, tmp_event,
+                                      SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE |
+                                      (is_sink ? SP_EVENT_TYPE_SINK : 0),
+                                      entry);
                 av_buffer_unref(&obj);
             }
 
@@ -786,7 +837,7 @@ static int pulse_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         }
 
         /* Add it to the list now to receive events dynamically */
-        err = sp_bufferlist_append_event(ctx->events, event);
+        err = sp_eventlist_add(ctx, ctx->events, event);
         if (err < 0)
             return err;
     }
@@ -797,7 +848,7 @@ static int pulse_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
 static AVBufferRef *pulse_ref_entry(AVBufferRef *ctx_ref, uint32_t identifier)
 {
     PulseCtx *ctx = (PulseCtx *)ctx_ref->data;
-    return sp_bufferlist_pop(ctx->entries, sp_bufferlist_iosysentry_by_id, &identifier);
+    return sp_bufferlist_ref(ctx->entries, sp_bufferlist_iosysentry_by_id, &identifier);
 }
 
 static void pulse_uninit(void *opaque, uint8_t *data)
@@ -807,24 +858,8 @@ static void pulse_uninit(void *opaque, uint8_t *data)
     if (ctx->pa_mainloop)
         pa_threaded_mainloop_stop(ctx->pa_mainloop);
 
-    AVBufferRef *obj = NULL;
-    while ((obj = sp_bufferlist_pop(ctx->entries, sp_bufferlist_find_fn_first, NULL))) {
-        IOSysEntry *entry = (IOSysEntry *)obj->data;
-        if (entry->gone) {
-            av_buffer_unref(&obj);
-            continue;
-        }
-        entry->gone = 1;
-        sp_bufferlist_dispatch_events(ctx->events, obj->data, SP_EVENT_ON_CHANGE | sp_classed_ctx_to_type(entry));
-        av_buffer_unref(&obj);
-    }
-
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_DESTROY);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, ctx);
     sp_bufferlist_free(&ctx->events);
-    sp_bufferlist_free(&ctx->entries);
-
-    av_freep(&ctx->default_sink_name);
-    av_freep(&ctx->default_source_name);
 
     if (ctx->pa_context) {
         pa_context_disconnect(ctx->pa_context);
@@ -832,12 +867,16 @@ static void pulse_uninit(void *opaque, uint8_t *data)
         ctx->pa_context = NULL;
     }
 
+    sp_bufferlist_free(&ctx->entries);
+
     if (ctx->pa_mainloop) {
         pa_threaded_mainloop_free(ctx->pa_mainloop);
         ctx->pa_mainloop = NULL;
     }
 
-    sp_free_class(ctx);
+    av_freep(&ctx->default_sink_name);
+    av_freep(&ctx->default_source_name);
+    sp_class_free(ctx);
     av_free(ctx);
 }
 
@@ -867,27 +906,34 @@ static int pulse_init(AVBufferRef **s)
         goto fail;
     }
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
-        err = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    err = sp_alloc_class(ctx, "pulse", AV_CLASS_CATEGORY_NA,
-                         &ctx->log_lvl_offset, NULL);
+    err = sp_class_alloc(ctx, src_pulse.name, SP_TYPE_CONTEXT, NULL);
     if (err < 0)
         goto fail;
 
     ctx->pa_mainloop = pa_threaded_mainloop_new();
     pa_threaded_mainloop_start(ctx->pa_mainloop);
-    pa_threaded_mainloop_set_name(ctx->pa_mainloop, ctx->class->class_name);
+    pa_threaded_mainloop_set_name(ctx->pa_mainloop, sp_class_get_name(ctx));
 
     pa_threaded_mainloop_lock(ctx->pa_mainloop);
     locked = 1;
 
     ctx->pa_mainloop_api = pa_threaded_mainloop_get_api(ctx->pa_mainloop);
 
-    ctx->pa_context = pa_context_new(ctx->pa_mainloop_api, PROJECT_NAME);
+    pa_proplist *proplist = pa_proplist_new();
+    if (!proplist) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    ctx->pa_context = pa_context_new_with_proplist(ctx->pa_mainloop_api,
+                                                   PROJECT_NAME, proplist);
+    pa_proplist_free(proplist);
+    if (!ctx->pa_context) {
+        sp_log(ctx, SP_LOG_ERROR, "Unable to create pulseaudio context!\n");
+        err = AVERROR_EXTERNAL;
+        goto fail;
+    }
+
     pa_context_set_state_callback(ctx->pa_context, pulse_state_cb, ctx);
     pa_context_connect(ctx->pa_context, NULL, PA_CONTEXT_NOFLAGS, NULL);
 

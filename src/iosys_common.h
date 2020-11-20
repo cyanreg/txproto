@@ -7,6 +7,7 @@
 
 #include "fifo_frame.h"
 #include "utils.h"
+#include "logging.h"
 
 typedef const struct IOSysAPI {
     /**
@@ -36,16 +37,12 @@ typedef const struct IOSysAPI {
 } IOSysAPI;
 
 typedef struct IOSysEntry {
-    AVClass *class;
-    int log_lvl_offset;
-    void *parent;
+    SPClass *class;
 
-    char *name;
     char *desc;
     uint32_t identifier;
     uint32_t api_id;
     int is_default;
-    int gone; /* Indicates a removed device */
 
     IOSysAPI *api;
     AVBufferRef *api_ctx;

@@ -1,10 +1,13 @@
 #pragma once
 
-#include "encoding.h"
-#include <libavformat/avformat.h>
 #include <stdatomic.h>
+#include <libavformat/avformat.h>
+
+#include "encoding.h"
+#include "logging.h"
 
 typedef struct MuxEncoderMap {
+    EncodingContext *enc_ctx; /* Used to get a name only */
     int encoder_id;
     AVRational encoder_tb;
 
@@ -12,7 +15,8 @@ typedef struct MuxEncoderMap {
 } MuxEncoderMap;
 
 typedef struct MuxingContext {
-    AVClass *class;
+    SPClass *class;
+
     const char *name;
     pthread_mutex_t lock;
 
@@ -36,8 +40,6 @@ typedef struct MuxingContext {
 
     int *stream_has_link;
     enum AVCodecID *stream_codec_id;
-    atomic_int initialized;
-    atomic_int running;
 
     int err;
 } MuxingContext;

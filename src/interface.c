@@ -7,6 +7,8 @@
 #include <libplacebo/renderer.h>
 
 #include "interface_common.h"
+#include "utils.h"
+#include "logging.h"
 #include "../config.h"
 
 #define DEFAULT_USAGE_FLAGS (VK_IMAGE_USAGE_SAMPLED_BIT      |                 \
@@ -82,9 +84,14 @@ static enum pl_color_system avspc_to_placebo(enum AVColorSpace csp)
 }
 
 typedef struct InterfaceWindowCtx {
+    SPClass *class;
+
     struct InterfaceCtx *main;
+
     struct InterfaceWindowCtx *root;
     pthread_mutex_t lock;
+
+    SPBufferList *events;
 
     enum SurfaceType type;
 
@@ -98,6 +105,10 @@ typedef struct InterfaceWindowCtx {
         uint32_t flags;
         const struct pl_tex *region;
     } highlight;
+
+    struct {
+        AVBufferRef *dst;
+    } overlay;
 
     struct {
         AVBufferRef *fifo;
@@ -127,7 +138,9 @@ typedef struct InterfaceWindowCtx {
 } InterfaceWindowCtx;
 
 typedef struct InterfaceCtx {
-    AVClass *class;
+    SPClass *class;
+
+    SPBufferList *events;
 
     /* Main windowing system context */
     void *window_ctx;
@@ -174,7 +187,7 @@ static int resize_win(void *wctx, int *w, int *h, int active_resize)
         pl_swapchain_destroy(&win->pl_swap);
         win->pl_swap = pl_vulkan_create_swapchain(win->pl_vk_ctx, &win->pl_swap_params);
         if (!win->pl_swap) {
-            av_log(win->main, AV_LOG_ERROR, "Error creating libplacebo swapchain!\n");
+            sp_log(win->main, SP_LOG_ERROR, "Error creating libplacebo swapchain!\n");
             return AVERROR_EXTERNAL;
         }
     }
@@ -188,56 +201,35 @@ static int resize_win(void *wctx, int *w, int *h, int active_resize)
     return 0;
 }
 
-static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
-                         InterfaceWindowCtx *main, const char *title,
-                         int init_w, int init_h,
-                         void *in_frames, enum SurfaceType type)
+static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
+                               const char *title)
 {
-    void *ref_wctx = NULL;
-    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->device_ref->data;
-    AVVulkanDeviceContext *hwctx = ref_data->hwctx;
+    int err = 0;
+
+    win->events = sp_bufferlist_new();
+    if (!win->events)
+        return AVERROR(ENOMEM);
 
     pthread_mutex_init(&win->lock, NULL);
     win->cursor.x     = INT32_MIN;
     win->cursor.y     = INT32_MIN;
     win->main         = ctx;
-    win->root         = main;
-    win->type         = type;
-    win->width        = init_w;
-    win->height       = init_h;
+    win->width        = win->width ? win->width :-1;
+    win->height       = win->height ? win->height : -1;
     win->device_ref   = av_buffer_ref(ctx->device_ref);
-
-    win->cb.destroy = destroy_win;
-    win->cb.resize  = resize_win;
-
-    switch (type) {
-    case STYPE_MAIN:
-        win->cb.mouse_mov_cb = mouse_move_main;
-        win->cb.input        = win_input_main;
-        win->cb.render       = render_main;
-        break;
-    case STYPE_OVERLAY:
-        if (!main || main->type != STYPE_MAIN) {
-            av_log(ctx, AV_LOG_ERROR, "Invalid reference window for overlay!\n");
-            return AVERROR(EINVAL);
-        }
-        ref_wctx = main->wctx;
-        break;
-    case STYPE_HIGHLIGHT:
-        win->highlight.x0       = INT32_MIN;
-        win->highlight.y0       = INT32_MIN;
-        win->highlight.x1       = INT32_MIN;
-        win->highlight.y1       = INT32_MIN;
-        win->highlight.state_x0 = INT32_MIN;
-        win->highlight.state_x1 = INT32_MIN;
-        win->highlight.state_y0 = INT32_MIN;
-        win->highlight.state_y1 = INT32_MIN;
-
-        win->cb.mouse_mov_cb    = mouse_move_highlight;
-        win->cb.input           = win_input_highlight;
-        win->cb.render          = render_highlight;
-        break;
+    if (!win->device_ref) {
+        sp_bufferlist_free(&ctx->events);
+        return AVERROR(ENOMEM);
     }
+
+    win->highlight.x0       = INT32_MIN;
+    win->highlight.y0       = INT32_MIN;
+    win->highlight.x1       = INT32_MIN;
+    win->highlight.y1       = INT32_MIN;
+    win->highlight.state_x0 = INT32_MIN;
+    win->highlight.state_x1 = INT32_MIN;
+    win->highlight.state_y0 = INT32_MIN;
+    win->highlight.state_y1 = INT32_MIN;
 
     win->is_dirty = 1;
 
@@ -246,13 +238,19 @@ static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
         .allow_suboptimal = true,
     };
 
+    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->device_ref->data;
+    AVVulkanDeviceContext *hwctx = ref_data->hwctx;
+
     /* First, create the window with whatever windowing system we're using,
      * and let it give us the VkSurface to render into */
-    int err = ctx->sys->surf_init(ctx->window_ctx, &win->wctx, ref_wctx,
-                                  &win->cb, win, title, init_w, init_h, win->type,
-                                  hwctx->inst, &win->pl_swap_params.surface);
-    if (err < 0)
+    err = ctx->sys->surf_init(ctx->window_ctx, &win->wctx, win->overlay.dst,
+                              &win->cb, win, title, win->width, win->height,
+                              win->type, hwctx->inst, &win->pl_swap_params.surface);
+    if (err < 0) {
+        sp_bufferlist_free(&ctx->events);
+        av_buffer_unref(&win->device_ref);
         return err;
+    }
 
     /* Now that we have it, init the libplacebo contexts */
     struct pl_vulkan_import_params vkparams = { 0 };
@@ -271,7 +269,9 @@ static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
 
     win->pl_vk_ctx = pl_vulkan_import(ctx->pl_ctx, &vkparams);
     if (!win->pl_vk_ctx) {
-        av_log(ctx, AV_LOG_ERROR, "Error creating libplacebo context!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Error creating libplacebo context!\n");
+        sp_bufferlist_free(&ctx->events);
+        av_buffer_unref(&win->device_ref);
         return AVERROR_EXTERNAL;
     }
 
@@ -281,8 +281,38 @@ static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     /* Set the renderer */
     win->pl_renderer = pl_renderer_create(ctx->pl_ctx, win->pl_gpu);
 
-    /* Signal to the window system we're ready to render */
-    ctx->sys->surf_done(win->wctx);
+    return 0;
+}
+
+/*
+static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
+                         InterfaceWindowCtx *main, const char *title,
+                         int init_w, int init_h,
+                         void *in_frames, enum SurfaceType type)
+{
+    void *ref_wctx = NULL;
+    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->device_ref->data;
+    AVVulkanDeviceContext *hwctx = ref_data->hwctx;
+
+    win->root         = main;
+
+
+    switch (type) {
+    case STYPE_MAIN:
+        win->cb.mouse_mov_cb = mouse_move_main;
+        win->cb.input        = win_input_main;
+        win->cb.render       = render_main;
+        break;
+    case STYPE_OVERLAY:
+        if (!main || main->type != STYPE_MAIN) {
+            sp_log(ctx, SP_LOG_ERROR, "Invalid reference window for overlay!\n");
+            return AVERROR(EINVAL);
+        }
+        ref_wctx = main->wctx;
+        break;
+    case STYPE_HIGHLIGHT:
+        break;
+    }
 
     return 0;
 }
@@ -298,6 +328,38 @@ static int interface_create_highlight_win(InterfaceCtx *ctx, InterfaceWindowCtx 
 {
     return create_window(ctx, win, NULL, title, -1, -1, NULL, STYPE_HIGHLIGHT);
 }
+*/
+
+AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
+                                        AVBufferRef *event)
+{
+    InterfaceCtx *ctx = (InterfaceCtx *)ref->data;
+
+    AVBufferRef *win_ref = av_buffer_allocz(sizeof(InterfaceWindowCtx));
+    InterfaceWindowCtx *win = (InterfaceWindowCtx *)win_ref->data;
+
+    int err = sp_class_alloc(win, title, SP_TYPE_INTERFACE, ctx);
+    if (err < 0) {
+        av_buffer_unref(&win_ref);
+        return NULL;
+    }
+
+    win->type             = STYPE_HIGHLIGHT;
+    win->cb.mouse_mov_cb  = mouse_move_highlight;
+    win->cb.input         = win_input_highlight;
+    win->cb.render        = render_highlight;
+    win->cb.destroy       = destroy_win;
+    win->cb.resize        = resize_win;
+
+    common_windows_init(ctx, win, title ? title : NULL);
+
+    sp_eventlist_add(win, win->events, event);
+
+    /* Signal to the window system we're ready to render */
+    ctx->sys->surf_done(win->wctx);
+
+    return win_ref;
+}
 
 int interface_send_fifo_to_main(void *s, AVBufferRef *fifo)
 {
@@ -312,16 +374,34 @@ int interface_send_fifo_to_main(void *s, AVBufferRef *fifo)
     return 0;
 }
 
-int interface_init(void **s)
+static void interface_uninit(void *opaque, uint8_t *data)
+{
+
+}
+
+int sp_interface_init(AVBufferRef **s)
 {
     int err = 0;
     InterfaceCtx *ctx = av_mallocz(sizeof(*ctx));
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    *ctx->class = (AVClass) {
-        .class_name = "interface",
-        .item_name  = av_default_item_name,
-        .version    = LIBAVUTIL_VERSION_INT,
-    };
+    if (!ctx)
+        return AVERROR(ENOMEM);
+
+    AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
+                                            interface_uninit, NULL, 0);
+    if (!ctx_ref) {
+        av_free(ctx);
+        return AVERROR(ENOMEM);
+    }
+
+    err = sp_class_alloc(ctx, "interface", SP_TYPE_CONTEXT, NULL);
+    if (err < 0)
+        goto fail;
+
+    ctx->events = sp_bufferlist_new();
+    if (!ctx->events) {
+        err = AVERROR(ENOMEM);
+        goto fail;
+    }
 
     /* Init graphics backend */
     AVBufferRef *render_dev = NULL;
@@ -343,7 +423,7 @@ int interface_init(void **s)
     }
 
     if (!ctx->sys) {
-        av_log(ctx, AV_LOG_WARNING, "No VOs available for output\n");
+        sp_log(ctx, SP_LOG_WARN, "No VOs available for output\n");
         err = 0;
         goto fail;
     }
@@ -381,7 +461,7 @@ int interface_init(void **s)
     }
 
     if (err < 0) {
-        av_log(ctx, AV_LOG_WARNING, "Unable to %s device: %s!\n",
+        sp_log(ctx, SP_LOG_WARN, "Unable to %s device: %s!\n",
                render_dev ? "derive" : "create", av_err2str(err));
         goto fail;
     }
@@ -392,15 +472,12 @@ int interface_init(void **s)
         .log_level = PL_LOG_WARN,
     });
 
-    *s = ctx;
-
-    interface_create_main_win(ctx, &ctx->main_win, PROJECT_NAME, 1280, 720);
-    //interface_create_highlight_win(ctx, &ctx->highlight_win, PROJECT_NAME);
+    *s = ctx_ref;
 
     return 0;
 
 fail:
-    av_free(ctx->class);
-    av_free(ctx);
-    return err;
+    av_buffer_unref(&ctx_ref);
+
+    return err; 
 }

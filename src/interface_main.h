@@ -63,7 +63,7 @@ static int get_frames_ref(InterfaceWindowCtx *win, AVFrame *in_f)
         err = av_hwframe_ctx_create_derived(&win->frames_ref, AV_PIX_FMT_VULKAN,
                                             win->device_ref, input_frames_ref, 0);
         if (err < 0)
-            av_log(win->main, AV_LOG_WARNING, "Could not derive hardware frames context: %s!\n",
+            sp_log(win->main, SP_LOG_WARN, "Could not derive hardware frames context: %s!\n",
                    av_err2str(err));
         else
             return 0;
@@ -88,7 +88,7 @@ static int get_frames_ref(InterfaceWindowCtx *win, AVFrame *in_f)
 
     err = av_hwframe_ctx_init(win->frames_ref);
     if (err < 0) {
-        av_log(win->main, AV_LOG_ERROR, "Could not init hardware frames context: %s!\n",
+        sp_log(win->main, SP_LOG_ERROR, "Could not init hardware frames context: %s!\n",
                av_err2str(err));
         av_buffer_unref(&win->frames_ref);
         return err;
@@ -154,7 +154,7 @@ static int render_main(void *wctx)
 
         ret = av_hwframe_map(mapped_frame, in_f, AV_HWFRAME_MAP_READ);
         if (ret < 0) {
-            av_log(win->main, AV_LOG_ERROR, "Error mapping: %s!\n",
+            sp_log(win->main, SP_LOG_ERROR, "Error mapping: %s!\n",
                    av_err2str(ret));
             av_frame_free(&mapped_frame);
             goto finish;
@@ -194,7 +194,7 @@ static int render_main(void *wctx)
         /* Transfer data */
         ret = av_hwframe_transfer_data(tx_frame, in_f, 0);
         if (ret < 0) {
-            av_log(win->main, AV_LOG_ERROR, "Error transferring: %s!\n",
+            sp_log(win->main, SP_LOG_ERROR, "Error transferring: %s!\n",
                    av_err2str(ret));
             av_frame_free(&tx_frame);
             goto finish;

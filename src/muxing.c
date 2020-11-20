@@ -4,20 +4,6 @@
 #include "muxing.h"
 #include "utils.h"
 
-static av_unused void bitrate_hr(float *bps, const char **unit, int64_t rate)
-{
-    if (rate > (1000000)) {
-        *bps = rate / 1000000.0f;
-        *unit = "Mbps";
-    } else if (rate > (1000)) {
-        *bps = rate / 1000.0f;
-        *unit = "kbps";
-    } else {
-        *bps = rate;
-        *unit = "bps";
-    }
-}
-
 static MuxEncoderMap *enc_id_lookup(MuxingContext *ctx, int enc_id)
 {
     for (int i = 0; i < ctx->enc_map_size; i++)
@@ -30,10 +16,8 @@ static void *muxing_thread(void *arg)
 {
     int err = 0;
     MuxingContext *ctx = arg;
-
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_INIT);
-
-    pthread_mutex_lock(&ctx->lock);
+    SPGenericData *stat_entries = NULL;
+    int nb_stat_entries = 0;
 
     /* Stream stats */
     SlidingWinCtx *sctx_rate = av_mallocz(ctx->avf->nb_streams * sizeof(*sctx_rate));
@@ -41,26 +25,9 @@ static void *muxing_thread(void *arg)
     int64_t *rate = av_mallocz(ctx->avf->nb_streams * sizeof(*rate));
     int64_t *latency = av_mallocz(ctx->avf->nb_streams * sizeof(*latency));
 
-    ctx->avf->flags |= AVFMT_FLAG_AUTO_BSF;
+    sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    if (ctx->low_latency) {
-        ctx->avf->flags |= AVFMT_FLAG_FLUSH_PACKETS | AVFMT_FLAG_NOBUFFER;
-        ctx->avf->pb->min_packet_size = 0;
-    }
-
-	err = avformat_write_header(ctx->avf, NULL);
-	if (err) {
-		av_log(ctx, AV_LOG_ERROR, "Could not write header: %s!\n", av_err2str(err));
-		goto fail;
-	}
-
-    atomic_store(&ctx->initialized, 1);
-
-    sp_set_thread_name_self(ctx->class->class_name);
-
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_CHANGE);
-
-    pthread_mutex_unlock(&ctx->lock);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
 
     if (ctx->dump_info)
         av_dump_format(ctx->avf, 0, ctx->out_url, 1);
@@ -68,16 +35,14 @@ static void *muxing_thread(void *arg)
     int flush = 0;
     int fmt_can_flush = ctx->avf->oformat->flags & AVFMT_ALLOW_FLUSH;
 
-#if 0
-    fprintf(stderr, "\n");
-#endif
-
     /* Mux stats */
     SlidingWinCtx sctx_mux = { 0 };
     int64_t last_pos_update = av_gettime_relative();
     int64_t mux_rate = 0;
     int64_t last_pos = 0;
-    av_unused int64_t buf_bytes = 0;
+    int64_t buf_bytes = 0;
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Muxer initialized!\n");
 
     while (1) {
         AVPacket *in_pkt = NULL;
@@ -118,6 +83,11 @@ static void *muxing_thread(void *arg)
         in_pkt->dts = av_rescale_q(in_pkt->dts, src_tb, dst_tb);
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
 
+        sp_log(ctx, SP_LOG_TRACE, "Got packet from \"%s\", out pts = %f, out_dts = %f\n",
+               sp_class_get_name(eid->enc_ctx),
+               av_q2d(dst_tb) * in_pkt->pts,
+               av_q2d(dst_tb) * in_pkt->dts);
+
         buf_bytes = ctx->avf->pb->buf_ptr - ctx->avf->pb->buffer;
         if (last_pos != ctx->avf->pb->pos) {
             int64_t t_delta, cur_time = av_gettime_relative();
@@ -135,11 +105,11 @@ send:
         av_packet_free(&in_pkt);
 
         if (err == AVERROR(ETIMEDOUT)) {
-            av_log(ctx, AV_LOG_ERROR, "Error muxing, operation timed out!\n");
+            sp_log(ctx, SP_LOG_ERROR, "Error muxing, operation timed out!\n");
             pthread_mutex_unlock(&ctx->lock);
             continue;
         } else if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Error muxing: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Error muxing: %s!\n", av_err2str(err));
             pthread_mutex_unlock(&ctx->lock);
 	    	goto fail;
         }
@@ -148,37 +118,22 @@ send:
             pthread_mutex_unlock(&ctx->lock);
             break;
         }
-#if 0
-        {
-            for (int i = 0; i < ctx->avf->nb_streams; i++) {
-                fprintf(stderr, "\033[F");
-                fflush(stderr);
-            }
 
-            float bitrate_mux;
-            const char *unit_mux;
-            bitrate_hr(&bitrate_mux, &unit_mux, mux_rate);
-            fprintf(stderr, "\33[2KMuxing: %.1f%s (buffer: %li Kib)\n", bitrate_mux, unit_mux, buf_bytes / 1024);
-            fflush(stderr);
+        int entries = 2 + 2*ctx->avf->nb_streams;
+        stat_entries = av_fast_realloc(stat_entries, &nb_stat_entries, sizeof(*stat_entries) * entries);
 
-            for (int i = 0; i < ctx->avf->nb_streams; i++) {
-                float bitrate_st;
-                const char *unit_st;
-                const char *type;
-                switch (ctx->avf->streams[i]->codecpar->codec_type) {
-                case AVMEDIA_TYPE_VIDEO: type = "video"; break;
-                case AVMEDIA_TYPE_AUDIO: type = "audio"; break;
-                case AVMEDIA_TYPE_SUBTITLE: type = "subtitle"; break;
-                default: type = "unknown"; break;
-                }
-                bitrate_hr(&bitrate_st, &unit_st, rate[i]);
-                fprintf(stderr, "\33[2K    Stream %i (%s): %.1f%s, Latency: %.1fms%c",
-                        i, type, bitrate_st, unit_st, latency[i] / 1000.0f,
-                        i == (ctx->avf->nb_streams - 1) ? '\0' : '\n');
-                fflush(stderr);
-            }
+        stat_entries[0] = D_TYPE("bitrate", NULL, mux_rate);
+        stat_entries[1] = D_TYPE("cached", NULL, buf_bytes);
+
+        for (int i = 0; i < ctx->avf->nb_streams; i++) {
+            stat_entries[2 + 2*i + 0] = D_TYPE("bitrate", sp_class_get_name(eid->enc_ctx), rate[i]);
+            stat_entries[2 + 2*i + 1] = D_TYPE("latency", sp_class_get_name(eid->enc_ctx), latency[i]);
         }
-#endif
+
+        stat_entries[2 + 2*ctx->avf->nb_streams] = (SPGenericData){ 0 };
+
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_STATS, stat_entries);
+
         pthread_mutex_unlock(&ctx->lock);
     }
 
@@ -189,11 +144,11 @@ fail:
     av_free(sctx_latency);
     av_free(rate);
     av_free(latency);
+    av_free(stat_entries);
 
     pthread_mutex_unlock(&ctx->lock);
 
     ctx->err = err;
-    atomic_store(&ctx->running, 0);
 
     return NULL;
 }
@@ -208,7 +163,7 @@ int sp_muxer_add_stream(AVBufferRef *ctx_ref, AVBufferRef *enc_ref)
 
     MuxEncoderMap *enc_map_entry = NULL;
     for (int i = 0; i < ctx->enc_map_size; i++) {
-        if (ctx->enc_map[i].encoder_id == enc->encoder_id && (ctx->enc_map[i].stream_id == INT_MAX)) {
+        if (ctx->enc_map[i].encoder_id == sp_class_get_id(enc) && (ctx->enc_map[i].stream_id == INT_MAX)) {
             enc_map_entry = &ctx->enc_map[i];
             break;
         }
@@ -223,11 +178,12 @@ int sp_muxer_add_stream(AVBufferRef *ctx_ref, AVBufferRef *enc_ref)
         ctx->enc_map_size++;
     }
 
-    enc_map_entry->encoder_id = enc->encoder_id;
+    enc_map_entry->enc_ctx = enc;
+    enc_map_entry->encoder_id = sp_class_get_id(enc);
     enc_map_entry->encoder_tb = enc->avctx->time_base;
     enc_map_entry->stream_id  = INT_MAX;
 
-    if (ctx->initialized) {
+    if (0) {
 
     } else {
         ctx->stream_has_link = av_realloc(ctx->stream_has_link, sizeof(*ctx->stream_has_link) * (ctx->avf->nb_streams + 1));
@@ -235,14 +191,14 @@ int sp_muxer_add_stream(AVBufferRef *ctx_ref, AVBufferRef *enc_ref)
  
         AVStream *st = avformat_new_stream(ctx->avf, NULL);
         if (!st) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to allocate stream!\n");
+            sp_log(ctx, SP_LOG_ERROR, "Unable to allocate stream!\n");
             err = AVERROR(ENOMEM);
             goto end;
         }
 
         err = avcodec_parameters_from_context(st->codecpar, enc->avctx);
         if (err < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Could not copy codec params: %s!\n", av_err2str(err));
+            sp_log(ctx, SP_LOG_ERROR, "Could not copy codec params: %s!\n", av_err2str(err));
             goto end;
         }
 
@@ -285,25 +241,54 @@ static void muxer_ioctx_ctrl_free(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
+static int configure_muxer(MuxingContext *ctx)
+{
+    int ret;
+
+    ret = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+    if (ret < 0)
+        return ret;
+
+    ctx->avf->flags |= AVFMT_FLAG_AUTO_BSF;
+
+    if (ctx->low_latency) {
+        ctx->avf->flags |= AVFMT_FLAG_FLUSH_PACKETS | AVFMT_FLAG_NOBUFFER;
+        ctx->avf->pb->min_packet_size = 0;
+    }
+
+    ret = avformat_write_header(ctx->avf, NULL);
+    if (ret) {
+        sp_log(ctx, SP_LOG_ERROR, "Could not write header: %s!\n", av_err2str(ret));
+        return ret;
+    }
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Muxer configured!\n");
+
+    return 0;
+}
+
+static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     MuxerIOCtrlCtx *event = (MuxerIOCtrlCtx *)opaque->data;
     MuxingContext *ctx = src_ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
-        pthread_mutex_lock(&ctx->lock);
-        if (!atomic_load(&ctx->running)) {
-            atomic_store(&ctx->running, 1);
-            ctx->epoch = atomic_load(event->epoch);
-            pthread_create(&ctx->muxing_thread, NULL, muxing_thread, ctx);
+        if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
+            int ret = configure_muxer(ctx);
+            if (ret < 0)
+                return ret;
         }
-        pthread_mutex_unlock(&ctx->lock);
+        ctx->epoch = atomic_load(event->epoch);
+        if (!ctx->muxing_thread)
+            pthread_create(&ctx->muxing_thread, NULL, muxing_thread, ctx);
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
-        if (atomic_load(&ctx->running)) {
+        if (ctx->muxing_thread) {
             sp_packet_fifo_push(ctx->src_packets, NULL);
             pthread_join(ctx->muxing_thread, NULL);
+            ctx->muxing_thread = 0;
         }
     } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        pthread_mutex_lock(&ctx->lock);
         const char *tmp_val = NULL;
         if ((tmp_val = dict_get(event->opts, "low_latency")))
             if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
@@ -314,15 +299,16 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx)
         if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
             long int len = strtol(tmp_val, NULL, 10);
             if (len < 0)
-                av_log(ctx, AV_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+                sp_log(ctx, SP_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
             else
                 sp_packet_fifo_set_max_queued(ctx->src_packets, len);
         }
+        pthread_mutex_unlock(&ctx->lock);
     } else {
         return AVERROR(ENOTSUP);
     }
 
-    return 0;    
+    return 0;
 }
 
 int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
@@ -330,21 +316,21 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     MuxingContext *ctx = (MuxingContext *)ctx_ref->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        av_log(ctx, AV_LOG_DEBUG, "Comitting!\n");
-        return sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_COMMIT);
+        sp_log(ctx, SP_LOG_DEBUG, "Comitting!\n");
+        return sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        av_log(ctx, AV_LOG_DEBUG, "Discarding!\n");
-        sp_bufferlist_discard_new_events(ctx->events);
+        sp_log(ctx, SP_LOG_DEBUG, "Discarding!\n");
+        sp_eventlist_discard(ctx->events);
     } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         char *fstr = sp_event_flags_to_str_buf(arg);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_event(ctx->events, arg);
+        return sp_eventlist_add(ctx, ctx->events, arg);
     } else if (ctrl & SP_EVENT_CTRL_DEP) {
         char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
-        av_log(ctx, AV_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
+        sp_log(ctx, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
         av_free(fstr);
-        return sp_bufferlist_append_dep(ctx->events, arg, ctrl);
+        return sp_eventlist_add_with_dep(ctx, ctx->events, arg, ctrl);
     } else if (ctrl & ~(SP_EVENT_CTRL_START |
                         SP_EVENT_CTRL_STOP |
                         SP_EVENT_CTRL_OPTS |
@@ -361,7 +347,7 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         ctrl_ctx->epoch = arg;
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = muxer_ioctx_ctrl_cb(ctrl_ctx_ref, ctx);
+        int ret = muxer_ioctx_ctrl_cb(ctrl_ctx_ref, ctx, NULL);
         av_buffer_unref(&ctrl_ctx_ref);
         return ret;
     }
@@ -372,10 +358,10 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
                                               sp_event_gen_identifier(ctx, NULL, flags));
 
     char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    av_log(ctx, AV_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
+    sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
     av_free(fstr);
 
-    int err = sp_bufferlist_append_event(ctx->events, ctrl_event);
+    int err = sp_eventlist_add(ctx, ctx->events, ctrl_event);
     av_buffer_unref(&ctrl_event);
     if (err < 0)
         return err;
@@ -403,7 +389,7 @@ int sp_muxer_init(AVBufferRef *ctx_ref)
     err = avformat_alloc_output_context2(&ctx->avf, NULL, ctx->out_format,
 	                                     ctx->out_url);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to init lavf context!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Unable to init lavf context!\n");
         return err;
     }
 
@@ -414,19 +400,18 @@ int sp_muxer_init(AVBufferRef *ctx_ref)
             goto fail;
         }
     } else {
-        int len = strlen(ctx->class->class_name) + 1 + strlen(ctx->avf->oformat->name) + 1;
+        int len = strlen(sp_class_get_name(ctx)) + 1 + strlen(ctx->avf->oformat->name) + 1;
         new_name = av_mallocz(len);
         if (!new_name) {
             err = AVERROR(ENOMEM);
             goto fail;
         }
-        av_strlcpy(new_name, ctx->class->class_name, len);
+        av_strlcpy(new_name, sp_class_get_name(ctx), len);
         av_strlcat(new_name, ":", len);
         av_strlcat(new_name, ctx->avf->oformat->name, len);
     }
 
-    av_free((void *)ctx->class->class_name);
-    ctx->class->class_name = new_name;
+    sp_class_set_name(ctx, new_name);
     ctx->name = new_name;
 
     ctx->avf->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
@@ -434,7 +419,7 @@ int sp_muxer_init(AVBufferRef *ctx_ref)
     /* Open for writing */
     err = avio_open(&ctx->avf->pb, ctx->out_url, AVIO_FLAG_WRITE);
     if (err) {
-        av_log(ctx, AV_LOG_ERROR, "Couldn't open %s: %s!\n", ctx->out_url,
+        sp_log(ctx, SP_LOG_ERROR, "Couldn't open %s: %s!\n", ctx->out_url,
                av_err2str(err));
         goto fail;
     }
@@ -456,7 +441,7 @@ static void muxer_free(void *opaque, uint8_t *data)
 
     sp_packet_fifo_unmirror_all(ctx->src_packets);
 
-    if (atomic_load(&ctx->running)) {
+    if (ctx->muxing_thread) {
         sp_packet_fifo_push(ctx->src_packets, NULL);
         pthread_join(ctx->muxing_thread, NULL);
     }
@@ -466,20 +451,20 @@ static void muxer_free(void *opaque, uint8_t *data)
     av_free(ctx->stream_has_link);
     av_free(ctx->stream_codec_id);
 
-    if (atomic_load(&ctx->initialized)) {
+    if (sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_INIT)) {
         int err = av_write_trailer(ctx->avf);
         if (err < 0)
-            av_log(ctx, AV_LOG_ERROR, "Error writing trailer: %s!\n",
+            sp_log(ctx, SP_LOG_ERROR, "Error writing trailer: %s!\n",
                    av_err2str(err));
 
         /* Flush output data */
         avio_flush(ctx->avf->pb);
         avformat_flush(ctx->avf);
 
-        av_log(ctx, AV_LOG_INFO, "Wrote trailer!\n");
+        sp_log(ctx, SP_LOG_VERBOSE, "Wrote trailer!\n");
     }
 
-    sp_bufferlist_dispatch_events(ctx->events, ctx, SP_EVENT_ON_DESTROY);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
     sp_bufferlist_free(&ctx->events);
 
     if (ctx->avf)
@@ -487,10 +472,10 @@ static void muxer_free(void *opaque, uint8_t *data)
 
     avformat_free_context(ctx->avf);
 
-    av_free((void *)ctx->class->class_name);
-    av_free(ctx->class);
-
     pthread_mutex_destroy(&ctx->lock);
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Muxer destroyed!\n");
+    sp_class_free(ctx);
 }
 
 AVBufferRef *sp_muxer_alloc(void)
@@ -502,25 +487,15 @@ AVBufferRef *sp_muxer_alloc(void)
     AVBufferRef *ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
                                             muxer_free, NULL, 0);
 
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    if (!ctx->class) {
+    int err = sp_class_alloc(ctx, "lavf", SP_TYPE_MUXER, NULL);
+    if (err < 0) {
         av_buffer_unref(&ctx_ref);
         return NULL;
     }
 
-    *ctx->class = (AVClass) {
-        .class_name   = av_strdup("lavf"),
-        .item_name    = av_default_item_name,
-        .get_category = av_default_get_category,
-        .version      = LIBAVUTIL_VERSION_INT,
-        .category     = AV_CLASS_CATEGORY_MUXER,
-    };
-
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
     ctx->src_packets = sp_packet_fifo_create(ctx, 256, PACKET_FIFO_BLOCK_NO_INPUT);
-    ctx->initialized = ATOMIC_VAR_INIT(0);
-    ctx->running = ATOMIC_VAR_INIT(0);
 
     return ctx_ref;
 }

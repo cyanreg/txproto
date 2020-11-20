@@ -18,13 +18,13 @@ sources = [
     # Encoding
     'encoding.c',
 
-
     # Misc
     'utils.c',
+    'logging.c',
     'fifo_frame.c',
     'fifo_packet.c',
 
-    xxd_target,
+    builtin_lua_scripts,
 
     # Version
     vcs_tag(command: ['git', 'rev-parse', '--short', 'HEAD'],
@@ -68,6 +68,12 @@ if have_wayland
     sources += 'interface_wayland.c'
     sources += 'wayland_common.c'
     conf.set('HAVE_WAYLAND', 1)
+
+    gbm_dep = dependency('gbm', version: '>=17.1.0', required: false)
+    if gbm_dep.found()
+        dependencies += gbm_dep
+        conf.set('HAVE_GBM', 1)
+    endif
 endif
 
 executable('txproto',

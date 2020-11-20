@@ -2,6 +2,7 @@
 
 #include "iosys_common.h"
 #include "utils.h"
+#include "logging.h"
 #include "../config.h"
 
 AVBufferRef *sp_bufferlist_iosysentry_by_id(AVBufferRef *ref, void *opaque)
@@ -14,12 +15,15 @@ AVBufferRef *sp_bufferlist_iosysentry_by_id(AVBufferRef *ref, void *opaque)
 
 uint32_t sp_iosys_gen_identifier(void *ctx, uint32_t num, uint32_t extra)
 {
-    AVClass *ctx_class = *((AVClass **)ctx);
     const AVCRC *table = av_crc_get_table(AV_CRC_32_IEEE);
 
     uint32_t crc = UINT32_MAX;
-    crc = av_crc(table, crc, ctx_class->class_name, strlen(ctx_class->class_name));
-    crc = av_crc(table, crc, (void *)&ctx_class->category, sizeof(ctx_class->category));
+
+    if (ctx) {
+        uint32_t id = sp_class_get_type(ctx);
+        crc = av_crc(table, crc, (void *)&id, sizeof(id));
+    }
+
     crc = av_crc(table, crc, (void *)&num, sizeof(num));
     crc = av_crc(table, crc, (void *)&extra, sizeof(extra));
     return crc;

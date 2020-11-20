@@ -1,27 +1,20 @@
 luac = find_program('luac')
+xxd = find_program('xxd')
 
 builtin_scripts = [
     'default.lua',
+    'utils.lua',
 ]
 
-builtin_scripts_compiled = []
+builtin_lua_scripts = []
 foreach s: builtin_scripts
-    builtin_scripts_compiled += s + '.bin'
+    compiled_script = custom_target('Compiled ' + s,
+                                    input: s,
+                                    output: s + '.bin',
+                                    command: [luac, '-o', '@OUTPUT@', '@INPUT@'])
+
+    builtin_lua_scripts += custom_target('Converted ' + s + '.bin',
+                                         input: compiled_script,
+                                         output: s + '.bin' + '.h',
+                                         command: [xxd, '-i', '@INPUT@', '@OUTPUT@'])
 endforeach
-
-luac_target = custom_target('luac',
-                            input: builtin_scripts,
-                            output: builtin_scripts_compiled,
-                            command: [luac, '-o', '@OUTPUT@', '@INPUT@'])
-
-xxd = find_program('xxd')
-
-builtin_scripts_inc = []
-foreach s: builtin_scripts_compiled
-    builtin_scripts_inc += s + '.h'
-endforeach
-
-xxd_target = custom_target('xxd',
-                           input: luac_target,
-                           output: builtin_scripts_inc,
-                           command: [xxd, '-i', '@INPUT@', '@OUTPUT@'])

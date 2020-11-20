@@ -1,11 +1,12 @@
-#include "wayland_common.h"
-#include "utils.h"
-
 #include <unistd.h>
 #include <poll.h>
 #include <fcntl.h>
 
+#include <libavutil/time.h>
 #include <xf86drm.h>
+
+#include "wayland_common.h"
+#include "utils.h"
 
 static pthread_mutex_t ctx_ref_lock = PTHREAD_MUTEX_INITIALIZER;
 static AVBufferRef *ctx_ref = NULL;
@@ -47,10 +48,7 @@ static void xdg_out_name(void *opaque, struct zxdg_output_v1 *zxdg_output_v1,
 
     pthread_mutex_lock(&main->lock);
 
-    av_freep(&entry->name);
-    entry->name = av_strdup(name);
-    av_freep(&entry->class->class_name);
-    entry->class->class_name = av_strdup(entry->name);
+    sp_class_set_name(entry, name);
 
     pthread_mutex_unlock(&main->lock);
 }
@@ -90,11 +88,8 @@ static void output_handle_geometry(void *opaque, struct wl_output *wl_output,
 
     pthread_mutex_lock(&main->lock);
 
-    if (!entry->name) {
-        entry->name = av_strdup(model);
-        av_freep(&entry->class->class_name);
-        entry->class->class_name = av_strdup(entry->name);
-    }
+    if (!sp_class_get_name(entry))
+        sp_class_set_name(entry, model);
     if (!entry->desc)
         entry->desc = av_strdup(make);
     if (!x && !y)
@@ -170,7 +165,6 @@ static void destroy_entry(void *opaque, uint8_t *data)
 
     zxdg_output_v1_destroy(priv->xdg_out);
     wl_output_release(priv->output);
-    av_free(entry->name);
     av_free(entry->desc);
 
     av_buffer_unref(&priv->main);
@@ -198,10 +192,8 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
         entry->identifier = sp_iosys_gen_identifier(ctx, id, 0);
         entry->api_id = id;
         entry->api_priv = output;
-        entry->parent = ctx;
 
-        sp_alloc_class(entry, "display", AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT,
-                       &entry->log_lvl_offset, &entry->parent);
+        sp_class_alloc(entry, NULL, SP_TYPE_VIDEO_BIDIR, ctx);
 
         AVBufferRef *buf = av_buffer_create((uint8_t *)entry, sizeof(*entry),
                                             destroy_entry, NULL, 0);
@@ -241,6 +233,9 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
     if (!strcmp(interface, zwp_idle_inhibit_manager_v1_interface.name) && found++)
         ctx->idle_inhibit_manager = wl_registry_bind(reg, id, &zwp_idle_inhibit_manager_v1_interface, 1);
 
+    if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name) && found++)
+        ctx->dmabuf = wl_registry_bind(reg, id, &zwp_linux_dmabuf_v1_interface, 3);
+
     if (!strcmp(interface, zwlr_export_dmabuf_manager_v1_interface.name) && found++)
         ctx->dmabuf_export_manager = wl_registry_bind(reg, id, &zwlr_export_dmabuf_manager_v1_interface, 1);
 
@@ -251,14 +246,14 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
         ctx->layer_shell = wl_registry_bind(reg, id, &zwlr_layer_shell_v1_interface, 1);
 
     if (found > 1)
-        av_log(ctx, AV_LOG_DEBUG, "Registered for interface %s\n", interface);
+        sp_log(ctx, SP_LOG_TRACE, "Registered for interface %s\n", interface);
 
     pthread_mutex_unlock(&ctx->lock);
 }
 
 static AVBufferRef *find_iosysentry_by_output(AVBufferRef *ref, void *opaque)
 {
-    IOSysEntry *entry = (IOSysEntry *)opaque;
+    IOSysEntry *entry = (IOSysEntry *)ref->data;
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
     if (priv->output == (struct wl_output *)opaque)
         return ref;
@@ -308,7 +303,7 @@ static void *wayland_events_thread(void *arg)
     if (ctx->display_fd == -1)
         return NULL;
 
-    sp_set_thread_name_self(ctx->class->class_name);
+    sp_set_thread_name_self(sp_class_get_name(ctx));
 
     while (1) {
         while (wl_display_prepare_read(ctx->display))
@@ -324,19 +319,19 @@ static void *wayland_events_thread(void *arg)
             if (errno == EAGAIN) {
                 fds[0].events |= POLLOUT;
             } else {
-                av_log(ctx, AV_LOG_ERROR, "Error flushing display FD!\n");
+                sp_log(ctx, SP_LOG_ERROR, "Error flushing display FD!\n");
                 goto fail;
             }
         }
 
         if (poll(fds, 2, -1) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "Error reading display FD!\n");
+            sp_log(ctx, SP_LOG_ERROR, "Error reading display FD!\n");
             goto fail;
         }
 
         if (fds[0].revents & POLLIN) {
             if (wl_display_read_events(ctx->display) < 0) {
-                av_log(ctx, AV_LOG_ERROR, "Error reading events!\n");
+                sp_log(ctx, SP_LOG_ERROR, "Error reading events!\n");
                 goto fail;
             }
             wl_display_dispatch_pending(ctx->display);
@@ -373,6 +368,9 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     pthread_join(ctx->event_thread, NULL);
     sp_close_wakeup_pipe(ctx->wakeup_pipe);
 
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
+
+    sp_bufferlist_free(&ctx->events);
     sp_bufferlist_free(&ctx->output_list);
 
     if (ctx->xdg_output_manager)
@@ -399,6 +397,9 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     if (ctx->idle_inhibit_manager)
        zwp_idle_inhibit_manager_v1_destroy(ctx->idle_inhibit_manager);
 
+    if (ctx->dmabuf)
+        zwp_linux_dmabuf_v1_destroy(ctx->dmabuf);
+
     if (ctx->dmabuf_export_manager)
         zwlr_export_dmabuf_manager_v1_destroy(ctx->dmabuf_export_manager);
 
@@ -416,7 +417,7 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     wl_display_disconnect(ctx->display);
 
     pthread_mutex_destroy(&ctx->lock);
-    sp_free_class(ctx);
+    sp_class_free(ctx);
     av_free(ctx);
 
     pthread_mutex_unlock(&ctx_ref_lock);
@@ -450,7 +451,7 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
     char *render_node = NULL;
 
     if ((err = find_render_node(&render_node))) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to find a DRM device: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Failed to find a DRM device: %s!\n",
                av_err2str(err));
         return err;
     }
@@ -459,7 +460,7 @@ static int init_drm_hwcontext(WaylandCtx *ctx)
                                  render_node, NULL, 0);
     av_free(render_node);
     if (err < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to open DRM device %s: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Failed to open DRM device %s: %s!\n",
                render_node, av_err2str(err));
         return err;
     }
@@ -491,8 +492,7 @@ int sp_wayland_create(AVBufferRef **ref)
         return AVERROR(ENOMEM);
     }
 
-    err = sp_alloc_class(ctx, "wayland", AV_CLASS_CATEGORY_NA,
-                         &ctx->log_lvl_offset, NULL);
+    err = sp_class_alloc(ctx, "wayland_io", SP_TYPE_CONTEXT, NULL);
     if (err < 0)
         goto fail;
 
@@ -505,11 +505,12 @@ int sp_wayland_create(AVBufferRef **ref)
 
     /* Output list */
     ctx->output_list = sp_bufferlist_new();
+    ctx->events = sp_bufferlist_new();
 
     /* Connect to display */
     ctx->display = wl_display_connect(NULL);
     if (!ctx->display) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to connect to display!\n");
+        sp_log(ctx, SP_LOG_ERROR, "Failed to connect to display!\n");
         err = AVERROR(EINVAL);
         goto fail;
     }

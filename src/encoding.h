@@ -7,13 +7,16 @@
 #include "fifo_packet.h"
 #include "fifo_frame.h"
 #include "utils.h"
+#include "logging.h"
 
 /* Video encoder - we scale and convert in the encoding thread */
 typedef struct EncodingContext {
-    AVClass *class;
+    SPClass *class;
+
     const char *name;
-    int encoder_id;
     pthread_mutex_t lock;
+
+    int64_t epoch;
 
     /* Needed to start */
     AVBufferRef *src_frames;

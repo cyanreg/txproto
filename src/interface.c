@@ -165,13 +165,13 @@ static void destroy_win(void *wctx)
     InterfaceWindowCtx *win = wctx;
     pthread_mutex_lock(&win->lock);
 
-//    pl_tex_destroy(win->pl_gpu, &win->highlight.region);
-//    pl_swapchain_destroy(&win->pl_swap);
-//    pl_renderer_destroy(&win->pl_renderer);
+    pl_tex_destroy(win->pl_gpu, &win->highlight.region);
+    pl_swapchain_destroy(&win->pl_swap);
+    pl_renderer_destroy(&win->pl_renderer);
 
-//    av_frame_free(&win->last_frame);
-//    av_buffer_unref(&win->frames_ref);
-//    av_buffer_unref(&win->device_ref);
+    av_frame_free(&win->last_frame);
+    av_buffer_unref(&win->frames_ref);
+    av_buffer_unref(&win->device_ref);
 
     pthread_mutex_unlock(&win->lock);
     pthread_mutex_destroy(&win->lock);

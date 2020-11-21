@@ -72,6 +72,10 @@ typedef struct InterfaceCB {
     int (*render)(void *iface_ctx);
     int (*resize)(void *iface_ctx, int *w, int *h, int active_resize);
 
+    /* State */
+    void (*state)(void *iface_ctx, int is_fs, float scale);
+
+    /* Destroy */
     void (*destroy)(void *iface_ctx);
 } InterfaceCB;
 

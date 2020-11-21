@@ -1055,7 +1055,7 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
     const char *oneshot_str = dict_get(opts, "oneshot");
     priv->oneshot = oneshot_str ? !strcmp(oneshot_str, "1") : 0;
     priv->capture_mode = CAP_MODE_SCRCPY;
-    priv->capture_cursor = 1;
+    priv->capture_cursor = 0;
 
     /* Options */
     if (dict_get(opts, "capture_cursor"))

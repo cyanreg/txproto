@@ -614,6 +614,7 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
     int scale = 1;
     sp_bufferlist_pop(surf->visible_outs, buflist_max_scale, &scale);
     surf->scaling = scale;
+    surf->cb->state(surf->cb_ctx, surf->fullscreen, scale);
 
     IOSysEntry *out = (IOSysEntry *)ref->data;
     sp_log(surf->main, SP_LOG_DEBUG, "Surface \"%s\" entered output \"%s\", scale = %i\n",
@@ -637,6 +638,7 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
     int scale = 1;
     sp_bufferlist_pop(surf->visible_outs, buflist_max_scale, &scale);
     surf->scaling = scale;
+    surf->cb->state(surf->cb_ctx, surf->fullscreen, scale);
 
     sp_log(surf->main, SP_LOG_DEBUG, "Surface \"%s\" gone from output \"%s\", new scale = %i\n",
            surf->title, sp_class_get_name(out), scale);
@@ -773,6 +775,7 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
         surf->fullscreen = new_fullscreen;
         surf->maximized = new_maximized;
         surf->flags |= SURFACE_CHANGED_STATE;
+        surf->cb->state(surf->cb_ctx, new_fullscreen, surf->scaling);
     } else if (conf_width && conf_height) {
         new_width = conf_width;
         new_height = conf_height;

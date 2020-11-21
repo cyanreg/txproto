@@ -118,6 +118,7 @@ typedef struct InterfaceWindowCtx {
     int is_dirty;
     int width;
     int height;
+    float scale;
     AVFrame *last_frame;
 
     /* Windowing system context */
@@ -176,6 +177,12 @@ static void destroy_win(void *wctx)
     pthread_mutex_destroy(&win->lock);
 }
 
+static void state_win(void *wctx, int is_fs, float scale)
+{
+    InterfaceWindowCtx *win = wctx;
+    win->scale = scale;
+}
+
 static int resize_win(void *wctx, int *w, int *h, int active_resize)
 {
     InterfaceWindowCtx *win = wctx;
@@ -216,6 +223,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     win->main         = ctx;
     win->width        = win->width ? win->width :-1;
     win->height       = win->height ? win->height : -1;
+    win->scale        = 1.0f;
     win->device_ref   = av_buffer_ref(ctx->device_ref);
     if (!win->device_ref) {
         sp_bufferlist_free(&ctx->events);
@@ -230,6 +238,10 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     win->highlight.state_x1 = INT32_MIN;
     win->highlight.state_y0 = INT32_MIN;
     win->highlight.state_y1 = INT32_MIN;
+
+    win->cb.destroy   = destroy_win;
+    win->cb.resize    = resize_win;
+    win->cb.state     = state_win;
 
     win->is_dirty = 1;
 
@@ -348,8 +360,6 @@ AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
     win->cb.mouse_mov_cb  = mouse_move_highlight;
     win->cb.input         = win_input_highlight;
     win->cb.render        = render_highlight;
-    win->cb.destroy       = destroy_win;
-    win->cb.resize        = resize_win;
 
     common_windows_init(ctx, win, title ? title : NULL);
 

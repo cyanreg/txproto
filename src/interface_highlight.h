@@ -1,6 +1,6 @@
 #include <libavutil/time.h>
 
-#define HBORDER_RESIZE 12
+#define HBORDER_RESIZE 18
 #define HFLAG_TRACK_X0 (1 << 0)
 #define HFLAG_TRACK_X1 (1 << 1)
 #define HFLAG_TRACK_Y0 (1 << 2)
@@ -35,6 +35,7 @@ static enum MouseStyle mouse_move_highlight(void *wctx, int x, int y)
     InterfaceWindowCtx *win = wctx;
     pthread_mutex_lock(&win->lock);
 
+    const int tolerance = lrintf(HBORDER_RESIZE * win->scale);
     enum MouseStyle style = MSTYLE_DEFAULT;
     uint32_t flags = win->highlight.flags;
     int count = 1, delta_x = 0, delta_y = 0;
@@ -66,21 +67,21 @@ static enum MouseStyle mouse_move_highlight(void *wctx, int x, int y)
         int left_border   = FFMIN(win->highlight.x0, win->highlight.x1);
         int bottom_border = FFMAX(win->highlight.y0, win->highlight.y1);
         int right_border  = FFMAX(win->highlight.x0, win->highlight.x1);
-        if (abs(win->cursor.x - left_border)   < HBORDER_RESIZE &&
-            (win->cursor.y > top_border    - HBORDER_RESIZE) &&
-            (win->cursor.y < bottom_border + HBORDER_RESIZE))
+        if (abs(win->cursor.x - left_border)   < tolerance &&
+            (win->cursor.y > top_border    - tolerance) &&
+            (win->cursor.y < bottom_border + tolerance))
             left   = 1;
-        if (abs(win->cursor.x - right_border)  < HBORDER_RESIZE &&
-            (win->cursor.y > top_border    - HBORDER_RESIZE) &&
-            (win->cursor.y < bottom_border + HBORDER_RESIZE))
+        if (abs(win->cursor.x - right_border)  < tolerance &&
+            (win->cursor.y > top_border    - tolerance) &&
+            (win->cursor.y < bottom_border + tolerance))
             right  = 1;
-        if (abs(win->cursor.y - top_border)    < HBORDER_RESIZE &&
-            (win->cursor.x > left_border   - HBORDER_RESIZE) &&
-            (win->cursor.x < right_border  + HBORDER_RESIZE))
+        if (abs(win->cursor.y - top_border)    < tolerance &&
+            (win->cursor.x > left_border   - tolerance) &&
+            (win->cursor.x < right_border  + tolerance))
             top    = 1;
-        if (abs(win->cursor.y - bottom_border) < HBORDER_RESIZE &&
-            (win->cursor.x > left_border   - HBORDER_RESIZE) &&
-            (win->cursor.x < right_border  + HBORDER_RESIZE))
+        if (abs(win->cursor.y - bottom_border) < tolerance &&
+            (win->cursor.x > left_border   - tolerance) &&
+            (win->cursor.x < right_border  + tolerance))
             bottom = 1;
 
         /* All */
@@ -112,6 +113,7 @@ static int win_input_highlight(void *wctx, uint64_t val)
     InterfaceWindowCtx *win = wctx;
     pthread_mutex_lock(&win->lock);
 
+    const int tolerance = lrintf(HBORDER_RESIZE * win->scale);
     uint64_t flags = val & SP_KEY_FLAG_MASK;
     val &= ~SP_KEY_FLAG_MASK;
 
@@ -123,27 +125,27 @@ static int win_input_highlight(void *wctx, uint64_t val)
         if ((flags & SP_KEY_FLAG_DOWN) && !win->highlight.flags &&
             (win->highlight.x0 >= 0) && (win->highlight.x1 >= 0) &&
             (win->highlight.y0 >= 0) && (win->highlight.y1 >= 0)) {
-            if (abs(win->cursor.x - win->highlight.x0) < HBORDER_RESIZE &&
-                (win->cursor.y > win->highlight.y0 - HBORDER_RESIZE) &&
-                (win->cursor.y < win->highlight.y1 + HBORDER_RESIZE)) {
+            if (abs(win->cursor.x - win->highlight.x0) < tolerance &&
+                (win->cursor.y > win->highlight.y0 - tolerance) &&
+                (win->cursor.y < win->highlight.y1 + tolerance)) {
                 win->cursor.x = win->highlight.x0;
                 win->highlight.flags |= HFLAG_TRACK_X0;
             }
-            if (abs(win->cursor.x - win->highlight.x1) < HBORDER_RESIZE &&
-                (win->cursor.y > win->highlight.y0 - HBORDER_RESIZE) &&
-                (win->cursor.y < win->highlight.y1 + HBORDER_RESIZE)) {
+            if (abs(win->cursor.x - win->highlight.x1) < tolerance &&
+                (win->cursor.y > win->highlight.y0 - tolerance) &&
+                (win->cursor.y < win->highlight.y1 + tolerance)) {
                 win->cursor.x = win->highlight.x1;
                 win->highlight.flags |= HFLAG_TRACK_X1;
             }
-            if (abs(win->cursor.y - win->highlight.y0) < HBORDER_RESIZE &&
-                (win->cursor.x > win->highlight.x0 - HBORDER_RESIZE) &&
-                (win->cursor.x < win->highlight.x1 + HBORDER_RESIZE)) {
+            if (abs(win->cursor.y - win->highlight.y0) < tolerance &&
+                (win->cursor.x > win->highlight.x0 - tolerance) &&
+                (win->cursor.x < win->highlight.x1 + tolerance)) {
                 win->cursor.y = win->highlight.y0;
                 win->highlight.flags |= HFLAG_TRACK_Y0;
             }
-            if (abs(win->cursor.y - win->highlight.y1) < HBORDER_RESIZE &&
-                (win->cursor.x > win->highlight.x0 - HBORDER_RESIZE) &&
-                (win->cursor.x < win->highlight.x1 + HBORDER_RESIZE)) {
+            if (abs(win->cursor.y - win->highlight.y1) < tolerance &&
+                (win->cursor.x > win->highlight.x0 - tolerance) &&
+                (win->cursor.x < win->highlight.x1 + tolerance)) {
                 win->cursor.y = win->highlight.y1;
                 win->highlight.flags |= HFLAG_TRACK_Y1;
             }
@@ -187,12 +189,12 @@ static int win_input_highlight(void *wctx, uint64_t val)
             break;
         int x0 = FFMIN(win->highlight.x0, win->highlight.x1);
         int y0 = FFMIN(win->highlight.y0, win->highlight.y1);
-        int x1 = FFMAX(win->highlight.x0, win->highlight.x1);
-        int y1 = FFMAX(win->highlight.y0, win->highlight.y1);
+        int x1 = FFMAX(win->highlight.x0, win->highlight.x1) + 1;
+        int y1 = FFMAX(win->highlight.y0, win->highlight.y1) + 1;
         if ((x0 != x1) && (y0 != y1)) {
             sp_log(win, SP_LOG_VERBOSE, "Selected area at (%i, %i) %ix%i\n",
-                   x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-            res = (SPRect){ x0, y0, x1 - x0, y1 - y0 };
+                   x0, y0, x1 - x0, y1 - y0);
+            res = (SPRect){ x0, y0, x1 - x0, y1 - y0, win->scale };
             has_sel = 1;
         }
         /* Fallthrough */
@@ -234,15 +236,8 @@ static int render_highlight(void *wctx)
     pl_swapchain_start_frame(win->pl_swap, &frame);
 
     /* Clear screen */
-    float rgba[4] = { 0.25, 0.25, 0.25, 0.25 };
+    float rgba[4] = { 0.20, 0.20, 0.20, 0.40 };
     pl_tex_clear(win->pl_gpu, frame.fbo, rgba);
-
-    if (win->highlight.x0 == win->highlight.x1 ||
-        win->highlight.y0 == win->highlight.y1 ||
-        win->highlight.x0 < 0 || win->highlight.x1 < 0 ||
-        win->highlight.y0 < 0 || win->highlight.y1 < 0) {
-        goto finish;
-    }
 
     int x0 = FFMIN(win->highlight.x0, win->highlight.x1);
     int y0 = FFMIN(win->highlight.y0, win->highlight.y1);
@@ -250,6 +245,9 @@ static int render_highlight(void *wctx)
     int y1 = FFMAX(win->highlight.y0, win->highlight.y1) + 1;
     int w = x1 - x0;
     int h = y1 - y0;
+
+    if (w <= 0 || h <= 0)
+        goto finish;
 
     struct pl_tex_params pltex_params = {
         .w             = w,
@@ -305,9 +303,9 @@ static int render_highlight(void *wctx)
     struct pl_render_target target = { 0 };
     pl_render_target_from_swapchain(&target, &frame);
     target.dst_rect.x0 = x0;
-    target.dst_rect.x1 = x1 + 10;
+    target.dst_rect.x1 = x1;
     target.dst_rect.y0 = y0;
-    target.dst_rect.y1 = y1 + 10;
+    target.dst_rect.y1 = y1;
 
     pl_render_image(win->pl_renderer, &plimg, &target, &render_params);
 

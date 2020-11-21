@@ -18,7 +18,7 @@ struct SPClass {
 
 static SPClass log_ff_class = {
     .name = "ffmpeg",
-    .type = SP_TYPE_CONTEXT,
+    .type = SP_TYPE_EXTERNAL,
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
@@ -61,6 +61,8 @@ static inline const char *get_class_color(SPClass *class)
         return "\033[38;5;199m";
     else if (class->type & (SP_TYPE_MUXING))
         return "\033[38;5;178m";
+    else if (class->type & (SP_TYPE_EXTERNAL))
+        return "\033[38;5;60m";
     else
         return "";
 }

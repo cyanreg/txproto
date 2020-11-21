@@ -253,8 +253,8 @@ static int render_highlight(void *wctx)
         .w             = w,
         .h             = h,
         .d             = 0,
-        .format        = pl_find_fmt(win->pl_gpu, PL_FMT_UNORM, 4, 8, 0,
-                                     PL_FMT_CAP_SAMPLEABLE |PL_FMT_CAP_BLITTABLE |
+        .format        = pl_find_fmt(win->pl_gpu, PL_FMT_UNORM, 4, 10, 0,
+                                     PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_BLITTABLE |
                                      PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_LINEAR),
         .sampleable    = true,
         .renderable    = true,

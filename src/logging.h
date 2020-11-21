@@ -6,7 +6,8 @@ enum SPType {
     SP_TYPE_NONE = 0,
     SP_TYPE_INTERFACE = (1 << 0),
     SP_TYPE_CONTEXT = (1 << 1),
-    SP_TYPE_LUA = (1 << 2),
+    SP_TYPE_EXTERNAL = (1 << 2),
+    SP_TYPE_LUA = (1 << 3),
 
     SP_TYPE_VIDEO_SOURCE = (1 << 4),
     SP_TYPE_VIDEO_SINK = (1 << 5),

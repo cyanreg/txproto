@@ -152,8 +152,10 @@ typedef struct InterfaceCtx {
     InterfaceWindowCtx main_win;
     InterfaceWindowCtx highlight_win;
 
-    struct pl_context *pl_ctx;
-    const struct pl_vk_inst *pl_vk_inst;
+    struct {
+        SPClass *class;
+        struct pl_context *ctx;
+    } placebo;
 } InterfaceCtx;
 
 #include "interface_main.h"
@@ -279,7 +281,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     vkparams.queue_transfer.count = hwctx->nb_tx_queues;
     vkparams.features             = &hwctx->device_features;
 
-    win->pl_vk_ctx = pl_vulkan_import(ctx->pl_ctx, &vkparams);
+    win->pl_vk_ctx = pl_vulkan_import(ctx->placebo.ctx, &vkparams);
     if (!win->pl_vk_ctx) {
         sp_log(ctx, SP_LOG_ERROR, "Error creating libplacebo context!\n");
         sp_bufferlist_free(&ctx->events);
@@ -291,7 +293,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     win->pl_gpu = win->pl_vk_ctx->gpu;
 
     /* Set the renderer */
-    win->pl_renderer = pl_renderer_create(ctx->pl_ctx, win->pl_gpu);
+    win->pl_renderer = pl_renderer_create(ctx->placebo.ctx, win->pl_gpu);
 
     return 0;
 }
@@ -382,6 +384,23 @@ int interface_send_fifo_to_main(void *s, AVBufferRef *fifo)
     pthread_mutex_unlock(&ctx->main_win.lock);
 
     return 0;
+}
+
+static void log_cb_pl(void *ctx, enum pl_log_level level, const char *msg)
+{
+    int sp_level;
+
+    switch (level) {
+    case PL_LOG_FATAL:  sp_level = SP_LOG_FATAL;   break;
+    case PL_LOG_ERR:    sp_level = SP_LOG_ERROR;   break;
+    case PL_LOG_WARN:   sp_level = SP_LOG_WARN;    break;
+    case PL_LOG_INFO:   sp_level = SP_LOG_VERBOSE; break; /* Too spammy for info */
+    case PL_LOG_DEBUG:  sp_level = SP_LOG_DEBUG;   break;
+    case PL_LOG_TRACE:
+    default: return;    sp_level = SP_LOG_TRACE;   break;
+    }
+
+    sp_log(ctx, sp_level, "%s\n", msg);
 }
 
 static void interface_uninit(void *opaque, uint8_t *data)
@@ -477,9 +496,14 @@ int sp_interface_init(AVBufferRef **s)
     }
 
     /* libplacebo logging context */
-    ctx->pl_ctx = pl_context_create(PL_API_VER, &(struct pl_context_params) {
-        .log_cb    = pl_log_color,
-        .log_level = PL_LOG_WARN,
+    err = sp_class_alloc(&ctx->placebo, "placebo", SP_TYPE_EXTERNAL, ctx);
+    if (err < 0)
+        goto fail;
+
+    ctx->placebo.ctx = pl_context_create(PL_API_VER, &(struct pl_context_params) {
+        .log_cb    = log_cb_pl,
+        .log_priv  = &ctx->placebo,
+        .log_level = PL_LOG_TRACE,
     });
 
     *s = ctx_ref;

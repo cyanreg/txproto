@@ -31,26 +31,22 @@ function initial_config(...)
             capture_mode = "screencopy",
             oneshot = true,
         })
-    source_v.ctrl("start")
 
     filter = tx.create_filtergraph({
             graph = "format=rgb24,crop",
         })
     filter.link(source_v)
-    filter.ctrl("start")
 
     encoder = tx.create_encoder({
             encoder = "png",
         })
     encoder.link(filter)
-    encoder.ctrl("start")
 
     muxer = tx.create_muxer({
             out_url = filename,
             options = { start_number = 0 },
         })
     muxer.link(encoder)
-    muxer.ctrl("start")
 
     event.await()
     selection.region.scale = nil

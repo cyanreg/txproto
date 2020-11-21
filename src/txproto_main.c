@@ -184,6 +184,13 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
         lua_pop(L, 1);                      \
     } while (0)
 
+#define GET_OPT_BOOL(dst, key)               \
+    do {                                     \
+        LUA_CHECK_OPT_VAL(key, LUA_TBOOLEAN) \
+        dst = lua_toboolean(L, -1);          \
+        lua_pop(L, 1);                       \
+    } while (0)
+
 #define SET_OPT_BOOL(src, key) \
     lua_pushboolean(L, src);   \
     lua_setfield(L, -2, key);
@@ -713,51 +720,7 @@ static int lua_generic_ctrl(lua_State *L)
     if (err < 0)
         LUA_ERROR("Unable to parse given flags: %s", av_err2str(err));
 
-    ctrl_fn fn = NULL;
-    enum SPType type = sp_class_get_type(obj_ref->data);
-    switch (type) {
-    case SP_TYPE_ENCODER:
-        fn = sp_encoder_ctrl;
-        break;
-    case SP_TYPE_MUXER:
-        fn = sp_muxer_ctrl;
-        break;
-    case SP_TYPE_FILTER:
-        fn = sp_filter_ctrl;
-        break;
-    case SP_TYPE_AUDIO_SOURCE:
-    case SP_TYPE_AUDIO_SINK:
-    case SP_TYPE_AUDIO_BIDIR:
-    case SP_TYPE_VIDEO_SOURCE:
-    case SP_TYPE_VIDEO_SINK:
-    case SP_TYPE_VIDEO_BIDIR:
-    case SP_TYPE_SUB_SOURCE:
-    case SP_TYPE_SUB_SINK:
-    case SP_TYPE_SUB_BIDIR:
-        fn = ((IOSysEntry *)obj_ref->data)->ctrl;
-        break;
-    default:
-        LUA_ERROR("Unsupported CTRL type: %s!", sp_class_type_string(obj_ref->data));
-    }
-
-    if (!(flags & SP_EVENT_CTRL_MASK)) {
-        LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL)));
-    } else if (flags & SP_EVENT_ON_MASK) {
-        LUA_ERROR("Event specified but given to a ctrl, use %s.hook: %s!",
-                  sp_class_get_name(obj_ref->data), av_err2str(AVERROR(EINVAL)));
-    } else if ((flags & SP_EVENT_CTRL_OPTS) && (!opts)) {
-        LUA_ERROR("No options specified for ctrl:opts: %s!", av_err2str(AVERROR(EINVAL)));
-    }
-
-    if (flags & SP_EVENT_CTRL_START)
-        err = fn(obj_ref, flags, &ctx->epoch_value);
-    else
-        err = fn(obj_ref, flags, opts);
-    if (err < 0)
-         LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));
-
-    if (!(flags & SP_EVENT_FLAG_IMMEDIATE))
-        add_commit_fn_to_list(ctx, fn, obj_ref);
+    GENERIC_CTRL(obj_ref, flags, opts);
 
     av_dict_free(&opts);
 
@@ -909,15 +872,16 @@ static int lua_generic_link(lua_State *L)
     LUA_LOCK_INTERFACE(0);
 
     int nargs = lua_gettop(L);
-    if (nargs != 1 && nargs != 2 && nargs != 3)
-        LUA_ERROR("Invalid number of arguments, expected 1, 2, or 3 got %i!", lua_gettop(L));
+    if (nargs != 1 && nargs != 2)
+        LUA_ERROR("Invalid number of arguments, expected 1 or 2 got %i!", lua_gettop(L));
 
-    const char *extra_args[2] = { 0 };
-    for (; nargs > 1; nargs--) {
-        if (!lua_isstring(L, -1))
-            LUA_ERROR("Invalid argument, expected \"string\" (%s pad name), got \"%s\"!",
-                      nargs - 2 ? "destination" : "source", lua_typename(L, lua_type(L, -1)));
-        extra_args[nargs - 2] = lua_tostring(L, -1);
+    int autostart = 1;
+    const char *src_pad_name = NULL;
+    const char *dst_pad_name = NULL;
+    if (nargs == 2) {
+        GET_OPT_STR(src_pad_name, "src_pad");
+        GET_OPT_STR(dst_pad_name, "dst_pad");
+        GET_OPT_BOOL(autostart, "autostart");
         lua_pop(L, 1);
     }
 
@@ -971,7 +935,7 @@ static int lua_generic_link(lua_State *L)
         SP_EVENT_BUFFER_CTX_ALLOC(SPLinkFilterEncoderCtx, link_filt_enc, api_link_filt_enc_free, NULL)
         link_filt_enc->filt_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
         link_filt_enc->enc_ref  = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
-        link_filt_enc->filt_pad = av_strdup(extra_args[0]);
+        link_filt_enc->filt_pad = av_strdup(src_pad_name);
 
         GENERIC_LINK(FilterContext, link_filt_enc->filt_ref, sp_filter_ctrl,
                      EncodingContext, link_filt_enc->enc_ref, sp_encoder_ctrl,
@@ -981,7 +945,7 @@ static int lua_generic_link(lua_State *L)
         SP_EVENT_BUFFER_CTX_ALLOC(SPLinkSourceFilterCtx, link_src_filt, api_link_src_filt_free, NULL)
         link_src_filt->src_ref  = PICK_REF_INV(obj1, obj2, SP_TYPE_FILTER);
         link_src_filt->filt_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
-        link_src_filt->filt_pad = av_strdup(extra_args[0]);
+        link_src_filt->filt_pad = av_strdup(dst_pad_name);
 
         ctrl_fn source_ctrl = ((IOSysEntry *)link_src_filt->src_ref->data)->ctrl;
 
@@ -994,15 +958,8 @@ static int lua_generic_link(lua_State *L)
         link_filt_filt->src_ref = av_buffer_ref(obj2);
         link_filt_filt->dst_ref = av_buffer_ref(obj1);
 
-        if (extra_args[0])
-            link_filt_filt->src_filt_pad = av_strdup(extra_args[0]);
-        else if (extra_args[1])
-            link_filt_filt->src_filt_pad = av_strdup(extra_args[1]);
-
-        if (extra_args[1])
-            link_filt_filt->dst_filt_pad = av_strdup(extra_args[1]);
-        else if (extra_args[0])
-            link_filt_filt->dst_filt_pad = av_strdup(extra_args[0]);
+        link_filt_filt->src_filt_pad = av_strdup(src_pad_name);
+        link_filt_filt->dst_filt_pad = av_strdup(dst_pad_name);
 
         GENERIC_LINK(FilterContext, link_filt_filt->src_ref, sp_filter_ctrl,
                      FilterContext, link_filt_filt->dst_ref, sp_filter_ctrl,

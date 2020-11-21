@@ -3,26 +3,26 @@ typedef struct SPCommitCbCtx {
     AVBufferRef *fn_ctx;
 } SPCommitCbCtx;
 
-static int api_commit_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static inline int api_commit_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     SPCommitCbCtx *ctx = (SPCommitCbCtx *)opaque->data;
     return ctx->fn(ctx->fn_ctx, SP_EVENT_CTRL_COMMIT, NULL);
 }
 
-static int api_discard_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static inline int api_discard_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     SPCommitCbCtx *ctx = (SPCommitCbCtx *)opaque->data;
     return ctx->fn(ctx->fn_ctx, SP_EVENT_CTRL_DISCARD, NULL);
 }
 
-static void api_commit_discard_free(void *opaque, uint8_t *data)
+static inline void api_commit_discard_free(void *opaque, uint8_t *data)
 {
     SPCommitCbCtx *ctx = (SPCommitCbCtx *)data;
     av_buffer_unref(&ctx->fn_ctx);
     av_free(data);
 }
 
-static int add_commit_fn_to_list(MainContext *ctx, ctrl_fn fn, AVBufferRef *fn_ctx)
+static inline int add_commit_fn_to_list(MainContext *ctx, ctrl_fn fn, AVBufferRef *fn_ctx)
 {
     SP_EVENT_BUFFER_CTX_ALLOC(SPCommitCbCtx, api_commit_ctx, api_commit_discard_free, NULL)
 
@@ -50,6 +50,58 @@ static int add_commit_fn_to_list(MainContext *ctx, ctrl_fn fn, AVBufferRef *fn_c
 
     return 0;
 }
+
+#define GENERIC_CTRL(ref, flags, arg)                                             \
+    do {                                                                          \
+        ctrl_fn fn = NULL;                                                        \
+        enum SPType type = sp_class_get_type(ref->data);                          \
+        switch (type) {                                                           \
+        case SP_TYPE_ENCODER:                                                     \
+            fn = sp_encoder_ctrl;                                                 \
+            break;                                                                \
+        case SP_TYPE_MUXER:                                                       \
+            fn = sp_muxer_ctrl;                                                   \
+            break;                                                                \
+        case SP_TYPE_FILTER:                                                      \
+            fn = sp_filter_ctrl;                                                  \
+            break;                                                                \
+        case SP_TYPE_AUDIO_SOURCE:                                                \
+        case SP_TYPE_AUDIO_SINK:                                                  \
+        case SP_TYPE_AUDIO_BIDIR:                                                 \
+        case SP_TYPE_VIDEO_SOURCE:                                                \
+        case SP_TYPE_VIDEO_SINK:                                                  \
+        case SP_TYPE_VIDEO_BIDIR:                                                 \
+        case SP_TYPE_SUB_SOURCE:                                                  \
+        case SP_TYPE_SUB_SINK:                                                    \
+        case SP_TYPE_SUB_BIDIR:                                                   \
+            fn = ((IOSysEntry *)ref->data)->ctrl;                                 \
+            break;                                                                \
+        default:                                                                  \
+            LUA_ERROR("Unsupported CTRL type: %s!",                               \
+                      sp_class_type_string(ref->data));                           \
+        }                                                                         \
+                                                                                  \
+        if (!(flags & SP_EVENT_CTRL_MASK)) {                                      \
+            LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL))); \
+        } else if (flags & SP_EVENT_ON_MASK) {                                    \
+            LUA_ERROR("Event specified but given to a ctrl, use %s.hook: %s!",    \
+                      sp_class_get_name(ref->data), av_err2str(AVERROR(EINVAL))); \
+        } else if ((flags & SP_EVENT_CTRL_OPTS) && (!arg)) {                      \
+            LUA_ERROR("No options specified for ctrl:opts: %s!",                  \
+                      av_err2str(AVERROR(EINVAL)));                               \
+        }                                                                         \
+                                                                                  \
+        if (flags & SP_EVENT_CTRL_START)                                          \
+            err = fn(ref, flags, &ctx->epoch_value);                              \
+        else                                                                      \
+            err = fn(ref, flags, arg);                                            \
+        if (err < 0)                                                              \
+             LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));            \
+                                                                                  \
+        if (!(flags & SP_EVENT_FLAG_IMMEDIATE))                                   \
+            add_commit_fn_to_list(ctx, fn, ref);                                  \
+                                                                                  \
+    } while (0)
 
 #define GENERIC_LINK(s_type, s_ref, s_ctrlfn, d_type, d_ref, d_ctrlfn, name)  \
     do {                                                                      \
@@ -88,6 +140,11 @@ static int add_commit_fn_to_list(MainContext *ctx, ctrl_fn fn, AVBufferRef *fn_c
                                                                               \
         if (err < 0)                                                          \
             LUA_ERROR("Error linking: %s", av_err2str(err));                  \
+                                                                              \
+        if (autostart) {                                                      \
+            GENERIC_CTRL(s_ref, SP_EVENT_CTRL_START, NULL);                   \
+            GENERIC_CTRL(d_ref, SP_EVENT_CTRL_START, NULL);                   \
+        }                                                                     \
                                                                               \
         LUA_INTERFACE_END(0);                                                 \
     } while (0);

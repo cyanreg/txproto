@@ -656,7 +656,8 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
             int ret = avfilter_graph_send_command(ctx->graph, target, e->key, e->value,
                                                   result, sizeof(result), 0);
-            sp_log(ctx, SP_LOG_VERBOSE, "Filter (%s) response to command %s=%s: %s%s%s\n",
+            sp_log(ctx, ret == AVERROR(EINVAL) ? SP_LOG_ERROR : SP_LOG_VERBOSE,
+                   "Filter (%s) response to command %s=%s: %s%s%s\n",
                    target, e->key, e->value, av_err2str(ret), strlen(result) ? " - " : "", result);
         }
 

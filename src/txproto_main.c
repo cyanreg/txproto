@@ -1460,8 +1460,6 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     MainContext *ctx = av_buffer_get_opaque(opaque);
     EpochEventCtx *epoch_ctx = (EpochEventCtx *)opaque->data;
 
-    LUA_LOCK_INTERFACE(0);
-
     int64_t val;
     switch(epoch_ctx->mode) {
     case EP_MODE_OFFSET:
@@ -1475,10 +1473,12 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         val = 0;
         break;
     case EP_MODE_EXTERNAL:
+        LUA_LOCK_INTERFACE(0);
+
         if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
             sp_log(ctx, SP_LOG_ERROR, "Invalid Lua epoch callback \"nil\"!\n");
-            err = AVERROR_EXTERNAL;
-            goto end;
+            pthread_mutex_unlock(&ctx->lock);
+            return AVERROR_EXTERNAL;
         }
 
         lua_State *L = ctx->lua;
@@ -1490,27 +1490,26 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
             sp_log(ctx, SP_LOG_ERROR, "Error calling external epoch callback: %s!\n",
                    lua_tostring(L, -1));
-            err = AVERROR_EXTERNAL;
-            goto end;
+            pthread_mutex_unlock(&ctx->lock);
+            return AVERROR_EXTERNAL;
         }
 
         if (!lua_isinteger(L, -1) && !lua_isnumber(L, -1)) {
             sp_log(ctx, SP_LOG_ERROR, "Invalid return value for epoch function, "
                    "expected \"integer\" or \"number\", got \"%s\"!",
                    lua_typename(L, lua_type(L, -1)));
-            err = AVERROR_EXTERNAL;
-            goto end;
+            pthread_mutex_unlock(&ctx->lock);
+            return AVERROR_EXTERNAL;
         }
 
         val = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
+
+        pthread_mutex_unlock(&ctx->lock);
 
         break;
     }
 
     atomic_store(&ctx->epoch_value, val);
-
-end:
-    pthread_mutex_unlock(&ctx->lock);
 
     return err;
 }

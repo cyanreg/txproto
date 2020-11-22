@@ -22,6 +22,7 @@ enum SPType {
     SP_TYPE_SUB_BIDIR = SP_TYPE_SUB_SOURCE | SP_TYPE_SUB_SINK,
 
     SP_TYPE_CLOCK_SOURCE = (1 << 14),
+    SP_TYPE_CLOCK_SINK = (1 << 15),
 
     SP_TYPE_FILTER = (1 << 16),
 

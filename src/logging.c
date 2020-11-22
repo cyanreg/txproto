@@ -396,6 +396,7 @@ const char *sp_class_type_string(void *ctx)
     case SP_TYPE_SUB_BIDIR:    return "subtitle in+out";
 
     case SP_TYPE_CLOCK_SOURCE: return "clock source";
+    case SP_TYPE_CLOCK_SINK:   return "clock sink";
 
     case SP_TYPE_FILTER:       return "filter";
 

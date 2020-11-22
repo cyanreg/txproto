@@ -1542,27 +1542,27 @@ static int lua_set_epoch(lua_State *L)
     SP_EVENT_BUFFER_CTX_ALLOC(EpochEventCtx, epoch_ctx, epoch_event_free, ctx)
     epoch_ctx->fn_ref = LUA_NOREF;
 
-    if (lua_istable(L, -1) || lua_islightuserdata(L, -1)) {
-#if 0
-        AVBufferRef *ext_ref = NULL;
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        lua_next(L, -2);
+        if (!lua_isfunction(L, -1))
+            LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\", got \"%s\"!",
+                      lua_typename(L, lua_type(L, -1)));
 
-        if (lua_istable(L, -1))
-            GET_OPT_LIGHTUSERDATA(ext_ref, LUA_PRIV_PREFIX "_priv");
-        else
-            ext_ref = lua_touserdata(L, -1);
+        lua_getupvalue(L, 3, 2);
+        if (!lua_isuserdata(L, -1))
+            LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\"[upvalue].\"userdata\", got \"%s\"!",
+                      lua_typename(L, lua_type(L, -1)));
 
-        if (!ext_ref)
-            LUA_ERROR("Invalid source reference, got \"%s\"!", "nil");
+        AVBufferRef *obj = lua_touserdata(L, -1);
 
-        AVClass *ext_class = *((AVClass **)ext_ref->data);
-        if (ext_class->category != AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT &&
-            ext_class->category != AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT)
-            LUA_ERROR("Invalid reference category, expected \"video input\" or \"audio input\", got \"%s\"!",
-                      sp_map_class_to_string(ext_class->category));
-#endif
+        enum SPType type = sp_class_get_type(obj->data);
+        if (type != SP_TYPE_CLOCK_SOURCE)
+            LUA_ERROR("Invalid reference category, expected \"clock source\", got \"%s\"!",
+                      sp_class_type_string(obj->data));
 
         epoch_ctx->mode = EP_MODE_SOURCE;
-//        epoch_ctx->src_ref = av_buffer_ref(ext_ref);
+        epoch_ctx->src_ref = av_buffer_ref(obj);
     } else if (lua_isnumber(L, -1) || lua_isinteger(L, -1)) {
         epoch_ctx->mode = EP_MODE_OFFSET;
         epoch_ctx->value = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
@@ -1582,7 +1582,7 @@ static int lua_set_epoch(lua_State *L)
         epoch_ctx->fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     } else {
         LUA_ERROR("Invalid argument, expected \"string\", \"table\", \"integer\", "
-                  "\"number\", \"function\" or \"lightuserdata\", " "got \"%s\"!",
+                  "\"number\", or \"function\", " "got \"%s\"!",
                   lua_typename(L, lua_type(L, -1)));
     }
 
@@ -1836,7 +1836,7 @@ static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
     struct tmp {
         SPClass *class;
     } tmp;
-    sp_class_alloc(&tmp, "lua", SP_TYPE_LUA, ctx);
+    sp_class_alloc(&tmp, "lua", SP_TYPE_SCRIPT, ctx);
     sp_log(&tmp, lvl, "%s", rstr);
     sp_class_free(&tmp);
 

@@ -7,7 +7,7 @@ enum SPType {
     SP_TYPE_INTERFACE = (1 << 0),
     SP_TYPE_CONTEXT = (1 << 1),
     SP_TYPE_EXTERNAL = (1 << 2),
-    SP_TYPE_LUA = (1 << 3),
+    SP_TYPE_SCRIPT = (1 << 3),
 
     SP_TYPE_VIDEO_SOURCE = (1 << 4),
     SP_TYPE_VIDEO_SINK = (1 << 5),
@@ -20,6 +20,8 @@ enum SPType {
     SP_TYPE_SUB_SOURCE = (1 << 12),
     SP_TYPE_SUB_SINK = (1 << 13),
     SP_TYPE_SUB_BIDIR = SP_TYPE_SUB_SOURCE | SP_TYPE_SUB_SINK,
+
+    SP_TYPE_CLOCK_SOURCE = (1 << 14),
 
     SP_TYPE_FILTER = (1 << 16),
 

@@ -47,7 +47,7 @@ static inline const char *get_class_color(SPClass *class)
         return "";
     else if (class->type == SP_TYPE_NONE)
         return "\033[38;5;243m";
-    else if (class->type & SP_TYPE_LUA)
+    else if (class->type & SP_TYPE_SCRIPT)
         return "\033[47;034m";
     else if (class->type & SP_TYPE_CONTEXT)
         return "\033[036m";
@@ -377,6 +377,12 @@ const char *sp_class_type_string(void *ctx)
         return NULL;
 
     switch (class->type) {
+    case SP_TYPE_NONE:         return "none";
+    case SP_TYPE_INTERFACE:    return "interface";
+    case SP_TYPE_CONTEXT:      return "context";
+    case SP_TYPE_EXTERNAL:     return "external";
+    case SP_TYPE_SCRIPT:       return "script";
+
     case SP_TYPE_AUDIO_SOURCE: return "audio input";
     case SP_TYPE_AUDIO_SINK:   return "audio output";
     case SP_TYPE_AUDIO_BIDIR:  return "audio in+out";
@@ -389,15 +395,20 @@ const char *sp_class_type_string(void *ctx)
     case SP_TYPE_SUB_SINK:     return "subtitle output";
     case SP_TYPE_SUB_BIDIR:    return "subtitle in+out";
 
+    case SP_TYPE_CLOCK_SOURCE: return "clock source";
+
     case SP_TYPE_FILTER:       return "filter";
 
     case SP_TYPE_ENCODER:      return "encoder";
     case SP_TYPE_DECODER:      return "decoder";
 
+    case SP_TYPE_BSF:          return "bsf";
+
     case SP_TYPE_MUXER:        return "muxer";
     case SP_TYPE_DEMUXER:      return "demuxer";
 
-    default:                   return "unknown";
+    /* zalgofied because this should never happen */
+    default:                   return "û̴̼n̷̡̎̄k̸͍̓͒ṅ̵̨̅ò̷̢̏w̷̙͍͌n̸̩̦̅";
     }
 }
 

@@ -569,6 +569,8 @@ static int get_event_priority(void *src_ctx, AVBufferRef *event)
     enum SPEventType f = event_ctx->type;
 
     int prio = 128;
+    if (ctype & SP_TYPE_CLOCK_SOURCE)
+        prio += 128 * 1;
     if (ctype & SP_TYPE_VIDEO_SOURCE ||
         ctype & SP_TYPE_AUDIO_SOURCE ||
         ctype & SP_TYPE_SUB_SOURCE)
@@ -593,7 +595,7 @@ static int get_event_priority(void *src_ctx, AVBufferRef *event)
         prio += 128 * 10;
     if (ctype & SP_TYPE_INTERFACE)
         prio += 128 * 11;
-    if (ctype & SP_TYPE_LUA)
+    if (ctype & SP_TYPE_SCRIPT)
         prio += 128 * 12;
 
     if (f & SP_EVENT_CTRL_STOP)

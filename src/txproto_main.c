@@ -52,7 +52,7 @@ typedef struct MainContext {
 
 #define LUA_PRIV_PREFIX "sp"
 #define LUA_PUB_PREFIX "tx"
-#define LUA_API_VERSION -17
+#define LUA_API_VERSION (int []){ 0, 1 } /* major, minor */
 
 static void *lua_alloc_fn(void *opaque, void *ptr, size_t type, size_t nsize)
 {
@@ -1866,8 +1866,9 @@ static int lua_api_version(lua_State *L)
     MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "api_version")
     LUA_LOCK_INTERFACE(0);
-    lua_pushinteger(L, LUA_API_VERSION);
-    LUA_INTERFACE_END(1);
+    lua_pushinteger(L, LUA_API_VERSION[0]);
+    lua_pushinteger(L, LUA_API_VERSION[1]);
+    LUA_INTERFACE_END(2);
 }
 
 jmp_buf quit_loc;

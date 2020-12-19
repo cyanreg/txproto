@@ -302,10 +302,10 @@ static int render_highlight(void *wctx)
     /* Set rendering target params */
     struct pl_render_target target = { 0 };
     pl_render_target_from_swapchain(&target, &frame);
-    target.dst_rect.x0 = x0;
-    target.dst_rect.x1 = x1;
-    target.dst_rect.y0 = y0;
-    target.dst_rect.y1 = y1;
+    target.crop.x0 = x0;
+    target.crop.x1 = x1;
+    target.crop.y0 = y0;
+    target.crop.y1 = y1;
 
     pl_render_image(win->pl_renderer, &plimg, &target, &render_params);
 

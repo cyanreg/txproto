@@ -394,10 +394,10 @@ static void log_cb_pl(void *ctx, enum pl_log_level level, const char *msg)
     case PL_LOG_FATAL:  sp_level = SP_LOG_FATAL;   break;
     case PL_LOG_ERR:    sp_level = SP_LOG_ERROR;   break;
     case PL_LOG_WARN:   sp_level = SP_LOG_WARN;    break;
-    case PL_LOG_INFO:   sp_level = SP_LOG_VERBOSE; break; /* Too spammy for info */
-    case PL_LOG_DEBUG:  sp_level = SP_LOG_DEBUG;   break;
+    case PL_LOG_INFO:   sp_level = SP_LOG_DEBUG;   break; /* Too spammy for info */
+    case PL_LOG_DEBUG:  sp_level = SP_LOG_TRACE;   break;
     case PL_LOG_TRACE:
-    default: return;    sp_level = SP_LOG_TRACE;   break;
+    default: return;
     }
 
     sp_log(ctx, sp_level, "%s\n", msg);

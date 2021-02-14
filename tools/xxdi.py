@@ -2,6 +2,7 @@
 # xxdi.py - Pure Python3 implementation of 'xxd -i [input] [output]'
 import sys
 from functools import partial
+from os.path import basename
 
 count = 0
 
@@ -14,7 +15,7 @@ if argc == 1:
     fd_out = sys.stdout
 elif argc == 2 or argc == 3:
     fd_in = open(sys.argv[1], "rb")
-    target_name = sys.argv[1].replace('/','_').replace('$','_').replace('.','_')
+    target_name = basename(sys.argv[1]).replace('/','_').replace('$','_').replace('.','_')
     if argc == 3:
         fd_out = open(sys.argv[2], "w+")
     else:

@@ -2198,8 +2198,8 @@ int main(int argc, char *argv[])
     lua_setglobal(ctx->lua, LUA_PUB_PREFIX);
 
     /* Load Lua utilities */
-    err = luaL_loadbufferx(ctx->lua, scripts_utils_lua_bin,
-                           scripts_utils_lua_bin_len, "built-in utilities", "b");
+    err = luaL_loadbufferx(ctx->lua, utils_lua_bin, utils_lua_bin_len,
+                           "built-in utilities", "b");
     if (err) {
         sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(ctx->lua, -1));
         err = AVERROR_EXTERNAL;
@@ -2217,8 +2217,8 @@ int main(int argc, char *argv[])
         if ((err = lfn_loadfile(ctx, script_name)))
             goto end;
     } else {
-        err = luaL_loadbufferx(ctx->lua, scripts_default_lua_bin,
-                               scripts_default_lua_bin_len, "built-in script", "b");
+        err = luaL_loadbufferx(ctx->lua, default_lua_bin, default_lua_bin_len,
+                               "built-in script", "b");
         if (err) {
             sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(ctx->lua, -1));
             err = AVERROR_EXTERNAL;

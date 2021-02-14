@@ -1,5 +1,4 @@
 luac = find_program('luac')
-xxd = find_program('xxd')
 
 builtin_scripts = [
     'default.lua',
@@ -16,5 +15,5 @@ foreach s: builtin_scripts
     builtin_lua_scripts += custom_target('Converted ' + s + '.bin',
                                          input: compiled_script,
                                          output: s + '.bin' + '.h',
-                                         command: [xxd, '-i', '@INPUT@', '@OUTPUT@'])
+                                         command: [files('../tools/xxdi.py'), '@INPUT@', '@OUTPUT@'])
 endforeach

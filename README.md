@@ -2,8 +2,6 @@
 
 A fully scriptable and flexible multimedia streaming/handling program.
 
-Here would go a pipeline/GUI image
-
 Features
 --------
  * Fully scriptable via Lua
@@ -21,12 +19,18 @@ Features
  * Minimal dependencies (FFmpeg and Lua required, libplacebo and all custom capture code optional)
  * Liberally licensed (LGPL v2.1)
 
-| Custom feature | Acceptance |
-|-----------------|--------------|
-| Custom inputs | Always accepted |
-| Custom outputs | Always accepted |
-| Platform integration | Via optional Lua scripts |
-| Custom filters | Unlikely, submit to FFmpeg first |
-| Custom muxers | Very unlikely, submit to FFmpeg first |
-| Custom encoders | Never, submit any to FFmpeg |
+Discussions and help
+--------------------
 
+Join [#txproto:pars.ee](https://matrix.to/#/#txproto:pars.ee) on Matrix.
+
+Feature policy
+--------------
+| New feature          | Policy                                 |
+|----------------------|----------------------------------------|
+| Custom inputs        | Always accepted                        |
+| Custom outputs       | Always accepted                        |
+| Platform integration | Accepted, via Lua scripts              |
+| Custom muxers        | Welcome                                |
+| Custom filters       | Unlikely, submit to FFmpeg first       |
+| Custom de/encoders   | Never, submit any to FFmpeg            |

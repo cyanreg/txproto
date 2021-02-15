@@ -11,3 +11,5 @@ before the register function returns.
 
 Initializes an input or output context from a given unique id.
 
+
+TODO: Everything

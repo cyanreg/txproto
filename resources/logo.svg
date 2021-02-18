@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" version="1.1" viewBox="927 315.25 128 128" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+ <title>txproto logo</title>
+ <metadata>
+  <rdf:RDF>
+   <cc:Work rdf:about="">
+    <dc:format>image/svg+xml</dc:format>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:title>txproto logo</dc:title>
+    <cc:license rdf:resource="http://creativecommons.org/publicdomain/zero/1.0/"/>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Lynne</dc:title>
+     </cc:Agent>
+    </dc:creator>
+    <dc:source/>
+    <dc:relation/>
+    <dc:description>Generated from the rC3 generator by https://twitter.com/Bleeptrack
+https://github.com/bleeptrack/rc3-generator</dc:description>
+   </cc:Work>
+   <cc:License rdf:about="http://creativecommons.org/publicdomain/zero/1.0/">
+    <cc:permits rdf:resource="http://creativecommons.org/ns#Reproduction"/>
+    <cc:permits rdf:resource="http://creativecommons.org/ns#Distribution"/>
+    <cc:permits rdf:resource="http://creativecommons.org/ns#DerivativeWorks"/>
+   </cc:License>
+  </rdf:RDF>
+ </metadata>
+ <g fill="none" font-family="none" font-size="none" font-weight="none" stroke-linecap="none" stroke-miterlimit="10" stroke-width="none" text-anchor="none" style="mix-blend-mode:normal">
+  <g transform="matrix(.19587 0 0 .19587 745.43 253.5)">
+   <path d="m980 968.25v-600h600v600z" fill="#000" stroke-linecap="butt" stroke-width="1"/>
+   <g stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3">
+    <path transform="matrix(1.01,0,0,1.01,979.5,367.75)" d="m0 100v-100h100v100z" fill="#05b9ec"/>
+    <path transform="matrix(1.01,0,0,1.01,978.5,367.75)" d="m100 100v-100h100v100z" fill="#0076a9"/>
+    <path transform="matrix(1.01,0,0,1.01,977.5,367.75)" d="m200 100v-100h100v100z" fill="#025d84"/>
+    <path transform="matrix(1.01,0,0,1.01,976.5,367.75)" d="m300 100v-100h100v100z" fill="#002a3a"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,367.75)" d="m400 100v-100h100v100z" fill="none"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,367.75)" d="m500 100v-100h100v100z" fill="none"/>
+    <path transform="matrix(1.01,0,0,1.01,979.5,366.75)" d="m0 200v-100h100v100z" fill="#0076a9"/>
+    <path transform="matrix(1.01,0,0,1.01,978.5,366.75)" d="m100 200v-100h100v100z" fill="#025d84"/>
+    <path transform="matrix(1.01,0,0,1.01,977.5,366.75)" d="m200 200v-100h100v100z" fill="#002a3a"/>
+   </g>
+   <g fill="none" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3">
+    <path transform="matrix(1.01,0,0,1.01,976.5,366.75)" d="m300 200v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,366.75)" d="m400 200v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,366.75)" d="m500 200v-100h100v100z"/>
+   </g>
+   <path transform="matrix(1.01,0,0,1.01,979.5,365.75)" d="m0 300v-100h100v100z" fill="#025d84" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3"/>
+   <path transform="matrix(1.01,0,0,1.01,978.5,365.75)" d="m100 300v-100h100v100z" fill="#002a3a" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3"/>
+   <g fill="none" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3">
+    <path transform="matrix(1.01,0,0,1.01,977.5,365.75)" d="m200 300v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,976.5,365.75)" d="m300 300v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,365.75)" d="m400 300v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,365.75)" d="m500 300v-100h100v100z"/>
+   </g>
+   <path transform="matrix(1.01,0,0,1.01,979.5,364.75)" d="m0 400v-100h100v100z" fill="#002a3a" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3"/>
+   <g fill="none" stroke-dasharray="4, 10" stroke-linecap="round" stroke-width="3">
+    <path transform="matrix(1.01,0,0,1.01,978.5,364.75)" d="m100 400v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,977.5,364.75)" d="m200 400v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,976.5,364.75)" d="m300 400v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,364.75)" d="m400 400v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,364.75)" d="m500 400v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,979.5,363.75)" d="m0 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,978.5,363.75)" d="m100 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,977.5,363.75)" d="m200 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,976.5,363.75)" d="m300 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,363.75)" d="m400 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,363.75)" d="m500 500v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,979.5,362.75)" d="m0 600v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,978.5,362.75)" d="m100 600v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,977.5,362.75)" d="m200 600v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,976.5,362.75)" d="m300 600v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,975.5,362.75)" d="m400 600v-100h100v100z"/>
+    <path transform="matrix(1.01,0,0,1.01,974.5,362.75)" d="m500 600v-100h100v100z"/>
+   </g>
+  </g>
+  <path d="m1035.3 423.57v-19.587h19.587v19.587z" fill="none" stroke-dasharray="0.783595, 1.95898" stroke-linecap="round" stroke-width=".5876"/>
+  <g transform="matrix(.19587 0 0 .19587 745.43 253.5)" stroke-linecap="butt">
+   <path d="m930 918.25v-600h600v600z" fill="none" stroke="#fff" stroke-width="6"/>
+   <g fill="#fff" stroke-width="1">
+    <path d="m1482.8 893.25h-63.6c-6.1 0-11.323-2.1733-15.67-6.52-4.3533-4.3533-6.53-9.58-6.53-15.68v-63.6c0-6.1 2.1767-11.323 6.53-15.67 4.3467-4.3533 9.57-6.53 15.67-6.53h63.6c6 0 11.2 2.1767 15.6 6.53 4.4 4.3467 6.6 9.57 6.6 15.67v63.6c0 6.1-2.2 11.327-6.6 15.68-4.4 4.3467-9.6 6.52-15.6 6.52zm-57.6-23.4h51.3 4.95v-4.95-51.3-4.95h-4.95-51.3-4.95v4.95 51.3 4.95h4.95z"/>
+    <path d="m1345.7 893.25h-23.4v-84.6h-42.3v-23.4h108v23.4h-42.3z"/>
+    <path d="m1248.8 893.25h-63.6c-6.1 0-11.323-2.1733-15.67-6.52-4.3533-4.3533-6.53-9.58-6.53-15.68v-63.6c0-6.1 2.1767-11.323 6.53-15.67 4.3467-4.3533 9.57-6.53 15.67-6.53h63.6c6 0 11.2 2.1767 15.6 6.53 4.4 4.3467 6.6 9.57 6.6 15.67v63.6c0 6.1-2.2 11.327-6.6 15.68-4.4 4.3467-9.6 6.52-15.6 6.52zm-57.6-23.4h51.3 4.95v-4.95-51.3-4.95h-4.95-51.3-4.95v4.95 51.3 4.95h4.95z"/>
+    <path d="m1069.2 893.25h-23.25v-107.85h85.65c6.1 0 11.35 2.2 15.75 6.6s6.6 9.6 6.6 15.6v27.9c0 6-2.2 11.2-6.6 15.6s-9.65 6.6-15.75 6.6h-1.05l23.4 27.6v7.95h-24l-29.85-35.55-30.9 0.15zm4.95-58.95h51.3 4.95v-4.95-15.75-4.95h-4.95-51.3-4.95v4.95 15.75 4.95h4.95z"/>
+    <path d="m1420.2 776.25h-23.25v-107.85h85.65c6.1 0 11.35 2.2 15.75 6.6s6.6 9.6 6.6 15.6v27.9c0 6-2.2 11.2-6.6 15.6s-9.65 6.6-15.75 6.6l-62.4 0.15zm4.95-58.95h51.3 4.95v-4.95-15.75-4.95h-4.95-51.3-4.95v4.95 15.75 4.95h4.95z"/>
+    <path d="m1304.2 776.25h-24.15v-7.95l38.55-46.05-38.55-46.05v-7.95h24.15l30 35.55 29.7-35.55h24.15v7.95l-38.7 46.05 38.7 45.9v8.1h-24.15l-30-35.4z"/>
+    <path d="m1228.7 776.25h-23.4v-84.6h-42.3v-23.4h108v23.4h-42.3z"/>
+   </g>
+  </g>
+ </g>
+</svg>

@@ -1,4 +1,4 @@
-# txproto
+![txproto](./resources/logo.svg)
 
 A fully scriptable and flexible multimedia streaming/handling program.
 

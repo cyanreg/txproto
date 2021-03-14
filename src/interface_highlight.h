@@ -300,8 +300,8 @@ static int render_highlight(void *wctx)
     render_params.allow_delayed_peak_detect = 1;
 
     /* Set rendering target params */
-    struct pl_render_target target = { 0 };
-    pl_render_target_from_swapchain(&target, &frame);
+    struct pl_frame target = { 0 };
+    pl_frame_from_swapchain(&target, &frame);
     target.crop.x0 = x0;
     target.crop.x1 = x1;
     target.crop.y0 = y0;

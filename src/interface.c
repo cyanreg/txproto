@@ -5,6 +5,7 @@
 
 #include <libplacebo/vulkan.h>
 #include <libplacebo/renderer.h>
+#include <libplacebo/shaders/icc.h>
 
 #include "interface_common.h"
 #include "utils.h"

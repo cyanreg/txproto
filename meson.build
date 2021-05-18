@@ -44,7 +44,7 @@ dependencies = [
     dependency('libavutil', version: '>= 56.43.100'),
 
     # placebo
-    dependency('libplacebo', version: '>= 3.104.0'),
+    dependency('libplacebo', version: '>= 3.120.0'),
 
     # vulkan
     dependency('vulkan', version: '>= 1.1'),

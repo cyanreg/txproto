@@ -43,7 +43,6 @@ typedef struct PulsePriv {
     /* Pulse info */
     enum PulseType type;
     uint32_t index;
-    char *name;
     char *desc;
     pa_sample_spec ss;
     pa_channel_map map;
@@ -344,7 +343,7 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
     /* We don't care about the rate as we'll have to resample ourselves anyway */
     if (req_ss.rate <= 0) {
         sp_log(ctx, SP_LOG_ERROR, "Source \"%s\" (id: %u) has invalid samplerate!\n",
-               priv->name, priv->index);
+               sp_class_get_name(iosys_entry), priv->index);
         err = AVERROR(EINVAL);
         goto fail;
     }

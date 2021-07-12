@@ -817,9 +817,11 @@ static int api_link_filt_enc_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     SPLinkFilterEncoderCtx *ctx = (SPLinkFilterEncoderCtx *)opaque->data;
     EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
 
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"\n",
+    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"%s%s\n",
            sp_class_type_string(ectx), sp_class_get_name(ectx),
-           sp_class_type_string(ctx->filt_ref->data), sp_class_get_name(ctx->filt_ref->data));
+           sp_class_type_string(ctx->filt_ref->data), sp_class_get_name(ctx->filt_ref->data),
+           ctx->filt_pad ? ", pad: " : "",
+           ctx->filt_pad ? ctx->filt_pad : "");
 
     return sp_map_fifo_to_pad(ctx->filt_ref, ectx->src_frames, ctx->filt_pad, 1);
 }

@@ -1,5 +1,6 @@
 #include <stdarg.h>
 
+#include <stdatomic.h>
 #include <pthread.h>
 #include <libavutil/bprint.h>
 #include <libavutil/crc.h>
@@ -21,6 +22,8 @@ static SPClass log_ff_class = {
     .type = SP_TYPE_EXTERNAL,
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
+
+static atomic_int last_was_newline = ATOMIC_VAR_INIT(0);
 
 static pthread_mutex_t term_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -88,7 +91,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
             av_bprintf(&bpc, "(trace)");
     }
 
-    if (class) {
+    if (class && atomic_load(&last_was_newline)) {
         SPClass *parent = get_class(class->parent);
         if (parent)
             av_bprintf(&bpc, "[%s%s%s->%s%s%s]",
@@ -120,9 +123,10 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
     else if (lvl == SP_LOG_TRACE && ++colord)
         av_bprintf(&bpc, "\033[38;5;28m");
 
-    int format_ends_with_newline = 0;
+    int format_ends_with_newline = format[strlen(format) - 1] == '\n';
+    atomic_store(&last_was_newline, format_ends_with_newline);
+
     if (with_color && colord) {
-        format_ends_with_newline = format[strlen(format) - 1] == '\n';
         if (format_ends_with_newline) {
             char *fmt_copy = av_strdup(format);
             fmt_copy[strlen(fmt_copy) - 1] = '\0';

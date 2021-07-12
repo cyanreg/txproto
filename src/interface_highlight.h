@@ -287,6 +287,7 @@ static int render_highlight(void *wctx)
 
     /* Set rendering parameters */
     struct pl_render_params render_params = pl_render_default_params;
+    render_params.skip_target_clearing = 1;
     render_params.upscaler = &pl_filter_triangle;
     render_params.downscaler = NULL;
     render_params.sigmoid_params = NULL;

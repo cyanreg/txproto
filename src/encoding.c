@@ -737,6 +737,7 @@ AVBufferRef *sp_encoder_alloc(void)
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->pix_fmt = AV_PIX_FMT_NONE;
+    ctx->sample_fmt = AV_SAMPLE_FMT_NONE;
     ctx->events = sp_bufferlist_new();
     ctx->swr = swr_alloc();
 

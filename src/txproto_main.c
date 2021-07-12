@@ -881,9 +881,16 @@ static int lua_generic_link(lua_State *L)
     const char *src_pad_name = NULL;
     const char *dst_pad_name = NULL;
     if (nargs == 2) {
-        GET_OPT_STR(src_pad_name, "src_pad");
-        GET_OPT_STR(dst_pad_name, "dst_pad");
-        GET_OPT_BOOL(autostart, "autostart");
+        if (lua_istable(L, -1)) {
+            GET_OPT_STR(src_pad_name, "src_pad");
+            GET_OPT_STR(dst_pad_name, "dst_pad");
+            GET_OPT_BOOL(autostart, "autostart");
+        } else if (lua_isstring(L, -1)) {
+            src_pad_name = dst_pad_name = lua_tostring(L, -1);
+        } else {
+            LUA_ERROR("Invalid argument, expected \"table\" (options) or \"string\" (pad name), got \"%s\"!",
+                      lua_typename(L, lua_type(L, -1)));
+        }
         lua_pop(L, 1);
     }
 

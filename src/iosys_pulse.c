@@ -368,14 +368,15 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
     /* Set the buffer size */
     pa_buffer_attr attr = { -1, -1, -1, -1, -1 };
 
+    int64_t buffer_size = -1;
     const char *buffer_ms = dict_get(opts, "buffer_ms");
     if (buffer_ms && sp_is_number(buffer_ms))
-        attr.fragsize = lrintf(strtof(buffer_ms, NULL) * 1000);
+        buffer_size = SPMAX(lrintf(strtof(buffer_ms, NULL) * 1000), UINT32_MAX);
     else if (!(buffer_ms && strcmp(buffer_ms, "default")))
-        attr.fragsize = 320 * 1000; /* Divisible by frame sizes of both 1024 and 960 */
+        buffer_size = 320 * 1000; /* Divisible by frame sizes of both 1024 and 960 */
 
-    if (attr.fragsize > 0)
-        attr.fragsize = pa_usec_to_bytes(attr.fragsize, &req_ss);
+    if (buffer_size > 0)
+        attr.fragsize = pa_usec_to_bytes((uint32_t)buffer_size, &req_ss);
     else
         attr.fragsize = -1;
 

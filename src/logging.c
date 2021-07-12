@@ -93,7 +93,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
 
     if (class && atomic_load(&last_was_newline)) {
         SPClass *parent = get_class(class->parent);
-        if (parent)
+        if (parent && strlen(class->name))
             av_bprintf(&bpc, "[%s%s%s->%s%s%s]",
                        with_color ? get_class_color(parent) : "",
                        parent->name,
@@ -104,7 +104,8 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
         else
             av_bprintf(&bpc, "[%s%s%s]",
                        with_color ? get_class_color(class) : "",
-                       class->name,
+                       strlen(class->name) ? class->name :
+                       parent ? parent->name : "misc",
                        with_color ? "\033[0m" : "");
         av_bprint_chars(&bpc, ' ', 1);
     }

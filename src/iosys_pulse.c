@@ -376,6 +376,8 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
 
     if (attr.fragsize > 0)
         attr.fragsize = pa_usec_to_bytes(attr.fragsize, &req_ss);
+    else
+        attr.fragsize = -1;
 
     /* Set stream callbacks */
     pa_stream_set_state_callback(priv->stream, stream_status_cb, iosys_entry);

@@ -453,6 +453,7 @@ static void *encoding_thread(void *arg)
 {
     EncodingContext *ctx = arg;
     int ret = 0, flush = 0;
+    AVPacket *out_pkt = NULL;
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
@@ -498,7 +499,8 @@ static void *encoding_thread(void *arg)
 
         /* Return */
         while (1) {
-            AVPacket *out_pkt = av_packet_alloc();
+            if (!out_pkt)
+                out_pkt = av_packet_alloc();
 
             ret = avcodec_receive_packet(ctx->avctx, out_pkt);
             if (ret == AVERROR_EOF) {
@@ -527,11 +529,13 @@ static void *encoding_thread(void *arg)
     } while (!ctx->err);
 
 end:
+    av_packet_free(&out_pkt);
     sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");
 
     return NULL;
 
 fail:
+    av_packet_free(&out_pkt);
     ctx->err = ret;
 
     atomic_store(&ctx->running, 0);

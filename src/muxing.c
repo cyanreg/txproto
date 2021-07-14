@@ -84,7 +84,7 @@ static void *muxing_thread(void *arg)
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
 
         sp_log(ctx, SP_LOG_TRACE, "Got packet from \"%s\", out pts = %f, out_dts = %f\n",
-               sp_class_get_name(eid->enc_ctx),
+               eid->name,
                av_q2d(dst_tb) * in_pkt->pts,
                av_q2d(dst_tb) * in_pkt->dts);
 
@@ -126,8 +126,8 @@ send:
         stat_entries[1] = D_TYPE("cached", NULL, buf_bytes);
 
         for (int i = 0; i < ctx->avf->nb_streams; i++) {
-            stat_entries[2 + 2*i + 0] = D_TYPE("bitrate", sp_class_get_name(eid->enc_ctx), rate[i]);
-            stat_entries[2 + 2*i + 1] = D_TYPE("latency", sp_class_get_name(eid->enc_ctx), latency[i]);
+            stat_entries[2 + 2*i + 0] = D_TYPE("bitrate", eid->name, rate[i]);
+            stat_entries[2 + 2*i + 1] = D_TYPE("latency", eid->name, latency[i]);
         }
 
         stat_entries[2 + 2*ctx->avf->nb_streams] = (SPGenericData){ 0 };
@@ -178,7 +178,7 @@ int sp_muxer_add_stream(AVBufferRef *ctx_ref, AVBufferRef *enc_ref)
         ctx->enc_map_size++;
     }
 
-    enc_map_entry->enc_ctx = enc;
+    enc_map_entry->name = av_strdup(sp_class_get_name(enc));
     enc_map_entry->encoder_id = sp_class_get_id(enc);
     enc_map_entry->encoder_tb = enc->avctx->time_base;
     enc_map_entry->stream_id  = INT_MAX;
@@ -445,6 +445,9 @@ static void muxer_free(void *opaque, uint8_t *data)
         sp_packet_fifo_push(ctx->src_packets, NULL);
         pthread_join(ctx->muxing_thread, NULL);
     }
+
+    for (int i = 0; i < ctx->enc_map_size; i++)
+        av_free(ctx->enc_map[i].name);
 
     av_buffer_unref(&ctx->src_packets);
     av_free(ctx->enc_map);

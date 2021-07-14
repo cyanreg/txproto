@@ -7,7 +7,7 @@
 #include "logging.h"
 
 typedef struct MuxEncoderMap {
-    EncodingContext *enc_ctx; /* Used to get a name only */
+    char *name;
     int encoder_id;
     AVRational encoder_tb;
 

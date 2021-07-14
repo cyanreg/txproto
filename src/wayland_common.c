@@ -27,14 +27,11 @@ static void xdg_out_done(void *opaque, struct zxdg_output_v1 *zxdg_output_v1)
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)priv->main->data;
+    WaylandCtx *main = priv->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
-    if (!priv->pushed_to_list) {
-        sp_bufferlist_append(main->output_list, opaque);
-        priv->pushed_to_list = 1;
-    }
+    sp_bufferlist_append_noref(main->output_list, opaque);
 
     pthread_mutex_unlock(&main->lock);
 }
@@ -44,7 +41,7 @@ static void xdg_out_name(void *opaque, struct zxdg_output_v1 *zxdg_output_v1,
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)priv->main->data;
+    WaylandCtx *main = priv->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
@@ -58,7 +55,7 @@ static void xdg_out_desc(void *opaque, struct zxdg_output_v1 *zxdg_output_v1,
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)priv->main->data;
+    WaylandCtx *main = priv->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
@@ -84,7 +81,7 @@ static void output_handle_geometry(void *opaque, struct wl_output *wl_output,
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)priv->main->data;
+    WaylandCtx *main = priv->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
@@ -105,7 +102,7 @@ static void output_handle_mode(void *opaque, struct wl_output *wl_output,
     if (flags & WL_OUTPUT_MODE_CURRENT) {
         IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
         WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-        WaylandCtx *main = (WaylandCtx *)priv->main->data;
+        WaylandCtx *main = priv->main_ctx;
 
         pthread_mutex_lock(&main->lock);
 
@@ -121,18 +118,12 @@ static void output_handle_done(void *opaque, struct wl_output *wl_output)
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)priv->main->data;
+    WaylandCtx *main = priv->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
-    if (main->xdg_output_manager && !priv->xdg_out) {
-        priv->xdg_out = zxdg_output_manager_v1_get_xdg_output(main->xdg_output_manager,
-                                                              wl_output);
-        zxdg_output_v1_add_listener(priv->xdg_out, &xdg_output_listener, opaque);
-    } else if (!priv->pushed_to_list) {
-        sp_bufferlist_append(main->output_list, opaque);
-        priv->pushed_to_list = 1;
-    }
+    if (!priv->xdg_out)
+        sp_bufferlist_append_noref(main->output_list, opaque);
 
     pthread_mutex_unlock(&main->lock);
 }
@@ -142,7 +133,7 @@ static void output_handle_scale(void *opaque, struct wl_output *wl_output,
 {
     IOSysEntry *entry = (IOSysEntry *)(((AVBufferRef *)opaque)->data);
     WaylandIOPriv *output = (WaylandIOPriv *)entry->api_priv;
-    WaylandCtx *main = (WaylandCtx *)output->main->data;
+    WaylandCtx *main = output->main_ctx;
 
     pthread_mutex_lock(&main->lock);
 
@@ -160,15 +151,14 @@ static const struct wl_output_listener output_listener = {
 
 static void destroy_entry(void *opaque, uint8_t *data)
 {
-    IOSysEntry *entry = (IOSysEntry *)opaque;
+    IOSysEntry *entry = (IOSysEntry *)data;
     WaylandIOPriv *priv = (WaylandIOPriv *)entry->api_priv;
 
     zxdg_output_v1_destroy(priv->xdg_out);
     wl_output_release(priv->output);
     av_free(entry->desc);
 
-    av_buffer_unref(&priv->main);
-
+    sp_class_free(entry);
     av_free(priv);
     av_free(entry);
 }
@@ -185,8 +175,8 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
         IOSysEntry *entry = av_mallocz(sizeof(*entry));
         WaylandIOPriv *output = av_mallocz(sizeof(*output));
 
-        output->main   = av_buffer_ref(opaque);
-        output->output = wl_registry_bind(reg, id, &wl_output_interface, 2);
+        output->main_ctx = ctx;
+        output->output   = wl_registry_bind(reg, id, &wl_output_interface, 2);
 
         entry->scale = 1;
         entry->identifier = sp_iosys_gen_identifier(ctx, id, 0);
@@ -419,6 +409,8 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     pthread_mutex_destroy(&ctx->lock);
     sp_class_free(ctx);
     av_free(ctx);
+
+    ctx_ref = NULL;
 
     pthread_mutex_unlock(&ctx_ref_lock);
     pthread_mutex_destroy(&ctx_ref_lock);

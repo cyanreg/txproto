@@ -19,8 +19,7 @@
 #include "logging.h"
 
 typedef struct WaylandIOPriv {
-    AVBufferRef *main;
-    int pushed_to_list;
+    struct WaylandCtx *main_ctx;
     struct wl_output *output;
     struct zxdg_output_v1 *xdg_out;
 } WaylandIOPriv;

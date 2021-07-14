@@ -317,7 +317,9 @@ static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
         sp_eventlist_dispatch(entry_ref->data, ctx->events,
                               SP_EVENT_ON_CHANGE | category, entry_ref->data);
 
-        sp_bufferlist_append(ctx->entries, entry_ref);
+        sp_bufferlist_append_noref(ctx->entries, entry_ref);
+    } else {
+        av_buffer_unref(&entry_ref);
     }
 }
 
@@ -435,6 +437,11 @@ static void lavd_uninit(void *opaque, uint8_t *data)
 
     atomic_store(&ctx->quit, 1);
     pthread_join(ctx->source_update, NULL);
+
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, ctx);
+    sp_bufferlist_free(&ctx->events);
+
+    sp_bufferlist_free(&ctx->entries);
 
     sp_class_free(ctx);
     av_free(ctx);

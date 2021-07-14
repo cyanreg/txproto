@@ -372,7 +372,6 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
 int sp_muxer_init(AVBufferRef *ctx_ref)
 {
     int err;
-    char *new_name = NULL;
     MuxingContext *ctx = (MuxingContext *)ctx_ref->data;
 
     if (!ctx->out_format) {
@@ -393,15 +392,9 @@ int sp_muxer_init(AVBufferRef *ctx_ref)
         return err;
     }
 
-    if (ctx->name) {
-        new_name = av_strdup(ctx->name);
-        if (!new_name) {
-            err = AVERROR(ENOMEM);
-            goto fail;
-        }
-    } else {
+    if (!ctx->name) {
         int len = strlen(sp_class_get_name(ctx)) + 1 + strlen(ctx->avf->oformat->name) + 1;
-        new_name = av_mallocz(len);
+        char *new_name = av_mallocz(len);
         if (!new_name) {
             err = AVERROR(ENOMEM);
             goto fail;
@@ -409,10 +402,11 @@ int sp_muxer_init(AVBufferRef *ctx_ref)
         av_strlcpy(new_name, sp_class_get_name(ctx), len);
         av_strlcat(new_name, ":", len);
         av_strlcat(new_name, ctx->avf->oformat->name, len);
+        sp_class_set_name(ctx, new_name);
+        av_free(new_name);
+    } else {
+        sp_class_set_name(ctx, ctx->name);
     }
-
-    sp_class_set_name(ctx, new_name);
-    ctx->name = new_name;
 
     ctx->avf->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
 

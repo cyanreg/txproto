@@ -83,10 +83,10 @@ int RENAME(fifo_mirror)(AVBufferRef *dst, AVBufferRef *src)
     SNAME *src_ctx = (SNAME *)src->data;
 
     if (!dst || !src)
-        return 0;
+        return AVERROR(EINVAL);
 
-    sp_bufferlist_append(dst_ctx->sources, av_buffer_ref(src));
-    sp_bufferlist_append(src_ctx->dests,   av_buffer_ref(dst));
+    sp_bufferlist_append(dst_ctx->sources, src);
+    sp_bufferlist_append(src_ctx->dests,   dst);
 
     return 0;
 }
@@ -111,6 +111,9 @@ int RENAME(fifo_unmirror)(AVBufferRef *dst, AVBufferRef *src)
 
 int RENAME(fifo_unmirror_all)(AVBufferRef *dst)
 {
+    if (!dst)
+        return 0;
+
     SNAME *dst_ctx = (SNAME *)dst->data;
 
     pthread_mutex_lock(&dst_ctx->lock);
@@ -119,7 +122,7 @@ int RENAME(fifo_unmirror_all)(AVBufferRef *dst)
     while ((src_ref = sp_bufferlist_pop(dst_ctx->sources, sp_bufferlist_find_fn_first, NULL))) {
         SNAME *src_ctx = (SNAME *)src_ref->data;
         AVBufferRef *own_ref = sp_bufferlist_pop(src_ctx->dests, find_ref_by_data,
-                                                 dst->data);
+                                                 dst_ctx);
         av_buffer_unref(&own_ref);
         av_buffer_unref(&src_ref);
     }

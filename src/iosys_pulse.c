@@ -582,11 +582,16 @@ static void destroy_entry(void *opaque, uint8_t *data)
         priv->stream = NULL;
     }
 
+    sp_frame_fifo_push(entry->frames, NULL);
+    sp_frame_fifo_unmirror_all(entry->frames);
+    av_buffer_unref(&entry->frames);
+
     sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_DESTROY, entry);
 
     sp_bufferlist_free(&entry->events);
     av_buffer_pool_uninit(&priv->pool);
 
+    av_free(priv);
     av_free(entry->desc);
     sp_class_free(entry);
     av_free(entry);

@@ -479,6 +479,7 @@ static void muxer_free(void *opaque, uint8_t *data)
 
     sp_log(ctx, SP_LOG_VERBOSE, "Muxer destroyed!\n");
     sp_class_free(ctx);
+    av_free(ctx);
 }
 
 AVBufferRef *sp_muxer_alloc(void)

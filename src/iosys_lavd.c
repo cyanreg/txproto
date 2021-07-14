@@ -276,6 +276,7 @@ static void destroy_entry(void *opaque, uint8_t *data)
 
     av_free(entry->desc);
     sp_class_free(entry);
+    av_free(entry);
 }
 
 static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,

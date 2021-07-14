@@ -406,7 +406,7 @@ static void log_cb_pl(void *ctx, enum pl_log_level level, const char *msg)
 
 static void interface_uninit(void *opaque, uint8_t *data)
 {
-
+    av_free(data);
 }
 
 int sp_interface_init(AVBufferRef **s)

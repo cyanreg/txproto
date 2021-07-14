@@ -763,6 +763,7 @@ static void filter_free(void *opaque, uint8_t *data)
     pthread_mutex_destroy(&ctx->lock);
 
     sp_class_free(ctx);
+    av_free(ctx);
 }
 
 AVBufferRef *sp_filter_alloc(void)

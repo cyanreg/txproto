@@ -663,16 +663,9 @@ int sp_encoder_init(AVBufferRef *ctx_ref)
     if (!ctx->avctx)
         return AVERROR(ENOMEM);
 
-    char *new_name = NULL;
-    if (ctx->name) {
-        new_name = av_strdup(ctx->name);
-        if (!new_name) {
-            err = AVERROR(ENOMEM);
-            goto fail;
-        }
-    } else {
+    if (!ctx->name) {
         int len = strlen(sp_class_get_name(ctx)) + 1 + strlen(ctx->codec->name) + 1;
-        new_name = av_mallocz(len);
+        char *new_name = av_mallocz(len);
         if (!new_name) {
             err = AVERROR(ENOMEM);
             goto fail;
@@ -680,10 +673,11 @@ int sp_encoder_init(AVBufferRef *ctx_ref)
         av_strlcpy(new_name, sp_class_get_name(ctx), len);
         av_strlcat(new_name, ":", len);
         av_strlcat(new_name, ctx->codec->name, len);
+        sp_class_set_name(ctx, new_name);
+        av_free(new_name);
+    } else {
+        sp_class_set_name(ctx, ctx->name);
     }
-
-    sp_class_set_name(ctx, new_name);
-    ctx->name = new_name;
 
     return 0;
 

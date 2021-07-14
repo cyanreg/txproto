@@ -1128,7 +1128,7 @@ static int lua_create_encoder(lua_State *L)
     if (err < 0)
         LUA_ERROR("Unable to init encoder: %s!", av_err2str(err));
 
-    SET_OPT_STR(ectx->name, "name");
+    SET_OPT_STR(sp_class_get_name(ectx), "name");
 
     SET_OPT_LIGHTUSERDATA(ectx_ref, LUA_PRIV_PREFIX "_priv");
     GET_OPTS_CLASS(ectx->avctx, "options");

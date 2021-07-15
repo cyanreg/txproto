@@ -15,6 +15,15 @@ function selection_cb(result)
     selection = result
 end
 
+function prompt_cb(result)
+    if result ~= nil and result.input ~= nil then
+        print("Filename: " .. result.input)
+        filename = result.input
+    else
+        filename = "txproto_screen.png"
+    end
+end
+
 --[[ All events, unless indicated, are atomic and require either a tx.commit()
      to actually run or tx.discard() to scrap the entire command buffer and
      start over. ]]--
@@ -22,8 +31,7 @@ function initial_config(...)
 
     --[[ Trailing command line arguments appear here. if more than one exists,
          it can be initialized via `local argument1, argument2, etc = ... ]]--
-    local filename = ...
-    if filename == nil then filename = "txproto_screen.png" end
+    filename = ...
 
     --[[ Create a callback to get all current capturable devices on the system.
          This creates an event that can be .destroy()ed to stop it.
@@ -75,6 +83,16 @@ function initial_config(...)
         })
     encoder.link(filter)
 
+    --[[ While waiting for the user to make a selection we inidialized all we
+         need, but now we have no choice but to wait. ]]--
+    event.await()
+
+    --[[ If no filename is given, prompt the user to enter one ]]--
+    if filename == nil then
+        prompt_event = tx.prompt("Enter filename:", prompt_cb)
+        prompt_event.await()
+    end
+
     --[[ Creates muxer. Self explanatory. start_number = 0 is a workaround for
          creating screenshots, because libavfilter. ]]--
     muxer = tx.create_muxer({
@@ -82,10 +100,6 @@ function initial_config(...)
             options = { start_number = 0 },
         })
     muxer.link(encoder)
-
-    --[[ While waiting for the user to make a selection we inidialized all we
-         need, but now we have no choice but to wait. ]]--
-    event.await()
 
     --[[ A region will contain the scale entry to indicate how much it has been
          scaled. All regions are pre-scaled. Just remove the entry, as the crop

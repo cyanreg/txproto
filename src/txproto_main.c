@@ -1822,6 +1822,64 @@ static int lua_log_err(lua_State *L)
     return lua_log_fn(L, SP_LOG_ERROR);
 }
 
+static int lua_prompt(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt");
+    LUA_LOCK_INTERFACE(0);
+
+    if (lua_gettop(L) != 2)
+        LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
+    if (!lua_isfunction(L, -1))
+        LUA_ERROR("Invalid argument, expected \"function\" (callback), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
+    if (!lua_isstring(L, -2))
+        LUA_ERROR("Invalid argument, expected \"string\" (prompt message), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -2)));
+
+#ifdef HAVE_LIBEDIT
+    /* ref pops the item off the stack! */
+    int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL)
+        LUA_ERROR("Invalid function specified, got: %s!", "nil");
+
+    SP_EVENT_BUFFER_CTX_ALLOC(HookLuaEventCtx, hook_lua_ctx, hook_lua_event_free, ctx);
+
+    uint64_t flags = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
+
+    hook_lua_ctx->flags = flags;
+    hook_lua_ctx->fn_ref = fn_ref;
+
+    AVBufferRef *hook_event = sp_event_create(hook_lua_event_cb, NULL, flags,
+                                              hook_lua_ctx_ref, 0x0);
+
+    int ret = sp_repl_prompt_event(hook_event, lua_tostring(L, -1));
+    if (ret < 0) {
+        sp_event_unref_expire(&hook_event);
+        LUA_ERROR("Unable to add event: %s!", av_err2str(ret));
+        goto end;
+    }
+
+    sp_bufferlist_append_noref(ctx->lua_buf_refs, hook_event);
+
+    void *contexts[] = { ctx, hook_event };
+    static const struct luaL_Reg lua_fns[] = {
+        { "destroy", lua_event_destroy },
+        { "await", lua_event_await },
+        { NULL, NULL },
+    };
+
+    PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
+
+end:
+#else
+    LUA_ERROR("Unable to add event: %s!", "txproto was not compiled with libedit enabled");
+#endif
+
+    LUA_INTERFACE_END(1);
+}
+
 static int lua_api_version(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -1866,6 +1924,7 @@ static void cleanup_fn(TXMainContext *ctx)
 static int lua_quit(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    LUA_LOCK_INTERFACE(0);
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "quit")
 
@@ -1878,6 +1937,8 @@ static int lua_quit(lua_State *L)
 
     if (lua_gettop(L))
         ctx->lua_exit_code = lua_tointeger(L, -1);
+
+    pthread_mutex_unlock(&ctx->lock);
 
     raise(SIGINT);
 
@@ -1902,6 +1963,8 @@ static const struct luaL_Reg lua_lib_fns[] = {
     { "log", lua_log },
     { "log_warn", lua_log_warn },
     { "log_err", lua_log_err },
+
+    { "prompt", lua_prompt },
 
     { "api_version", lua_api_version },
 
@@ -2095,6 +2158,11 @@ int main(int argc, char *argv[])
         return AVERROR(EINVAL);
     }
 
+#ifdef HAVE_LIBEDIT
+    if (!disable_repl)
+        sp_repl_init(ctx);
+#endif
+
     /* Create Lua context */
     ctx->lua = lua_newstate(lua_alloc_fn, ctx);
     lua_gc(ctx->lua, LUA_GCGEN);
@@ -2188,11 +2256,6 @@ int main(int argc, char *argv[])
             goto end;
         }
     }
-
-#ifdef HAVE_LIBEDIT
-    if (!disable_repl)
-        sp_repl_init(ctx);
-#endif
 
     sleep(INT_MAX);
 

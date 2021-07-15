@@ -18,9 +18,6 @@ sources = [
     # Encoding
     'encoding.c',
 
-    # REPL
-    'repl.c',
-
     # Misc
     'utils.c',
     'logging.c',
@@ -39,6 +36,7 @@ sources = [
 libedit = dependency('libedit', version: '>= 3.1', required: get_option('libedit'))
 if libedit.found()
     dependencies += libedit
+    sources += 'repl.c'
     conf.set('HAVE_LIBEDIT', 1)
 endif
 

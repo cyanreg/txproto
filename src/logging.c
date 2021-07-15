@@ -72,7 +72,7 @@ static inline const char *get_class_color(SPClass *class)
     else if (class->type == SP_TYPE_NONE)
         return "\033[38;5;243m";
     else if (class->type & SP_TYPE_SCRIPT)
-        return "\033[47;034m";
+        return "\033[38;5;150m";
     else if (class->type & SP_TYPE_CONTEXT)
         return "\033[036m";
     else if (class->type & SP_TYPE_INTERFACE)

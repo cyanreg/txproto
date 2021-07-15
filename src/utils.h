@@ -66,7 +66,11 @@ enum SPDataType {
 };
 
 #define D_TYPE(name, parent, x) (SPGenericData)                                    \
-    { (name), (parent), (&(x)), _Generic((x),                                      \
+    { (name), (parent),                                                            \
+        _Generic((x),                                                              \
+        char *: ((x)),                                                             \
+        default: (&(x))),                                                          \
+        _Generic((x),                                                              \
         float: SP_DATA_TYPE_FLOAT,                                                 \
         double: SP_DATA_TYPE_DOUBLE,                                               \
         int32_t: SP_DATA_TYPE_INT,                                                 \

@@ -35,6 +35,7 @@ typedef struct EncodingContext {
     pthread_mutex_t lock;
 
     int64_t epoch;
+    atomic_int soft_flush;
 
     /* Needed to start */
     AVBufferRef *src_frames;

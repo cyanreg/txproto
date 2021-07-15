@@ -506,13 +506,20 @@ static void *encoding_thread(void *arg)
             }
         }
 
-        /* Give frame */
-        ret = avcodec_send_frame(ctx->avctx, frame);
-        av_frame_free(&frame);
-        if (ret < 0) {
-            sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
-            pthread_mutex_unlock(&ctx->lock);
-            goto fail;
+        if (!atomic_load(&ctx->soft_flush)) {
+            /* Give frame */
+            ret = avcodec_send_frame(ctx->avctx, frame);
+            av_frame_free(&frame);
+            if (ret < 0) {
+                sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
+                pthread_mutex_unlock(&ctx->lock);
+                goto fail;
+            }
+        } else {
+            sp_log(ctx, SP_LOG_VERBOSE, "Soft-flushing encoder\n");
+            avcodec_flush_buffers(ctx->avctx);
+            atomic_store(&ctx->soft_flush, 0);
+            av_frame_free(&frame);
         }
 
         /* Return */
@@ -602,6 +609,11 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
             else
                 sp_packet_fifo_set_max_queued(ctx->src_frames, len);
         }
+    } else if (event->ctrl & SP_EVENT_CTRL_FLUSH) {
+        if (ctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
+            atomic_store(&ctx->soft_flush, 1);
+            sp_frame_fifo_push(ctx->src_frames, NULL);
+        }
     } else {
         return AVERROR(ENOTSUP);
     }
@@ -632,6 +644,7 @@ int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     } else if (ctrl & ~(SP_EVENT_CTRL_START |
                         SP_EVENT_CTRL_STOP  |
                         SP_EVENT_CTRL_OPTS  |
+                        SP_EVENT_CTRL_FLUSH |
                         SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }
@@ -757,6 +770,7 @@ AVBufferRef *sp_encoder_alloc(void)
     ctx->sample_fmt = AV_SAMPLE_FMT_NONE;
     ctx->events = sp_bufferlist_new();
     ctx->swr = swr_alloc();
+    ctx->soft_flush = ATOMIC_VAR_INIT(0);
 
     ctx->src_frames = sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
     ctx->dst_packets = sp_packet_fifo_create(ctx, 0, 0);

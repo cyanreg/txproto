@@ -361,6 +361,7 @@ static int string_to_event_flags(TXMainContext *ctx, uint64_t *dst,
         FLAG(SP_EVENT_CTRL_OPTS,       ctrl, "opts")
         FLAG(SP_EVENT_CTRL_COMMIT,     ctrl, "commit")
         FLAG(SP_EVENT_CTRL_DISCARD,    ctrl, "discard")
+        FLAG(SP_EVENT_CTRL_FLUSH,      ctrl, "flush")
 
         FLAG(SP_EVENT_FLAG_NO_REORDER, flag, "no_reorder")
         FLAG(SP_EVENT_FLAG_NO_DEDUP,   flag, "no_dedup")

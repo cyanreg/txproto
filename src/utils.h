@@ -174,6 +174,7 @@ enum SPEventType {
     SP_EVENT_CTRL_COMMIT     = (1ULL << 38), /* Immediate */ /* Optional pointer to an enum SPEventType for filtering */
     SP_EVENT_CTRL_DISCARD    = (1ULL << 39), /* Immediate */ /* Unrefs all uncommited events */
     SP_EVENT_CTRL_DEP        = (1ULL << 40), /* Immediate */ /* Must be ORd with a trigger, arg must be an AVBufferRef event */
+    SP_EVENT_CTRL_FLUSH      = (1ULL << 41),
     SP_EVENT_CTRL_MASK       = (((1ULL << 16) - 1) << 32), /* 16 bits reserved for control events */
 
     /* [48: 63] - Flags */

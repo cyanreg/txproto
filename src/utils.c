@@ -924,6 +924,7 @@ char *sp_event_flags_to_str(uint64_t flags)
     COND(SP_EVENT_CTRL_COMMIT,     ctrl, "commit")
     COND(SP_EVENT_CTRL_DISCARD,    ctrl, "discard")
     COND(SP_EVENT_CTRL_DEP,        ctrl, "dependency")
+    COND(SP_EVENT_CTRL_FLUSH,      ctrl, "flush")
 
     COND(SP_EVENT_FLAG_NO_REORDER, flag, "no_reorder")
     COND(SP_EVENT_FLAG_NO_DEDUP,   flag, "no_dedup")

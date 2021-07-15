@@ -322,6 +322,11 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
                 sp_packet_fifo_set_max_queued(ctx->src_packets, len);
         }
         pthread_mutex_unlock(&ctx->lock);
+    } else if (event->ctrl & SP_EVENT_CTRL_FLUSH) {
+        sp_log(ctx, SP_LOG_VERBOSE, "Flushing buffer\n");
+        pthread_mutex_lock(&ctx->lock);
+        avio_flush(ctx->avf->pb);
+        pthread_mutex_unlock(&ctx->lock);
     } else {
         return AVERROR(ENOTSUP);
     }
@@ -352,6 +357,7 @@ int sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
     } else if (ctrl & ~(SP_EVENT_CTRL_START |
                         SP_EVENT_CTRL_STOP |
                         SP_EVENT_CTRL_OPTS |
+                        SP_EVENT_CTRL_FLUSH |
                         SP_EVENT_FLAG_IMMEDIATE)) {
         return AVERROR(ENOTSUP);
     }

@@ -40,7 +40,7 @@ static inline void api_commit_discard_free(void *opaque, uint8_t *data)
     av_free(data);
 }
 
-static inline int add_commit_fn_to_list(MainContext *ctx, ctrl_fn fn, AVBufferRef *fn_ctx)
+static inline int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn, AVBufferRef *fn_ctx)
 {
     SP_EVENT_BUFFER_CTX_ALLOC(SPCommitCbCtx, api_commit_ctx, api_commit_discard_free, NULL)
 

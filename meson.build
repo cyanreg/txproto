@@ -43,7 +43,7 @@ dependencies = [
     dependency('libavfilter', version: '>= 7.79.100'),
     dependency('libavutil', version: '>= 56.43.100'),
 
-    # placebo
+    # libplacebo
     dependency('libplacebo', version: '>= 3.120.0'),
 
     # vulkan
@@ -82,10 +82,6 @@ if has_memfd
 endif
 
 add_global_arguments(build_opts, language: 'c')
-
-# linenoise
-linenoise_proj = subproject('linenoise')
-dependencies += linenoise_proj.get_variable('linenoise_dep')
 
 # scripts
 subdir('scripts')

@@ -41,6 +41,9 @@ static SPClass log_ff_class = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
+static void *prompt_ctx = NULL;
+static void (*prompt_cb)(void *ctx, int newline_started) = NULL;
+
 static atomic_int last_was_newline = ATOMIC_VAR_INIT(0);
 
 static pthread_mutex_t term_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -204,6 +207,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     int with_color = 1;
     int print_line = decide_print_line(class, lvl);
     int log_line = !!log_file;
+    int pre_nl_status = atomic_load(&last_was_newline);
 
     char *pline = NULL;
     char *lline = NULL;
@@ -216,7 +220,11 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
 
     if (pline) {
         pthread_mutex_lock(&term_lock);
+        if (prompt_cb && pre_nl_status)
+            prompt_cb(prompt_ctx, 1);
         fprintf(lvl <= SP_LOG_ERROR ? stderr : stdout, "%s", pline);
+        if (prompt_cb && atomic_load(&last_was_newline))
+            prompt_cb(prompt_ctx, 0);
         pthread_mutex_unlock(&term_lock);
     }
 
@@ -236,6 +244,16 @@ void sp_log(void *classed_ctx, enum SPLogLevel lvl, const char *format, ...)
     va_start(args, format);
     SPClass *class = get_class(classed_ctx);
     main_log(class, lvl, format, args);
+    va_end(args);
+}
+
+void sp_log_sync(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    pthread_mutex_lock(&log_lock);
+    vfprintf(stdout, format, args);
+    pthread_mutex_unlock(&log_lock);
     va_end(args);
 }
 
@@ -500,6 +518,14 @@ int sp_log_set_file(const char *path)
     }
     pthread_mutex_unlock(&log_lock);
     return ret;
+}
+
+void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started))
+{
+    pthread_mutex_lock(&term_lock);
+    prompt_ctx = ctx;
+    prompt_cb = cb;
+    pthread_mutex_unlock(&term_lock);
 }
 
 void sp_log_end(void)

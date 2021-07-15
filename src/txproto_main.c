@@ -18,59 +18,28 @@
 
 #include <unistd.h>
 #include <setjmp.h>
-#include <signal.h>
-#include <stdatomic.h>
 
 #include <libavutil/pixdesc.h>
 #include <libavutil/avstring.h>
 #include <libavutil/time.h>
 #include <libavutil/bprint.h>
 
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
+#include "txproto_main.h"
 
-#include "linenoise.h"
+#ifdef HAVE_LIBEDIT
+#include "repl.h"
+#endif
 
 #include "iosys_common.h"
 #include "encoding.h"
 #include "muxing.h"
 #include "filtering.h"
 #include "interface_common.h"
-#include "utils.h"
-#include "logging.h"
-#include "version.h"
-#include "../config.h"
 
 #include "default.lua.bin.h"
 #include "utils.lua.bin.h"
 
-typedef struct MainContext {
-    SPClass *class;
-
-    lua_State *lua;
-    pthread_mutex_t lock;
-    atomic_ullong lock_counter;
-    atomic_ullong contention_counter;
-    atomic_ullong skip_counter;
-    int overload_msg_state;
-
-    int source_update_cb_ref;
-
-    atomic_int_fast64_t epoch_value;
-
-    AVBufferRef **io_api_ctx;
-
-    SPBufferList *commit_list;
-    SPBufferList *discard_list;
-    SPBufferList *lua_buf_refs;
-} MainContext;
-
 #include "event_templates.h"
-
-#define LUA_PRIV_PREFIX "sp"
-#define LUA_PUB_PREFIX "tx"
-#define LUA_API_VERSION (int []){ 0, 1 } /* major, minor */
 
 static void *lua_alloc_fn(void *opaque, void *ptr, size_t type, size_t nsize)
 {
@@ -112,40 +81,6 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
             av_buffer_unref(cleanup_ref);                                 \
         pthread_mutex_unlock(&ctx->lock);                                 \
         return lua_error(L);                                              \
-    } while (0)
-
-#define LUA_INTERFACE_END(ret)            \
-    do {                                  \
-        pthread_mutex_unlock(&ctx->lock); \
-        return (ret);                     \
-    } while (0)
-
-#define LUA_LOCK_INTERFACE(skippable)                             \
-    do {                                                          \
-        unsigned long long ccnt, lcnt;                            \
-        lcnt = atomic_fetch_add(&ctx->lock_counter, 1);           \
-        if (pthread_mutex_trylock(&ctx->lock)) {                  \
-            ccnt = atomic_fetch_add(&ctx->contention_counter, 1); \
-            if (ccnt > lcnt) {                                    \
-                atomic_store(&ctx->lock_counter, 0);              \
-                atomic_store(&ctx->contention_counter, 0);        \
-            }                                                     \
-            if ((lcnt * 0.9) > ccnt) {                            \
-                if (!ctx->overload_msg_state) {                   \
-                    sp_log(ctx, SP_LOG_WARN, "Lua interface at "  \
-                           "90%% capacity, skipping "             \
-                           "low priority events!\n");             \
-                    ctx->overload_msg_state = 1;                  \
-                }                                                 \
-                if (skippable) {                                  \
-                    atomic_fetch_add(&ctx->skip_counter, 1);      \
-                    return 0;                                     \
-                }                                                 \
-            } else {                                              \
-                ctx->overload_msg_state = 0;                      \
-            }                                                     \
-            pthread_mutex_lock(&ctx->lock);                       \
-        }                                                         \
     } while (0)
 
 #define LUA_INTERFACE_BOILERPLATE()                                            \
@@ -258,7 +193,7 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
         luaL_setfuncs(L, fn_table, upvals_nb);        \
     } while (0);
 
-static int lua_parse_table_to_avopt(MainContext *ctx, lua_State *L, void *dst)
+static int lua_parse_table_to_avopt(TXMainContext *ctx, lua_State *L, void *dst)
 {
     lua_pushnil(L);
 
@@ -348,7 +283,7 @@ static int lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict)
 
 static int lua_generic_destroy(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
     (void)sp_bufferlist_pop(ctx->lua_buf_refs, sp_bufferlist_find_fn_data, ref);
     av_buffer_unref(&ref);
@@ -357,7 +292,7 @@ static int lua_generic_destroy(lua_State *L)
 
 static int lua_event_destroy(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
     (void)sp_bufferlist_pop(ctx->lua_buf_refs, sp_bufferlist_find_fn_data, ref);
     sp_event_unref_expire(&ref);
@@ -366,14 +301,14 @@ static int lua_event_destroy(lua_State *L)
 
 static int lua_event_await(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
     (void)sp_bufferlist_pop(ctx->lua_buf_refs, sp_bufferlist_find_fn_data, ref);
     sp_event_unref_await(&ref);
     return 0;
 }
 
-static int string_to_event_flags(MainContext *ctx, uint64_t *dst,
+static int string_to_event_flags(TXMainContext *ctx, uint64_t *dst,
                                  const char *in_str)
 {
     uint64_t flags = 0x0;
@@ -462,7 +397,7 @@ static int string_to_event_flags(MainContext *ctx, uint64_t *dst,
     return 0;
 }
 
-static int table_to_event_flags(lua_State *L, MainContext *ctx, enum SPEventType *dst)
+static int table_to_event_flags(lua_State *L, TXMainContext *ctx, enum SPEventType *dst)
 {
     lua_pushnil(L);
 
@@ -493,7 +428,7 @@ typedef struct HookLuaEventCtx {
 static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     int err = 0;
-    MainContext *ctx = av_buffer_get_opaque(opaque);
+    TXMainContext *ctx = av_buffer_get_opaque(opaque);
     HookLuaEventCtx *event_ctx = (HookLuaEventCtx *)opaque->data;
 
     int skippable = event_ctx->flags & (SP_EVENT_ON_STATS | SP_EVENT_ON_CLOCK);
@@ -589,7 +524,7 @@ end:
 
 static void hook_lua_event_free(void *opaque, uint8_t *data)
 {
-    MainContext *ctx = opaque;
+    TXMainContext *ctx = opaque;
     HookLuaEventCtx *hook_lua_ctx = (HookLuaEventCtx *)data;
 
     pthread_mutex_lock(&ctx->lock);
@@ -604,7 +539,7 @@ static void hook_lua_event_free(void *opaque, uint8_t *data)
 static int lua_generic_hook(lua_State *L)
 {
     int err = 0;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "hook")
@@ -704,7 +639,7 @@ static int lua_generic_hook(lua_State *L)
 static int lua_generic_ctrl(lua_State *L)
 {
     int err = 0;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "ctrl")
@@ -885,7 +820,7 @@ static void api_link_enc_mux_free(void *opaque, uint8_t *data)
 static int lua_generic_link(lua_State *L)
 {
     int err = 0;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *obj1 = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj1->data), "link")
@@ -1002,7 +937,7 @@ static int lua_generic_link(lua_State *L)
 
 static int lua_interface_create_selection(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *iface_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(iface_ref->data), "create_selection")
@@ -1049,7 +984,7 @@ static int lua_interface_create_selection(lua_State *L)
 
 static int lua_create_interface(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_interface")
     LUA_LOCK_INTERFACE(0);
@@ -1076,7 +1011,7 @@ static int lua_create_interface(lua_State *L)
 static int lua_create_muxer(lua_State *L)
 {
     int err;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_muxer")
     LUA_INTERFACE_BOILERPLATE();
@@ -1125,7 +1060,7 @@ static int lua_create_encoder(lua_State *L)
 {
     int err;
     const char *temp_str;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_encoder")
     LUA_INTERFACE_BOILERPLATE();
@@ -1207,7 +1142,7 @@ static int lua_create_encoder(lua_State *L)
 
 static int lua_create_io(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_io")
     LUA_LOCK_INTERFACE(0);
@@ -1266,7 +1201,7 @@ static int lua_create_io(lua_State *L)
 static int lua_filter_command_template(lua_State *L, int is_graph)
 {
     int err = 0;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "command")
@@ -1326,7 +1261,7 @@ static int lua_filter_command(lua_State *L)
 static int lua_create_filter(lua_State *L)
 {
     int err;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_filter")
     LUA_INTERFACE_BOILERPLATE();
@@ -1404,7 +1339,7 @@ static int lua_filtergraph_command(lua_State *L)
 static int lua_create_filtergraph(lua_State *L)
 {
     int err;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_filtergraph")
     LUA_INTERFACE_BOILERPLATE();
@@ -1484,7 +1419,7 @@ typedef struct EpochEventCtx {
 static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     int err = 0;
-    MainContext *ctx = av_buffer_get_opaque(opaque);
+    TXMainContext *ctx = av_buffer_get_opaque(opaque);
     EpochEventCtx *epoch_ctx = (EpochEventCtx *)opaque->data;
 
     int64_t val;
@@ -1543,7 +1478,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
 static void epoch_event_free(void *opaque, uint8_t *data)
 {
-    MainContext *ctx = opaque;
+    TXMainContext *ctx = opaque;
     EpochEventCtx *epoch_ctx = (EpochEventCtx *)data;
 
     av_buffer_unref(&epoch_ctx->src_ref);
@@ -1557,7 +1492,7 @@ static void epoch_event_free(void *opaque, uint8_t *data)
 
 static int lua_set_epoch(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_epoch")
     LUA_LOCK_INTERFACE(0);
@@ -1626,7 +1561,7 @@ static int lua_set_epoch(lua_State *L)
 
 static int lua_commit(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     /* No need to lock here, if anything needs locking the commit functions
      * will take care of it */
     sp_eventlist_dispatch(ctx, ctx->commit_list, SP_EVENT_ON_COMMIT, NULL);
@@ -1637,7 +1572,7 @@ static int lua_commit(lua_State *L)
 
 static int lua_discard(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     sp_eventlist_dispatch(ctx, ctx->discard_list, SP_EVENT_ON_COMMIT, NULL);
     sp_eventlist_discard(ctx->commit_list);
 
@@ -1652,7 +1587,7 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     int err = 0;
     SPSourceEventCbCtx *source_cb_ctx = (SPSourceEventCbCtx *)opaque->data;
-    MainContext *ctx = av_buffer_get_opaque(opaque);
+    TXMainContext *ctx = av_buffer_get_opaque(opaque);
     IOSysEntry *entry = src_ctx;
     lua_State *L = ctx->lua;
 
@@ -1711,7 +1646,7 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
 static void source_event_free(void *opaque, uint8_t *data)
 {
-    MainContext *ctx = opaque;
+    TXMainContext *ctx = opaque;
     SPSourceEventCbCtx *source_cb_ctx = (SPSourceEventCbCtx *)data;
 
     pthread_mutex_lock(&ctx->lock);
@@ -1724,7 +1659,7 @@ static void source_event_free(void *opaque, uint8_t *data)
 static int lua_register_io_cb(lua_State *L)
 {
     int err = 0;
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "register_io_cb")
     LUA_LOCK_INTERFACE(0);
@@ -1841,7 +1776,7 @@ static int lua_register_io_cb(lua_State *L)
 
 static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "log")
     LUA_LOCK_INTERFACE(0);
@@ -1889,7 +1824,7 @@ static int lua_log_err(lua_State *L)
 
 static int lua_api_version(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "api_version")
     LUA_LOCK_INTERFACE(0);
     lua_pushinteger(L, LUA_API_VERSION[0]);
@@ -1900,11 +1835,10 @@ static int lua_api_version(lua_State *L)
 jmp_buf quit_loc;
 static void on_quit_signal(int signo)
 {
-    sp_log(NULL, SP_LOG_INFO, "Got quit signal!\n");
     longjmp(quit_loc, signo);
 }
 
-static void cleanup_fn(MainContext *ctx)
+static void cleanup_fn(TXMainContext *ctx)
 {
     pthread_mutex_lock(&ctx->lock);
     sp_bufferlist_free(&ctx->lua_buf_refs);
@@ -1923,6 +1857,7 @@ static void cleanup_fn(MainContext *ctx)
 
     pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);
+    av_dict_free(&ctx->lua_namespace);
     sp_log_end();
     sp_class_free(ctx);
     av_free(ctx);
@@ -1930,7 +1865,7 @@ static void cleanup_fn(MainContext *ctx)
 
 static int lua_quit(lua_State *L)
 {
-    MainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "quit")
 
@@ -1941,12 +1876,10 @@ static int lua_quit(lua_State *L)
         LUA_ERROR("Invalid argument, expected \"integer\" (return code), got \"%s\"!",
                   lua_typename(L, lua_type(L, -1)));
 
-    int code = 0;
     if (lua_gettop(L))
-        code = lua_tointeger(L, -1);
+        ctx->lua_exit_code = lua_tointeger(L, -1);
 
-    cleanup_fn(ctx);
-    exit(code);
+    raise(SIGINT);
 
     return 0;
 }
@@ -1977,62 +1910,7 @@ static const struct luaL_Reg lua_lib_fns[] = {
     { NULL, NULL },
 };
 
-static void ln_completion(const char *str, linenoiseCompletions *lc)
-{
-    if (!strncmp(str, LUA_PUB_PREFIX ".", strlen(str)))
-        linenoiseAddCompletion(lc, LUA_PUB_PREFIX ".");
-
-    for (int i = 0; i < SP_ARRAY_ELEMS(lua_lib_fns) - 1; i++) {
-        int len = strlen(LUA_PUB_PREFIX ".") + strlen(lua_lib_fns[i].name) + strlen("()") + 1;
-        char *comp = av_malloc(len);
-        av_strlcpy(comp, LUA_PUB_PREFIX ".", len);
-        av_strlcat(comp, lua_lib_fns[i].name, len);
-        if (!strncmp(str, comp, strlen(str))) {
-            if (lua_lib_fns[i].func == lua_commit ||
-                lua_lib_fns[i].func == lua_discard)
-                av_strlcat(comp, "()", len);
-            linenoiseAddCompletion(lc, comp);
-        }
-        av_free(comp);
-    }
-}
-
-static char *ln_hints(const char *str, int *color, int *bold)
-{
-    int counts = 0, last_idx;
-
-    for (int i = 0; i < SP_ARRAY_ELEMS(lua_lib_fns) - 1; i++) {
-        int len = strlen(LUA_PUB_PREFIX ".") + strlen(lua_lib_fns[i].name) + 1;
-        char *comp = av_malloc(len);
-        av_strlcpy(comp, LUA_PUB_PREFIX ".", len);
-        av_strlcat(comp, lua_lib_fns[i].name, len);
-        if (!strncmp(str, comp, strlen(str))) {
-            counts++;
-            last_idx = i;
-        }
-        av_free(comp);
-    }
-
-    if (counts == 1) {
-        const luaL_Reg *lr = &lua_lib_fns[last_idx];
-        if (lr->func == lua_register_io_cb) {
-            return av_strdup("(function)");
-        } else if (lr->func == lua_create_io ||
-                   lr->func == lua_create_muxer ||
-                   lr->func == lua_create_encoder) {
-            return av_strdup("(table/identifier, [table]");
-        } else if (lr->func == lua_set_epoch) {
-            return av_strdup("(table/userdata/number/integer/string/function)");
-        } else if (lr->func == lua_commit ||
-                   lr->func == lua_discard) {
-            return NULL;
-        }
-    }
-
-    return NULL;
-}
-
-static int lfn_loadfile(MainContext *ctx, const char *script_name)
+int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name)
 {
     int err = luaL_loadfilex(ctx->lua, script_name, "bt");
     if (err == LUA_ERRFILE) {
@@ -2046,30 +1924,33 @@ static int lfn_loadfile(MainContext *ctx, const char *script_name)
     return 0;
 }
 
-static void load_lua_library(MainContext *ctx, const char *lib)
-{
 #define LUA_BASELIBNAME "base"
-    static const luaL_Reg lua_internal_lib_fns[] = {
-        { LUA_BASELIBNAME, luaopen_base },
-        { LUA_COLIBNAME, luaopen_coroutine },
-        { LUA_TABLIBNAME, luaopen_table },
-        { LUA_IOLIBNAME, luaopen_io },
-        { LUA_OSLIBNAME, luaopen_os },
-        { LUA_STRLIBNAME, luaopen_string },
-        { LUA_UTF8LIBNAME, luaopen_utf8 },
-        { LUA_MATHLIBNAME, luaopen_math },
-        { LUA_DBLIBNAME, luaopen_debug },
-    };
+static const luaL_Reg lua_internal_lib_fns[] = {
+    { LUA_BASELIBNAME, luaopen_base },
+    { LUA_COLIBNAME, luaopen_coroutine },
+    { LUA_TABLIBNAME, luaopen_table },
+    { LUA_IOLIBNAME, luaopen_io },
+    { LUA_OSLIBNAME, luaopen_os },
+    { LUA_STRLIBNAME, luaopen_string },
+    { LUA_UTF8LIBNAME, luaopen_utf8 },
+    { LUA_MATHLIBNAME, luaopen_math },
+    { LUA_DBLIBNAME, luaopen_debug },
+    { NULL, NULL },
+};
 
+void sp_load_lua_library(TXMainContext *ctx, const char *lib)
+{
     lua_State *L = ctx->lua;
 
-    for (int i = 0; i < SP_ARRAY_ELEMS(lua_internal_lib_fns); i++) {
-        if (!strcmp(lua_internal_lib_fns[i].name, lib)) {
-            luaL_requiref(L, lua_internal_lib_fns[i].name,
-                          lua_internal_lib_fns[i].func, 1);
+    int cnt = 0;
+    while (lua_internal_lib_fns[cnt].name) {
+        if (!strcmp(lua_internal_lib_fns[cnt].name, lib)) {
+            luaL_requiref(L, lua_internal_lib_fns[cnt].name,
+                          lua_internal_lib_fns[cnt].func, 1);
             lua_pop(ctx->lua, 1);
             return;
         }
+        cnt++;
     }
 
     /* TODO: Here we'd load a custom lib */
@@ -2078,7 +1959,7 @@ static void load_lua_library(MainContext *ctx, const char *lib)
 int main(int argc, char *argv[])
 {
     int err = 0;
-    MainContext *ctx = av_mallocz(sizeof(*ctx));
+    TXMainContext *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return AVERROR(ENOMEM);
 
@@ -2205,6 +2086,15 @@ int main(int argc, char *argv[])
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
 
+    int quit = setjmp(quit_loc);
+    if (quit)
+        goto end;
+
+    if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
+        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");
+        return AVERROR(EINVAL);
+    }
+
     /* Create Lua context */
     ctx->lua = lua_newstate(lua_alloc_fn, ctx);
     lua_gc(ctx->lua, LUA_GCGEN);
@@ -2214,10 +2104,31 @@ int main(int argc, char *argv[])
     { /* Load needed Lua libraries */
         char *save, *token = av_strtok(lua_libs_list, ",", &save);
         while (token) {
-            load_lua_library(ctx, token);
+            sp_load_lua_library(ctx, token);
             token = av_strtok(NULL, ",", &save);
         }
         av_free(lua_libs_list);
+    }
+
+    { /* Record "junk" globals */
+        lua_pushglobaltable(ctx->lua);
+        lua_pushnil(ctx->lua);
+        while (lua_next(ctx->lua, -2)) {
+            const char *name = lua_tostring(ctx->lua, -2);
+            int cnt = 0;
+            int match = 0;
+            while (lua_internal_lib_fns[cnt].name) {
+                if (!strcmp(name, lua_internal_lib_fns[cnt].name)) {
+                    match = 1;
+                    break;
+                }
+                cnt++;
+            }
+            if (!match)
+                av_dict_set(&ctx->lua_namespace, name, "init", 0);
+            lua_pop(ctx->lua, 1);
+        }
+        lua_pop(ctx->lua, 1);
     }
 
     /* Load our lib */
@@ -2241,7 +2152,7 @@ int main(int argc, char *argv[])
 
     /* Load the script */
     if (script_name) {
-        if ((err = lfn_loadfile(ctx, script_name)))
+        if ((err = sp_lfn_loadfile(ctx, script_name)))
             goto end;
     } else {
         err = luaL_loadbufferx(ctx->lua, default_lua_bin, default_lua_bin_len,
@@ -2278,181 +2189,21 @@ int main(int argc, char *argv[])
         }
     }
 
-    int quit = setjmp(quit_loc);
-    if (quit)
-        goto end;
+#ifdef HAVE_LIBEDIT
+    if (!disable_repl)
+        sp_repl_init(ctx);
+#endif
 
-    if (disable_repl) {
-        if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
-            av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");
-            return AVERROR(EINVAL);
-        }
-
-        sleep(INT_MAX);
-        goto end;
-    }
-
-    /* Linenoise */
-    linenoiseSetCompletionCallback(ln_completion);
-    linenoiseSetHintsCallback(ln_hints);
-    linenoiseSetFreeHintsCallback(av_free);
-
-    /* REPL */
-    char *line;
-    while ((line = linenoise("lua > ")) != NULL) {
-        LUA_LOCK_INTERFACE(0);
-
-        if (!strcmp("quit", line) || !strcmp("exit", line)) {
-            pthread_mutex_unlock(&ctx->lock);
-            linenoiseFree(line);
-            break;
-        } else if (!strcmp("help", line)) {
-            printf("txproto library:\n");
-            for (int i = 0; i < SP_ARRAY_ELEMS(lua_lib_fns) - 1; i++) {
-                int len = strlen(LUA_PUB_PREFIX ".") + strlen(lua_lib_fns[i].name) + strlen("()") + 1;
-                char *comp = av_malloc(len);
-                av_strlcpy(comp, LUA_PUB_PREFIX ".", len);
-                av_strlcat(comp, lua_lib_fns[i].name, len);
-                int col = 0, bold = 0;
-                char *hint = ln_hints(comp, &col, &bold);
-                if (lua_lib_fns[i].func == lua_commit ||
-                    lua_lib_fns[i].func == lua_discard)
-                    av_strlcat(comp, "()", len);
-                if (hint) {
-                    comp = av_realloc(comp, len + strlen(hint));
-                    av_strlcat(comp, hint, len + strlen(hint));
-                }
-                printf("    %s\n", comp);
-                av_free(comp);
-            }
-
-            printf("Lua globals:\n");
-            lua_pushglobaltable(ctx->lua);
-            lua_pushnil(ctx->lua);
-            while (lua_next(ctx->lua, -2)) {
-                const char *name = lua_tostring(ctx->lua, -2);
-                if (strcmp(name, LUA_PUB_PREFIX))
-                    printf("    %s\n", name);
-                lua_pop(ctx->lua, 1);
-            }
-            lua_pop(ctx->lua, 1);
-
-            printf("Other functions:\n"
-                   "    load <path> <optional entrypoint> <optional argument 1>...\n"
-                   "    require <string> <string>...\n"
-                   "    stat\n"
-                   "    help\n"
-                   "    exit\n"
-                   "    quit\n");
-            goto repl_end;
-        } else if (!strncmp(line, "load", strlen("load"))) {
-            script_name = NULL;
-            script_entrypoint = NULL;
-
-            int num_arguments = 0;
-            char *line_mod = av_strdup(line);
-            char *save, *token = av_strtok(line_mod, " ", &save);
-            token = av_strtok(NULL, " ", &save); /* Skip "load" */
-            while (token) {
-                if (!script_name) {
-                    script_name = token;
-                    if (lfn_loadfile(ctx, script_name) < 0)
-                        break;
-                    if (lua_pcall(ctx->lua, 0, 0, 0) != LUA_OK) {
-                        sp_log(ctx, SP_LOG_ERROR, "Lua script error: %s\n",
-                               lua_tostring(ctx->lua, -1));
-                        break;
-                    }
-                } else if (!script_entrypoint) {
-                    script_entrypoint = token;
-                    lua_getglobal(ctx->lua, script_entrypoint);
-                    if (!lua_isfunction(ctx->lua, -1)) {
-                        sp_log(ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
-                               script_entrypoint);
-                        break;
-                    }
-                } else {
-                    lua_pushstring(ctx->lua, token);
-                    num_arguments++;
-                }
-                token = av_strtok(NULL, " ", &save);
-            }
-
-            /* No error encountered */
-            if (!script_name) {
-                sp_log(ctx, SP_LOG_ERROR, "Missing path for \"load\"!\n");
-            } else if (!token) {
-                if (!script_entrypoint) {
-                    linenoiseHistoryAdd(line);
-                } else if (lua_pcall(ctx->lua, num_arguments, 0, 0) != LUA_OK) {
-                    sp_log(ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
-                           script_entrypoint, lua_tostring(ctx->lua, -1));
-                } else {
-                    linenoiseHistoryAdd(line);
-                }
-            }
-
-            av_free(line_mod);
-            goto repl_end;
-        } else if (!strcmp("stat", line)) {
-            size_t mem_used = 1024*lua_gc(ctx->lua, LUA_GCCOUNT) + lua_gc(ctx->lua, LUA_GCCOUNTB);
-            double mem_used_f;
-            const char *mem_used_suffix;
-            if (mem_used >= 1048576) {
-                mem_used_f = (double)mem_used / 1048576.0;
-                mem_used_suffix = "MiB";
-            } else {
-                mem_used_f = (double)mem_used / 1024.0;
-                mem_used_suffix = "KiB";
-            }
-
-            unsigned long long lock_cnt = atomic_load(&ctx->lock_counter);
-            unsigned long long contention_cnt = atomic_load(&ctx->contention_counter);
-            unsigned long long skip_cnt = atomic_load(&ctx->skip_counter);
-            atomic_store(&ctx->lock_counter, 0);
-            atomic_store(&ctx->contention_counter, 0);
-            atomic_store(&ctx->skip_counter, 0);
-
-            sp_log(ctx, SP_LOG_INFO, "Lua memory used:     %.2f %s\n",
-                   mem_used_f, mem_used_suffix);
-            sp_log(ctx, SP_LOG_INFO, "Lua lock contention: %.2f%%\n",
-                   (contention_cnt / (double)lock_cnt) * 100.0);
-            sp_log(ctx, SP_LOG_INFO, "Lua skipped events: %.2f%%\n",
-                   (skip_cnt / (double)lock_cnt) * 100.0);
-            goto repl_end;
-        } else if (!strncmp(line, "require", strlen("require"))) {
-            char *save, *token = av_strtok(line, " ", &save);
-            token = av_strtok(NULL, " ", &save); /* Skip "require" */
-            if (!token) {
-                sp_log(ctx, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
-                goto repl_end;
-            }
-
-            while (token) {
-                load_lua_library(ctx, token);
-                token = av_strtok(NULL, " ", &save);
-            }
-
-            goto repl_end;
-        }
-
-        int ret = luaL_dostring(ctx->lua, line);
-        if (ret == LUA_OK)
-            linenoiseHistoryAdd(line);
-        if (lua_isstring(ctx->lua, -1))
-            sp_log(NULL, ret == LUA_OK ? SP_LOG_INFO : SP_LOG_ERROR,
-                   "%s\n", lua_tostring(ctx->lua, -1));
-
-        lua_pop(ctx->lua, 1);
-
-repl_end:
-        pthread_mutex_unlock(&ctx->lock);
-        linenoiseFree(line);
-    }
-
-    sp_log(ctx, SP_LOG_INFO, "Quitting!\n");
+    sleep(INT_MAX);
 
 end:
+#ifdef HAVE_LIBEDIT
+    if (!disable_repl)
+        sp_repl_uninit();
+#endif
+
+    sp_log(ctx, SP_LOG_INFO, "Quitting!\n");
+    err = ctx->lua_exit_code ? ctx->lua_exit_code : err;
     cleanup_fn(ctx);
 
     return err;

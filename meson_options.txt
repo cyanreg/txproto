@@ -1,3 +1,4 @@
 option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio input and output')
 option('wayland', type: 'feature', value: 'auto', description: 'Wayland input and output')
 option('libavdevice', type: 'feature', value: 'auto', description: 'libavdevice inputs and outputs')
+option('libedit', type: 'feature', value: 'auto', description: 'libedit support (for a REPL interface)')

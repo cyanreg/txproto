@@ -77,12 +77,18 @@ typedef struct SPClass SPClass;
 /* ffmpeg log callback */
 void sp_log_set_ff_cb(void);
 
+/* Called once on starting to print a new line, and once after the newline has been printed */
+void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started));
+
 /* Context level */
 void sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl);
 int sp_log_set_ctx_lvl_str(const char *component, const char *lvl);
 
 /* Main logging */
 void sp_log(void *ctx, int level, const char *fmt, ...) sp_printf_format(3, 4);
+
+/* Sync-only logging */
+void sp_log_sync(const char *fmt, ...) sp_printf_format(1, 2);
 
 /* Set log file */
 int sp_log_set_file(const char *path);

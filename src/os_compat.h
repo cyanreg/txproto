@@ -40,3 +40,11 @@ void sp_set_thread_name_self(const char *name)
     return;
 }
 #endif
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define noreturn _Noreturn
+#elif defined(__GNUC__)
+#define noreturn __attribute__((noreturn))
+#else
+#define noreturn
+#endif

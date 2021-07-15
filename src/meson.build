@@ -18,6 +18,9 @@ sources = [
     # Encoding
     'encoding.c',
 
+    # REPL
+    'repl.c',
+
     # Misc
     'utils.c',
     'logging.c',
@@ -31,6 +34,13 @@ sources = [
                       input: 'version.c.in', output: 'version.c',
                       fallback: 'release')
 ]
+
+# libendit
+libedit = dependency('libedit', version: '>= 3.1', required: get_option('libedit'))
+if libedit.found()
+    dependencies += libedit
+    conf.set('HAVE_LIBEDIT', 1)
+endif
 
 # libavdevice
 libavdevice = dependency('libavdevice', version: '>= 58.9.100', required: get_option('libavdevice'))
@@ -81,6 +91,10 @@ executable('txproto',
     sources: sources,
     dependencies: dependencies,
 )
+
+summary({
+    'libedit': libedit.found(),
+}, section: 'Interface', bool_yn: true)
 
 summary({
     'libavdevice': libavdevice.found(),

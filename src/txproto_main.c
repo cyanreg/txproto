@@ -432,11 +432,7 @@ static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     TXMainContext *ctx = av_buffer_get_opaque(opaque);
     HookLuaEventCtx *event_ctx = (HookLuaEventCtx *)opaque->data;
 
-    int skippable = event_ctx->flags & (SP_EVENT_ON_STATS | SP_EVENT_ON_CLOCK);
-    if (event_ctx->flags & (SP_EVENT_FLAG_ONESHOT | SP_EVENT_FLAG_HIGH_PRIO))
-        skippable = 0;
-
-    LUA_LOCK_INTERFACE(skippable);
+    LUA_LOCK_INTERFACE();
 
     if (event_ctx->fn_ref == LUA_NOREF || event_ctx->fn_ref == LUA_REFNIL) {
         sp_log(ctx, SP_LOG_ERROR, "Invalid Lua event callback \"nil\"!\n");
@@ -544,7 +540,7 @@ static int lua_generic_hook(lua_State *L)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "hook")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -644,7 +640,7 @@ static int lua_generic_ctrl(lua_State *L)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "ctrl")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     int num_args = lua_gettop(L);
     if (num_args != 1 && num_args != 2)
@@ -825,7 +821,7 @@ static int lua_generic_link(lua_State *L)
     AVBufferRef *obj1 = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj1->data), "link")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     int nargs = lua_gettop(L);
     if (nargs != 1 && nargs != 2)
@@ -942,7 +938,7 @@ static int lua_interface_create_selection(lua_State *L)
     AVBufferRef *iface_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(iface_ref->data), "create_selection")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));
@@ -988,7 +984,7 @@ static int lua_create_interface(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_interface")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     AVBufferRef *interface_ref = NULL;
     int err = sp_interface_init(&interface_ref);
@@ -1146,7 +1142,7 @@ static int lua_create_io(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_io")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     int num_args = lua_gettop(L);
     if (num_args != 1 && num_args != 2)
@@ -1206,7 +1202,7 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "command")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     /* (graph only) target, commands[] = values[], (optional) flags */
     int args = lua_gettop(L);
@@ -1436,7 +1432,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         val = 0;
         break;
     case EP_MODE_EXTERNAL:
-        LUA_LOCK_INTERFACE(0);
+        LUA_LOCK_INTERFACE();
 
         if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
             sp_log(ctx, SP_LOG_ERROR, "Invalid Lua epoch callback \"nil\"!\n");
@@ -1496,7 +1492,7 @@ static int lua_set_epoch(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_epoch")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!",
@@ -1592,7 +1588,7 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     IOSysEntry *entry = src_ctx;
     lua_State *L = ctx->lua;
 
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, source_cb_ctx->fn_ref);
 
@@ -1663,7 +1659,7 @@ static int lua_register_io_cb(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "register_io_cb")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     int nb_args = lua_gettop(L);
     if (nb_args != 1 && nb_args != 2)
@@ -1780,7 +1776,7 @@ static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "log")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     int nb_args = lua_gettop(L);
     lua_rotate(L, nb_args, nb_args);
@@ -1828,7 +1824,7 @@ static int lua_prompt(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt");
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -1885,7 +1881,7 @@ static int lua_api_version(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "api_version")
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
     lua_pushinteger(L, LUA_API_VERSION[0]);
     lua_pushinteger(L, LUA_API_VERSION[1]);
     LUA_INTERFACE_END(2);
@@ -1899,11 +1895,14 @@ static void on_quit_signal(int signo)
 
 static void cleanup_fn(TXMainContext *ctx)
 {
-    pthread_mutex_lock(&ctx->lock);
-    sp_bufferlist_free(&ctx->lua_buf_refs);
+    /* Free lists that may carry contexts around */
     sp_bufferlist_free(&ctx->commit_list);
     sp_bufferlist_free(&ctx->discard_list);
 
+    /* Shut off all components first, they may call Lua destruction callbacks */
+    sp_bufferlist_free(&ctx->lua_buf_refs);
+
+    /* Shut the APIs off, they may do the same, or call the IO update CB */
     if (ctx->io_api_ctx) {
         for (int i = 0; i < sp_compiled_apis_len; i++)
             if (ctx->io_api_ctx[i])
@@ -1911,13 +1910,22 @@ static void cleanup_fn(TXMainContext *ctx)
         av_free(ctx->io_api_ctx);
     }
 
+    /* Activate lock */
+    pthread_mutex_lock(&ctx->lock);
+
+    /* Shut any Lua threads */
+    sp_log_end();
+
+    /* Shut the main Lua context */
     if (ctx->lua)
         lua_close(ctx->lua);
 
+    /* Everything's guaranteed to be off right now */
     pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);
+
+    /* Free any auxiliary data */
     av_dict_free(&ctx->lua_namespace);
-    sp_log_end();
     sp_class_free(ctx);
     av_free(ctx);
 }
@@ -1925,7 +1933,7 @@ static void cleanup_fn(TXMainContext *ctx)
 static int lua_quit(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    LUA_LOCK_INTERFACE(0);
+    LUA_LOCK_INTERFACE();
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "quit")
 
@@ -2046,9 +2054,6 @@ int main(int argc, char *argv[])
     ctx->discard_list = sp_bufferlist_new();
     ctx->lua_buf_refs = sp_bufferlist_new();
     ctx->epoch_value = ATOMIC_VAR_INIT(0);
-    ctx->lock_counter = ATOMIC_VAR_INIT(0);
-    ctx->contention_counter = ATOMIC_VAR_INIT(0);
-    ctx->skip_counter = ATOMIC_VAR_INIT(0);
     ctx->source_update_cb_ref = LUA_NOREF;
 
     /* Options */
@@ -2159,11 +2164,6 @@ int main(int argc, char *argv[])
         return AVERROR(EINVAL);
     }
 
-#ifdef HAVE_LIBEDIT
-    if (!disable_cli)
-        sp_cli_init(ctx);
-#endif
-
     /* Create Lua context */
     ctx->lua = lua_newstate(lua_alloc_fn, ctx);
     lua_gc(ctx->lua, LUA_GCGEN);
@@ -2219,7 +2219,12 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-    /* Load the script */
+#ifdef HAVE_LIBEDIT
+    if (!disable_cli)
+        sp_cli_init(ctx);
+#endif
+
+    /* Load the initial script */
     if (script_name) {
         if ((err = sp_lfn_loadfile(ctx, script_name)))
             goto end;

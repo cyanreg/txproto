@@ -36,10 +36,6 @@ typedef struct TXMainContext {
 
     lua_State *lua;
     pthread_mutex_t lock;
-    atomic_ullong lock_counter;
-    atomic_ullong contention_counter;
-    atomic_ullong skip_counter;
-    int overload_msg_state;
     int lua_exit_code;
     AVDictionary *lua_namespace;
 
@@ -66,32 +62,9 @@ typedef struct TXMainContext {
     } while (0)
 
 /* Lock the Lua interface, preventing other threads from changing it */
-#define LUA_LOCK_INTERFACE(skippable)                             \
+#define LUA_LOCK_INTERFACE()                                      \
     do {                                                          \
-        unsigned long long ccnt, lcnt;                            \
-        lcnt = atomic_fetch_add(&ctx->lock_counter, 1);           \
-        if (pthread_mutex_trylock(&ctx->lock)) {                  \
-            ccnt = atomic_fetch_add(&ctx->contention_counter, 1); \
-            if (ccnt > lcnt) {                                    \
-                atomic_store(&ctx->lock_counter, 0);              \
-                atomic_store(&ctx->contention_counter, 0);        \
-            }                                                     \
-            if ((lcnt * 0.9) > ccnt) {                            \
-                if (!ctx->overload_msg_state) {                   \
-                    sp_log(ctx, SP_LOG_WARN, "Lua interface at "  \
-                           "90%% capacity, skipping "             \
-                           "low priority events!\n");             \
-                    ctx->overload_msg_state = 1;                  \
-                }                                                 \
-                if (skippable) {                                  \
-                    atomic_fetch_add(&ctx->skip_counter, 1);      \
-                    return 0;                                     \
-                }                                                 \
-            } else {                                              \
-                ctx->overload_msg_state = 0;                      \
-            }                                                     \
-            pthread_mutex_lock(&ctx->lock);                       \
-        }                                                         \
+        pthread_mutex_lock(&ctx->lock);                           \
     } while (0)
 
 /* Load file into the Lua context */

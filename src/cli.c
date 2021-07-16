@@ -309,7 +309,7 @@ static void *cli_thread_fn(void *arg)
 
                             const char *type = lua_typename(cli_state.lua, lua_type(cli_state.lua, -1));
                             if (fname)
-                                sp_log_sync("    \"%s.%s\": %s\n", name, fname, type);
+                                sp_log_sync("    %s.%s: %s\n", name, fname, type);
                             else
                                 sp_log_sync("    %s\n", type);
 
@@ -317,7 +317,7 @@ static void *cli_thread_fn(void *arg)
                         }
                         lua_pop(cli_state.lua, 1);
                     } else if (lua_type(cli_state.lua, -1) == LUA_TSTRING) {
-                        sp_log_sync("    \"%s\"\n", lua_tostring(cli_state.lua, -1));
+                        sp_log_sync("    %s\n", lua_tostring(cli_state.lua, -1));
                     }
 
                     av_free(line_mod);

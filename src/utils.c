@@ -252,6 +252,8 @@ static int internal_bufferlist_append(SPBufferList *list, AVBufferRef *entry,
                                       enum SPEventType pflags, int ref)
 {
     int err = 0;
+    if (!list)
+        return 0;
 
     pthread_mutex_lock(&list->lock);
 
@@ -641,6 +643,8 @@ static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
                                   AVBufferRef *event, enum SPEventType when)
 {
     SPEvent *event_ctx = (SPEvent *)event->data;
+    if (!list)
+        return 0;
 
     AVBufferRef *dup = NULL;
     if (!(event_ctx->type & SP_EVENT_FLAG_NO_DEDUP))

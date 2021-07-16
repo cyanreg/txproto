@@ -27,7 +27,7 @@
 #include "txproto_main.h"
 
 #ifdef HAVE_LIBEDIT
-#include "repl.h"
+#include "cli.h"
 #endif
 
 #include "iosys_common.h"
@@ -1855,7 +1855,7 @@ static int lua_prompt(lua_State *L)
     AVBufferRef *hook_event = sp_event_create(hook_lua_event_cb, NULL, flags,
                                               hook_lua_ctx_ref, 0x0);
 
-    int ret = sp_repl_prompt_event(hook_event, lua_tostring(L, -1));
+    int ret = sp_cli_prompt_event(hook_event, lua_tostring(L, -1));
     if (ret < 0) {
         sp_event_unref_expire(&hook_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(ret));
@@ -2052,7 +2052,7 @@ int main(int argc, char *argv[])
     ctx->source_update_cb_ref = LUA_NOREF;
 
     /* Options */
-    int disable_repl = 0;
+    int disable_cli = 0;
     const char *script_name = NULL;
     const char *script_entrypoint = NULL;
     char *lua_libs_list = av_strdup(LUA_BASELIBNAME","
@@ -2077,7 +2077,7 @@ int main(int argc, char *argv[])
             printf("%s %s (%s)\n", PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
             goto end;
         case 'N':
-            disable_repl = 1;
+            disable_cli = 1;
             break;
         case 'r':
             {
@@ -2160,8 +2160,8 @@ int main(int argc, char *argv[])
     }
 
 #ifdef HAVE_LIBEDIT
-    if (!disable_repl)
-        sp_repl_init(ctx);
+    if (!disable_cli)
+        sp_cli_init(ctx);
 #endif
 
     /* Create Lua context */
@@ -2262,8 +2262,8 @@ int main(int argc, char *argv[])
 
 end:
 #ifdef HAVE_LIBEDIT
-    if (!disable_repl)
-        sp_repl_uninit();
+    if (!disable_cli)
+        sp_cli_uninit();
 #endif
 
     sp_log(ctx, SP_LOG_INFO, "Quitting!\n");

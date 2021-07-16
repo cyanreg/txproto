@@ -36,7 +36,7 @@ sources = [
 libedit = dependency('libedit', version: '>= 3.1', required: get_option('libedit'))
 if libedit.found()
     dependencies += libedit
-    sources += 'repl.c'
+    sources += 'cli.c'
     conf.set('HAVE_LIBEDIT', 1)
 endif
 
@@ -91,7 +91,7 @@ executable('txproto',
 )
 
 summary({
-    'libedit': libedit.found(),
+    'CLI': libedit.found(),
 }, section: 'Interface', bool_yn: true)
 
 summary({

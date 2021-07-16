@@ -20,6 +20,6 @@
 
 #include "txproto_main.h"
 
-void sp_repl_init(TXMainContext *ctx);
-int sp_repl_prompt_event(AVBufferRef *event, const char *msg);
-void sp_repl_uninit(void);
+void sp_cli_init(TXMainContext *ctx);
+int sp_cli_prompt_event(AVBufferRef *event, const char *msg);
+void sp_cli_uninit(void);

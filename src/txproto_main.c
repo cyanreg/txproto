@@ -2155,10 +2155,6 @@ int main(int argc, char *argv[])
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
 
-    int quit = setjmp(quit_loc);
-    if (quit)
-        goto end;
-
     /* Create Lua context */
     ctx->lua = lua_newstate(lua_alloc_fn, ctx);
     lua_gc(ctx->lua, LUA_GCGEN);
@@ -2252,6 +2248,10 @@ int main(int argc, char *argv[])
             goto end;
         }
     }
+
+    int quit = setjmp(quit_loc);
+    if (quit)
+        goto end;
 
     if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
         av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");

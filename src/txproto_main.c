@@ -2159,11 +2159,6 @@ int main(int argc, char *argv[])
     if (quit)
         goto end;
 
-    if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");
-        return AVERROR(EINVAL);
-    }
-
     /* Create Lua context */
     ctx->lua = lua_newstate(lua_alloc_fn, ctx);
     lua_gc(ctx->lua, LUA_GCGEN);
@@ -2219,11 +2214,6 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-#ifdef HAVE_LIBEDIT
-    if (!disable_cli)
-        sp_cli_init(ctx);
-#endif
-
     /* Load the initial script */
     if (script_name) {
         if ((err = sp_lfn_loadfile(ctx, script_name)))
@@ -2262,6 +2252,16 @@ int main(int argc, char *argv[])
             goto end;
         }
     }
+
+    if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
+        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");
+        return AVERROR(EINVAL);
+    }
+
+#ifdef HAVE_LIBEDIT
+    if (!disable_cli)
+        sp_cli_init(ctx);
+#endif
 
     sleep(INT_MAX);
 

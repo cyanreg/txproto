@@ -1,11 +1,10 @@
 sp = {
-    dump = function(node)
+    dump_to_string = function(node)
         local cache, stack, output = {},{},{}
         local depth = 1
 
         if type(node) ~= "table" then
-            print(node)
-            return nil
+            return "{" .. tostring(node) .. "}"
         end
 
         tree = true
@@ -94,7 +93,6 @@ sp = {
         table.insert(output,output_str)
         output_str = table.concat(output)
 
-        print(output_str)
         return output_str
     end,
 }

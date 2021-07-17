@@ -11,7 +11,7 @@ end
 selection = nil
 
 function selection_cb(result)
-    sp.dump(result)
+    print(sp.dump_to_string(result))
     selection = result
 end
 

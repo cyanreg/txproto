@@ -1995,22 +1995,23 @@ int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name)
     return 0;
 }
 
-#define LUA_BASELIBNAME "base"
-static const luaL_Reg lua_internal_lib_fns[] = {
-    { LUA_BASELIBNAME, luaopen_base },
-    { LUA_COLIBNAME, luaopen_coroutine },
-    { LUA_TABLIBNAME, luaopen_table },
-    { LUA_IOLIBNAME, luaopen_io },
-    { LUA_OSLIBNAME, luaopen_os },
-    { LUA_STRLIBNAME, luaopen_string },
-    { LUA_UTF8LIBNAME, luaopen_utf8 },
-    { LUA_MATHLIBNAME, luaopen_math },
-    { LUA_DBLIBNAME, luaopen_debug },
-    { NULL, NULL },
-};
-
 int sp_load_lua_library(lua_State *L, const char *lib)
 {
+#define LUA_BASELIBNAME "base"
+    static const luaL_Reg lua_internal_lib_fns[] = {
+        { LUA_BASELIBNAME, luaopen_base },
+        { LUA_COLIBNAME, luaopen_coroutine },
+        { LUA_TABLIBNAME, luaopen_table },
+        { LUA_IOLIBNAME, luaopen_io },
+        { LUA_OSLIBNAME, luaopen_os },
+        { LUA_STRLIBNAME, luaopen_string },
+        { LUA_UTF8LIBNAME, luaopen_utf8 },
+        { LUA_MATHLIBNAME, luaopen_math },
+        { LUA_DBLIBNAME, luaopen_debug },
+        { LUA_LOADLIBNAME, luaopen_package },
+        { NULL, NULL },
+    };
+
     int cnt = 0;
     while (lua_internal_lib_fns[cnt].name) {
         if (!strcmp(lua_internal_lib_fns[cnt].name, lib)) {
@@ -2022,9 +2023,106 @@ int sp_load_lua_library(lua_State *L, const char *lib)
         cnt++;
     }
 
-    /* TODO: Here we'd load a custom lib */
+    int lib_len = strlen(lib);
+    const char *lib_suffix;
+    int lib_suffix_len;
 
-    return AVERROR(ENOTSUP);
+    /* External C library */
+    static const char *clibs_dirs[] = {
+        "./",
+        LUA_CDIR,
+        LUA_CDIR2,
+        LUA_CDIR3,
+    };
+
+    static const char *lib_suffixes[] = {
+        ".so",
+        ".dll",
+        ".dylib",
+    };
+
+    char *sym_prefix = "luaopen_";
+    int sym_prefix_len = strlen(sym_prefix);
+
+    for (int i = 0; i < SP_ARRAY_ELEMS(lib_suffixes); i++) {
+        lib_suffix = lib_suffixes[i];
+        lib_suffix_len = strlen(lib_suffix);
+
+        for (int j = 0; j < SP_ARRAY_ELEMS(clibs_dirs); j++) {
+            int cdir_len = strlen(clibs_dirs[j]);
+            int path_len = cdir_len + lib_len + lib_suffix_len + 1;
+            char *path = malloc(path_len);
+            memcpy(path, clibs_dirs[j], cdir_len);
+            memcpy(path + cdir_len, lib, lib_len);
+            memcpy(path + cdir_len + lib_len, lib_suffix, lib_suffix_len);
+            path[path_len - 1] = '\0';
+
+            void *libp = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+            free(path);
+
+            if (!libp)
+                continue;
+
+            int sym_name_len = sym_prefix_len + lib_len + 1;
+            char *sym_name = malloc(sym_name_len);
+            memcpy(sym_name, sym_prefix, sym_prefix_len);
+            memcpy(sym_name + sym_prefix_len, lib, lib_len);
+            sym_name[sym_name_len - 1] = '\0';
+
+            void *sym = dlsym(libp, sym_name);
+            free(sym_name);
+            if (sym) {
+                luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1);
+                luaL_requiref(L, lib, sym, 1);
+                lua_pop(L, 1);
+                return 0;
+            }
+        }
+    }
+
+    /* Native Lua library */
+    lib_suffix = ".lua";
+    lib_suffix_len = strlen(lib_suffix);
+
+    static const char *libs_dirs[] = {
+        "./",
+        LUA_LDIR,
+        LUA_LDIR2,
+    };
+
+    for (int i = 0; i < SP_ARRAY_ELEMS(libs_dirs); i++) {
+        int dir_len = strlen(libs_dirs[i]);
+        int path_len = dir_len + lib_len + lib_suffix_len + 1;
+        char *path = malloc(path_len);
+        memcpy(path, libs_dirs[i], dir_len);
+        memcpy(path + dir_len, lib, lib_len);
+        memcpy(path + dir_len + lib_len, lib_suffix, lib_suffix_len);
+        path[path_len - 1] = '\0';
+
+        if (access(path, F_OK))
+            continue;
+
+        luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1);
+
+        int ret = luaL_loadfilex(L, path, "bt");
+        if (ret) {
+            free(path);
+            return AVERROR_EXTERNAL;
+        }
+
+        lua_pushstring(L, lib);
+        lua_pushstring(L, path);
+        free(path);
+        lua_call(L, 2, 1);
+        if (!lua_istable(L, -1))
+            return AVERROR(EINVAL);
+
+        lua_setglobal(L, lib);
+
+        return 0;
+    }
+
+    return AVERROR(ENOENT);
 }
 
 int sp_create_lua_ctx(lua_State **dst, void *ctx, const char *lua_libs_list)
@@ -2043,6 +2141,8 @@ int sp_create_lua_ctx(lua_State **dst, void *ctx, const char *lua_libs_list)
     char *save, *token = av_strtok(list, ",", &save);
     while (token) {
         if ((err = sp_load_lua_library(L, token)) < 0) {
+            sp_log(ctx, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
+                   token, av_err2str(err));
             av_free(list);
             lua_close(L);
             return err;

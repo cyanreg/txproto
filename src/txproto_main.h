@@ -24,6 +24,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+#include <luaconf.h>
 
 #include "logging.h"
 #include "utils.h"

@@ -24,7 +24,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
-void sp_set_thread_name_self(const char *name)
+static inline void sp_set_thread_name_self(const char *name)
 {
     pthread_t self = pthread_self();
     if (pthread_setname_np(self, name) == ERANGE) {
@@ -35,7 +35,7 @@ void sp_set_thread_name_self(const char *name)
     }
 }
 #else
-void sp_set_thread_name_self(const char *name)
+static inline void sp_set_thread_name_self(const char *name)
 {
     return;
 }
@@ -48,3 +48,6 @@ void sp_set_thread_name_self(const char *name)
 #else
 #define noreturn
 #endif
+
+/* TODO Windows */
+#include <dlfcn.h>

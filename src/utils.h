@@ -24,6 +24,8 @@
 #include <libavutil/buffer.h>
 #include <libavutil/avstring.h>
 
+#include "os_compat.h"
+
 int      sp_make_wakeup_pipe (int pipes[2]);
 void     sp_write_wakeup_pipe(int pipes[2], int64_t val);
 int64_t  sp_flush_wakeup_pipe(int pipes[2]);
@@ -304,9 +306,6 @@ int64_t sp_sliding_win(SlidingWinCtx *ctx, int64_t num, int64_t pts,
 /* AVDictionary to AVOption */
 int sp_set_avopts_pos(void *log, void *avobj, void *posargs, AVDictionary *dict);
 int sp_set_avopts(void *log, void *avobj, AVDictionary *dict);
-
-/* Thread name setter wrapper */
-void sp_set_thread_name_self(const char *name);
 
 /* Workaround */
 static inline int sp_assert(int cond)

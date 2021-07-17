@@ -57,6 +57,12 @@ dependencies = [
     cc.find_library('m', required : true),
 ]
 
+# Check for libdl
+libdl = cc.find_library('dl', required : false)
+if libdl.found()
+    dependencies += libdl
+endif
+
 # Check for wmain support (Windows/MinGW)
 if cc.links('int wmain() { return 0; }', args: '-municode')
      conf.set('HAVE_WMAIN', 1)

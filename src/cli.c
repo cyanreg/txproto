@@ -409,13 +409,15 @@ static void *cli_thread_fn(void *arg)
             } else if (mem_used >= 1024) {
                 mem_used_f = (double)mem_used / 1024.0;
                 mem_used_suffix = "KiB";
-            } else {
-                mem_used_f = (double)mem_used;
-                mem_used_suffix = "B";
             }
 
-            sp_log(&cli_state, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
-                   mem_used_f, mem_used_suffix);
+            if (mem_used >= 1024) {
+                sp_log(&cli_state, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
+                       mem_used_f, mem_used_suffix);
+            } else {
+                sp_log(&cli_state, SP_LOG_INFO, "Lua memory freed: %li B\n",
+                       mem_used);
+            }
 
             goto line_end;
         }

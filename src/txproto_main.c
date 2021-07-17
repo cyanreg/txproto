@@ -1925,7 +1925,6 @@ static void cleanup_fn(TXMainContext *ctx)
     pthread_mutex_destroy(&ctx->lock);
 
     /* Free any auxiliary data */
-    av_dict_free(&ctx->lua_namespace);
     sp_class_free(ctx);
     av_free(ctx);
 }
@@ -2010,22 +2009,64 @@ static const luaL_Reg lua_internal_lib_fns[] = {
     { NULL, NULL },
 };
 
-void sp_load_lua_library(TXMainContext *ctx, const char *lib)
+int sp_load_lua_library(lua_State *L, const char *lib)
 {
-    lua_State *L = ctx->lua;
-
     int cnt = 0;
     while (lua_internal_lib_fns[cnt].name) {
         if (!strcmp(lua_internal_lib_fns[cnt].name, lib)) {
             luaL_requiref(L, lua_internal_lib_fns[cnt].name,
                           lua_internal_lib_fns[cnt].func, 1);
-            lua_pop(ctx->lua, 1);
-            return;
+            lua_pop(L, 1);
+            return 0;
         }
         cnt++;
     }
 
     /* TODO: Here we'd load a custom lib */
+
+    return AVERROR(ENOTSUP);
+}
+
+int sp_create_lua_ctx(lua_State **dst, void *ctx, const char *lua_libs_list)
+{
+    int err;
+
+    /* Create Lua context */
+    lua_State *L = lua_newstate(lua_alloc_fn, ctx);
+
+    lua_gc(L, LUA_GCGEN);
+    lua_setwarnf(L, lua_warning_handler, ctx);
+    lua_atpanic(L, lua_panic_handler);
+
+    /* Load needed Lua libraries */
+    char *list = av_strdup(lua_libs_list);
+    char *save, *token = av_strtok(list, ",", &save);
+    while (token) {
+        if ((err = sp_load_lua_library(L, token)) < 0) {
+            av_free(list);
+            lua_close(L);
+            return err;
+        }
+        token = av_strtok(NULL, ",", &save);
+    }
+    av_free(list);
+
+    /* Load our lib */
+    PUSH_CONTEXTED_INTERFACE(L, lua_lib_fns, (void *[]){ ctx });
+    lua_setglobal(L, LUA_PUB_PREFIX);
+
+    /* Load Lua utilities */
+    err = luaL_loadbufferx(L, utils_lua_bin, utils_lua_bin_len,
+                           "built-in utilities", "b");
+    if (err) {
+        sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(L, -1));
+        lua_close(L);
+        return AVERROR_EXTERNAL;
+    }
+
+    *dst = L;
+
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -2155,54 +2196,10 @@ int main(int argc, char *argv[])
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
 
-    /* Create Lua context */
-    ctx->lua = lua_newstate(lua_alloc_fn, ctx);
-    lua_gc(ctx->lua, LUA_GCGEN);
-    lua_setwarnf(ctx->lua, lua_warning_handler, ctx);
-    lua_atpanic(ctx->lua, lua_panic_handler);
-
-    { /* Load needed Lua libraries */
-        char *save, *token = av_strtok(lua_libs_list, ",", &save);
-        while (token) {
-            sp_load_lua_library(ctx, token);
-            token = av_strtok(NULL, ",", &save);
-        }
-        av_free(lua_libs_list);
-    }
-
-    { /* Record "junk" globals */
-        lua_pushglobaltable(ctx->lua);
-        lua_pushnil(ctx->lua);
-        while (lua_next(ctx->lua, -2)) {
-            const char *name = lua_tostring(ctx->lua, -2);
-            int cnt = 0;
-            int match = 0;
-            while (lua_internal_lib_fns[cnt].name) {
-                if (!strcmp(name, lua_internal_lib_fns[cnt].name)) {
-                    match = 1;
-                    break;
-                }
-                cnt++;
-            }
-            if (!match)
-                av_dict_set(&ctx->lua_namespace, name, "init", 0);
-            lua_pop(ctx->lua, 1);
-        }
-        lua_pop(ctx->lua, 1);
-    }
-
-    /* Load our lib */
-    PUSH_CONTEXTED_INTERFACE(ctx->lua, lua_lib_fns, (void *[]){ ctx });
-    lua_setglobal(ctx->lua, LUA_PUB_PREFIX);
-
-    /* Load Lua utilities */
-    err = luaL_loadbufferx(ctx->lua, utils_lua_bin, utils_lua_bin_len,
-                           "built-in utilities", "b");
-    if (err) {
-        sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(ctx->lua, -1));
-        err = AVERROR_EXTERNAL;
+    err = sp_create_lua_ctx(&ctx->lua, ctx, lua_libs_list);
+    av_free(lua_libs_list);
+    if (err < 0)
         goto end;
-    }
 
     /* Run the utils script to put it into memory */
     if (lua_pcall(ctx->lua, 0, 0, 0) != LUA_OK) {

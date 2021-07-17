@@ -51,6 +51,41 @@ static const char *built_in_commands[] = {
     NULL,
 };
 
+static const char *lua_ctx_default_blacklist[] = {
+    "dofile",
+    "type",
+    "next",
+    "getmetatable",
+    "warn",
+    "coroutine",
+    "tonumber",
+    "rawset",
+    "rawequal",
+    "error",
+    "math",
+    "pairs",
+    "utf8",
+    "tostring",
+    "select",
+    "_VERSION",
+    "load",
+    "pcall",
+    "loadfile",
+    "string",
+    "collectgarbage",
+    "base",
+    "assert",
+    "rawget",
+    "setmetatable",
+    "table",
+    "print",
+    "rawlen",
+    "debug",
+    "xpcall",
+    "_G",
+    "ipairs",
+};
+
 static char **input_completion(const char *line, int start, int end)
 {
     char **matches = NULL;
@@ -77,11 +112,18 @@ static char **input_completion(const char *line, int start, int end)
     while (lua_next(cli_state.lua, -2)) {
         name = lua_tostring(cli_state.lua, -2);
         name_len = strlen(name);
-        if (!av_dict_get(cli_state.ctx->lua_namespace, name, NULL, 0)) {
-            if (accept_all || !strncmp(name, line, SPMIN(name_len, line_len))) {
+        if (accept_all) {
+            int i;
+            for (i = 0; i < SP_ARRAY_ELEMS(lua_ctx_default_blacklist); i++)
+                if (!strcmp(lua_ctx_default_blacklist[i], name))
+                    break;
+            if (i == SP_ARRAY_ELEMS(lua_ctx_default_blacklist)) {
                 matches = realloc(matches, sizeof(*matches) * (num_matches + 1));
                 matches[num_matches++] = strdup(name);
             }
+        } else if (!strncmp(name, line, SPMIN(name_len, line_len))) {
+            matches = realloc(matches, sizeof(*matches) * (num_matches + 1));
+            matches[num_matches++] = strdup(name);
         }
         lua_pop(cli_state.lua, 1);
     }
@@ -165,14 +207,29 @@ static void *cli_thread_fn(void *arg)
         LUA_LOCK_INTERFACE();
         atomic_store(&cli_state.do_not_update, 1);
 
-        if (!strcmp("help", line)) {
-            sp_log_sync("Lua globals:\n");
+        if (!strncmp("help", line, strlen("help"))) {
+            sp_log_sync("Lua globals (\"help all\" to list all):\n");
+            char *line_mod = av_strdup(line);
+            char *save, *token = av_strtok(line_mod, " ", &save);
+            token = av_strtok(NULL, " ", &save); /* Skip "help" */
+            int list_all = token ? !strcmp(token, "all") : 0;
+            av_free(line_mod);
+
             lua_pushglobaltable(cli_state.lua);
             lua_pushnil(cli_state.lua);
             while (lua_next(cli_state.lua, -2)) {
                 name = lua_tostring(cli_state.lua, -2);
-                if (!av_dict_get(cli_state.ctx->lua_namespace, name, NULL, 0))
+
+                int i = 0;
+                if (!list_all) {
+                    for (; i < SP_ARRAY_ELEMS(lua_ctx_default_blacklist); i++)
+                        if (!strcmp(lua_ctx_default_blacklist[i], name))
+                            break;
+                }
+
+                if (list_all || i == SP_ARRAY_ELEMS(lua_ctx_default_blacklist))
                     sp_log_sync("    %s\n", name);
+
                 lua_pop(cli_state.lua, 1);
             }
             lua_pop(cli_state.lua, 1);
@@ -253,18 +310,27 @@ static void *cli_thread_fn(void *arg)
                    sp_bufferlist_len(ctx->commit_list));
             goto line_end;
         } else if (!strncmp(line, "require", strlen("require"))) {
-            char *save, *token = av_strtok(line, " ", &save);
-            token = av_strtok(NULL, " ", &save); /* Skip "require" */
+            char *line_mod = av_strdup(line);
+            char *save, *token = av_strtok(line_mod, " ", &save);
+            token = av_strtok(NULL, " ,", &save); /* Skip "require" */
+
             if (!token) {
                 sp_log(&cli_state, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
+                av_free(line_mod);
                 goto line_end;
             }
 
             while (token) {
-                sp_load_lua_library(ctx, token);
-                token = av_strtok(NULL, " ", &save);
+                if ((ret = sp_load_lua_library(ctx->lua, token)) < 0) {
+                    sp_log(&cli_state, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
+                           token, av_err2str(ret));
+                    av_free(line_mod);
+                    goto line_end;
+                }
+                token = av_strtok(NULL, " ,", &save);
             }
 
+            av_free(line_mod);
             goto line_end;
         } else if (!strncmp(line, "info", strlen("info"))) {
             char *line_mod = av_strdup(line);

@@ -37,7 +37,6 @@ typedef struct TXMainContext {
     lua_State *lua;
     pthread_mutex_t lock;
     int lua_exit_code;
-    AVDictionary *lua_namespace;
 
     int source_update_cb_ref;
 
@@ -71,4 +70,7 @@ typedef struct TXMainContext {
 int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name);
 
 /* Load a library into the Lua context */
-void sp_load_lua_library(TXMainContext *ctx, const char *lib);
+int sp_load_lua_library(lua_State *L, const char *lib);
+
+/* Create a Lua context and fill it with our API */
+int sp_create_lua_ctx(lua_State **dst, void *ctx, const char *lua_libs_list);

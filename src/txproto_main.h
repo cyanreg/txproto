@@ -32,8 +32,18 @@
 #include "version.h"
 #include "../config.h"
 
+typedef struct LuaLoadedLibrary {
+    char *name;
+    char *path;
+    void *libp;
+    void *lib_open_sym;
+} LuaLoadedLibrary;
+
 typedef struct TXMainContext {
     SPClass *class;
+
+    LuaLoadedLibrary *loaded_lib_list;
+    int loaded_lib_list_len;
 
     lua_State *lua;
     pthread_mutex_t lock;
@@ -70,8 +80,8 @@ typedef struct TXMainContext {
 /* Load file into the Lua context */
 int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name);
 
-/* Load a library into the Lua context */
-int sp_load_lua_library(lua_State *L, const char *lib);
+/* Load a library into the given Lua context */
+int sp_load_lua_library(TXMainContext *ctx, lua_State *L, const char *lib);
 
 /* Create a Lua context and fill it with our API */
-int sp_create_lua_ctx(lua_State **dst, void *ctx, const char *lua_libs_list);
+int sp_create_lua_ctx(TXMainContext *ctx, lua_State **dst, const char *lua_libs_list);

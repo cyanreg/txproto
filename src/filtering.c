@@ -291,6 +291,7 @@ static int rename_ctx(FilterContext *ctx, const char *name, const char *filt)
     }
 
     sp_class_set_name(ctx, new_name);
+    av_free(new_name);
 
     return 0;
 }
@@ -766,6 +767,13 @@ static void filter_free(void *opaque, uint8_t *data)
         pthread_join(ctx->filter_thread, NULL);
     }
 
+    pthread_mutex_lock(&ctx->lock);
+
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, ctx);
+    sp_bufferlist_free(&ctx->events);
+
+    avfilter_graph_free(&ctx->graph);
+
     if (ctx->in_pad_names) {
         for (int i = 0; ctx->in_pad_names[i]; i++)
             av_free(ctx->in_pad_names[i]);
@@ -778,6 +786,7 @@ static void filter_free(void *opaque, uint8_t *data)
         av_freep(&ctx->out_pad_names);
     }
 
+    pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);
 
     sp_class_free(ctx);

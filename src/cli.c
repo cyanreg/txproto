@@ -321,7 +321,7 @@ static void *cli_thread_fn(void *arg)
             }
 
             while (token) {
-                if ((ret = sp_load_lua_library(ctx->lua, token)) < 0) {
+                if ((ret = sp_load_lua_library(ctx, ctx->lua, token)) < 0) {
                     sp_log(&cli_state, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
                            token, av_err2str(ret));
                     av_free(line_mod);

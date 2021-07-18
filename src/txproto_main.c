@@ -1992,7 +1992,7 @@ static const struct luaL_Reg lua_lib_fns[] = {
 
 int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name)
 {
-    int err = luaL_loadfilex(ctx->lua, script_name, "bt");
+    int err = luaL_loadfilex(ctx->lua, script_name, "t");
     if (err == LUA_ERRFILE) {
         sp_log(ctx, SP_LOG_ERROR, "File \"%s\" not found!\n", script_name);
         return AVERROR(EINVAL);
@@ -2133,7 +2133,7 @@ int sp_load_lua_library(TXMainContext *ctx, lua_State *L, const char *lib)
 
         luaL_requiref(L, LUA_LOADLIBNAME, luaopen_package, 1);
 
-        int ret = luaL_loadfilex(L, path, "bt");
+        int ret = luaL_loadfilex(L, path, "t");
         if (ret) {
             free(path);
             return AVERROR_EXTERNAL;

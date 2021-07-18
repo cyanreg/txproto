@@ -1622,8 +1622,8 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
                                      entry->channels, entry->channel_layout);
 
         SET_OPT_STR(map_str, "channel_layout");
-        SET_OPT_INT(entry->sample_rate, "sample_rate");
         SET_OPT_INT(entry->channels, "channels");
+        SET_OPT_INT(entry->sample_rate, "sample_rate");
         SET_OPT_NUM(entry->volume, "volume");
         SET_OPT_STR(av_get_sample_fmt_name(entry->sample_fmt), "format");
 

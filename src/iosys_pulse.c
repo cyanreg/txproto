@@ -389,7 +389,7 @@ static int pulse_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry, AVDictionary 
     int64_t buffer_size = -1;
     const char *buffer_ms = dict_get(opts, "buffer_ms");
     if (buffer_ms && sp_is_number(buffer_ms))
-        buffer_size = SPMAX(lrintf(strtof(buffer_ms, NULL) * 1000), UINT32_MAX);
+        buffer_size = SPMIN(lrintf(strtof(buffer_ms, NULL) * 1000), UINT32_MAX);
     else if (!(buffer_ms && strcmp(buffer_ms, "default")))
         buffer_size = 320 * 1000; /* Divisible by frame sizes of both 1024 and 960 */
 

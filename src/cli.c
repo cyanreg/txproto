@@ -510,6 +510,7 @@ void sp_cli_uninit(void)
     sp_bufferlist_free(&cli_state.events);
 
     if (cli_state.lua_thread_ref != LUA_NOREF && cli_state.lua_thread_ref != LUA_REFNIL) {
+        lua_resetthread(cli_state.ctx->lua);
         luaL_unref(cli_state.ctx->lua, LUA_REGISTRYINDEX, cli_state.lua_thread_ref);
     }
 

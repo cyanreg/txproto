@@ -511,11 +511,16 @@ int sp_log_set_file(const char *path)
 {
     int ret = 0;
     pthread_mutex_lock(&log_lock);
-    if (!log_file) {
-        log_file = av_fopen_utf8(path, "w");
-        if (!log_file)
-            ret = AVERROR(EINVAL);
+
+    if (log_file) {
+        fflush(log_file);
+        fclose(log_file);
     }
+
+    log_file = av_fopen_utf8(path, "w");
+    if (!log_file)
+        ret = AVERROR(errno);
+
     pthread_mutex_unlock(&log_lock);
     return ret;
 }
@@ -535,6 +540,7 @@ void sp_log_end(void)
     pthread_mutex_lock(&term_lock);
     av_dict_free(&log_levels);
     if (log_file) {
+        fflush(log_file);
         fclose(log_file);
         log_file = NULL;
     }

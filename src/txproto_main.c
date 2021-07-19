@@ -2311,10 +2311,11 @@ int main(int argc, char *argv[])
             err = AVERROR(EINVAL);
         case 'h':
             printf("Usage info:\n"
-                   "    -s <path>                     External Lua script name\n"
+                   "    -s <filename>                 External Lua script name to load\n"
                    "    -e <entrypoint>               Entrypoint to call into the custom script\n"
                    "    -r <string1>,<string2>        Additional comma-separated Lua libraries/packages to load\n"
                    "    -V <component>=<level>,...    Per-component log level, set \"global\" or leave component out for global\n"
+                   "    -L <filename>                 Logfile destination (warning: produces huge files)\n"
                    "    -N                            Disable command line interface\n"
                    "    -v                            Print program version\n"
                    "    -h                            Usage help (this)\n"

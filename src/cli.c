@@ -138,8 +138,8 @@ static char **input_completion(const char *line, int start, int end)
         /* libedit wants two empty NULLs if there's a single match and start
          * is not equal to 0. The fuck? So we just always append 2 NULLs */
         matches = realloc(matches, sizeof(*matches) * (num_matches + 2));
+        matches[num_matches + 0] = NULL;
         matches[num_matches + 1] = NULL;
-        matches[num_matches + 2] = NULL;
     }
 
     return matches;

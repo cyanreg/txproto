@@ -2398,7 +2398,7 @@ int main(int argc, char *argv[])
         sp_cli_init(ctx);
 #endif
 
-    sleep(INT_MAX);
+    av_usleep(INT_MAX);
 
 end:
 #ifdef HAVE_LIBEDIT

@@ -174,6 +174,7 @@ static void *cli_thread_fn(void *arg)
     rl_prep_terminal(1);
 
     while ((line = readline(prompt))) {
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
         atomic_store(&cli_state.do_not_update, 1);
 
         if (atomic_load(&cli_state.has_event)) {
@@ -212,6 +213,7 @@ static void *cli_thread_fn(void *arg)
         } else if (!strcmp("quit", line) || !strcmp("exit", line)) {
             atomic_store(&cli_state.do_not_update, 0);
             free(line);
+            pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             break;
         }
 
@@ -449,6 +451,7 @@ line_end_nolock:
         atomic_store(&cli_state.do_not_update, 0);
         av_freep(&line_mod);
         free(line);
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
     }
 
     if (!line)

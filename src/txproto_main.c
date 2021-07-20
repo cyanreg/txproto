@@ -62,6 +62,19 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
     sp_log(opaque, SP_LOG_WARN, "%s%c", msg, contd ? '\0' : '\n');
 }
 
+/* Unlock the Lua interface */
+#define LUA_INTERFACE_END(ret)                \
+    do {                                      \
+        pthread_mutex_unlock(&ctx->lua_lock); \
+        return (ret);                         \
+    } while (0)
+
+/* Lock the Lua interface, preventing other threads from changing it */
+#define LUA_LOCK_INTERFACE()                                      \
+    do {                                                          \
+        pthread_mutex_lock(&ctx->lua_lock);                       \
+    } while (0)
+
 #define LUA_CLEANUP_FN_DEFS(fnprefix, fnname)           \
     av_unused AVBufferRef **cleanup_ref = NULL;         \
     const av_unused char *fn_prefix = fnprefix;         \
@@ -79,13 +92,13 @@ static void lua_warning_handler(void *opaque, const char *msg, int contd)
         lua_pushfstring(L, fmt, __VA_ARGS__);                             \
         if (cleanup_ref && *cleanup_ref)                                  \
             av_buffer_unref(cleanup_ref);                                 \
-        pthread_mutex_unlock(&ctx->lock);                                 \
+        pthread_mutex_unlock(&ctx->lua_lock);                             \
         return lua_error(L);                                              \
     } while (0)
 
 #define LUA_INTERFACE_BOILERPLATE()                                            \
     do {                                                                       \
-        pthread_mutex_lock(&ctx->lock);                                        \
+        pthread_mutex_lock(&ctx->lua_lock);                                    \
         if (lua_gettop(L) != 1)                                                \
             LUA_ERROR("Invalid number of arguments, expected 1, got %i!",      \
                       lua_gettop(L));                                          \
@@ -514,7 +527,7 @@ call:
     }
 
 end:
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     return err;
 }
@@ -524,9 +537,9 @@ static void hook_lua_event_free(void *opaque, uint8_t *data)
     TXMainContext *ctx = opaque;
     HookLuaEventCtx *hook_lua_ctx = (HookLuaEventCtx *)data;
 
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->lua_lock);
     luaL_unref(ctx->lua, LUA_REGISTRYINDEX, hook_lua_ctx->fn_ref);
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     av_buffer_unref(&hook_lua_ctx->ctx_ref);
 
@@ -1436,7 +1449,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
         if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
             sp_log(ctx, SP_LOG_ERROR, "Invalid Lua epoch callback \"nil\"!\n");
-            pthread_mutex_unlock(&ctx->lock);
+            pthread_mutex_unlock(&ctx->lua_lock);
             return AVERROR_EXTERNAL;
         }
 
@@ -1449,7 +1462,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
             sp_log(ctx, SP_LOG_ERROR, "Error calling external epoch callback: %s!\n",
                    lua_tostring(L, -1));
-            pthread_mutex_unlock(&ctx->lock);
+            pthread_mutex_unlock(&ctx->lua_lock);
             return AVERROR_EXTERNAL;
         }
 
@@ -1457,13 +1470,13 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
             sp_log(ctx, SP_LOG_ERROR, "Invalid return value for epoch function, "
                    "expected \"integer\" or \"number\", got \"%s\"!",
                    lua_typename(L, lua_type(L, -1)));
-            pthread_mutex_unlock(&ctx->lock);
+            pthread_mutex_unlock(&ctx->lua_lock);
             return AVERROR_EXTERNAL;
         }
 
         val = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
 
-        pthread_mutex_unlock(&ctx->lock);
+        pthread_mutex_unlock(&ctx->lua_lock);
 
         break;
     }
@@ -1480,9 +1493,9 @@ static void epoch_event_free(void *opaque, uint8_t *data)
 
     av_buffer_unref(&epoch_ctx->src_ref);
 
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->lua_lock);
     luaL_unref(ctx->lua, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     av_free(data);
 }
@@ -1636,7 +1649,7 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         err = AVERROR_EXTERNAL;
     }
 
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     return err;
 }
@@ -1646,9 +1659,9 @@ static void source_event_free(void *opaque, uint8_t *data)
     TXMainContext *ctx = opaque;
     SPSourceEventCbCtx *source_cb_ctx = (SPSourceEventCbCtx *)data;
 
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->lua_lock);
     luaL_unref(ctx->lua, LUA_REGISTRYINDEX, source_cb_ctx->fn_ref);
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     av_free(data);
 }
@@ -1911,7 +1924,7 @@ static void cleanup_fn(TXMainContext *ctx)
     }
 
     /* Activate lock */
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->lua_lock);
 
     /* Shut any Lua threads */
     sp_log_end();
@@ -1930,8 +1943,8 @@ static void cleanup_fn(TXMainContext *ctx)
     av_free(ctx->loaded_lib_list);
 
     /* Everything's guaranteed to be off right now */
-    pthread_mutex_unlock(&ctx->lock);
-    pthread_mutex_destroy(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
+    pthread_mutex_destroy(&ctx->lua_lock);
 
     /* Free any auxiliary data */
     sp_class_free(ctx);
@@ -1955,7 +1968,7 @@ static int lua_quit(lua_State *L)
     if (lua_gettop(L))
         ctx->lua_exit_code = lua_tointeger(L, -1);
 
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     raise(SIGINT);
 
@@ -2216,7 +2229,7 @@ int main(int argc, char *argv[])
     pthread_mutexattr_t main_lock_attr;
     pthread_mutexattr_init(&main_lock_attr);
     pthread_mutexattr_settype(&main_lock_attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&ctx->lock, &main_lock_attr);
+    pthread_mutex_init(&ctx->lua_lock, &main_lock_attr);
 
     sp_log_set_ctx_lvl("global", SP_LOG_INFO);
     sp_log_set_ff_cb();
@@ -2334,6 +2347,17 @@ int main(int argc, char *argv[])
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
 
+    /* Setup signal handlers */
+    int quit = setjmp(quit_loc);
+    if (quit)
+        goto end;
+
+    if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
+        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler: %s!\n",
+               av_err2str(AVERROR(errno)));
+        return AVERROR(EINVAL);
+    }
+
     /* Load Lua context */
     err = sp_create_lua_ctx(ctx, &ctx->lua, lua_libs_list);
     av_free(lua_libs_list);
@@ -2385,15 +2409,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    int quit = setjmp(quit_loc);
-    if (quit)
-        goto end;
-
-    if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler!\n");
-        return AVERROR(EINVAL);
-    }
-
 #ifdef HAVE_LIBEDIT
     if (!disable_cli)
         sp_cli_init(ctx);
@@ -2403,8 +2418,7 @@ int main(int argc, char *argv[])
 
 end:
 #ifdef HAVE_LIBEDIT
-    if (!disable_cli)
-        sp_cli_uninit();
+    sp_cli_uninit();
 #endif
 
     sp_log(ctx, SP_LOG_INFO, "Quitting!\n");

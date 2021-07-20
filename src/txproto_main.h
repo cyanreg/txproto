@@ -46,7 +46,7 @@ typedef struct TXMainContext {
     int loaded_lib_list_len;
 
     lua_State *lua;
-    pthread_mutex_t lock;
+    pthread_mutex_t lua_lock;
     int lua_exit_code;
 
     int source_update_cb_ref;
@@ -63,19 +63,6 @@ typedef struct TXMainContext {
 #define LUA_PRIV_PREFIX "sp"
 #define LUA_PUB_PREFIX "tx"
 #define LUA_API_VERSION (int []){ 0, 1 } /* major, minor */
-
-/* Unlock the Lua interface */
-#define LUA_INTERFACE_END(ret)            \
-    do {                                  \
-        pthread_mutex_unlock(&ctx->lock); \
-        return (ret);                     \
-    } while (0)
-
-/* Lock the Lua interface, preventing other threads from changing it */
-#define LUA_LOCK_INTERFACE()                                      \
-    do {                                                          \
-        pthread_mutex_lock(&ctx->lock);                           \
-    } while (0)
 
 /* Load file into the Lua context */
 int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name);

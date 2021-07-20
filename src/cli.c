@@ -110,7 +110,8 @@ static char **input_completion(const char *line, int start, int end)
     }
 
     TXMainContext *ctx = cli_state.ctx;
-    LUA_LOCK_INTERFACE();
+
+    pthread_mutex_lock(&ctx->lua_lock);
     lua_pushglobaltable(cli_state.lua);
     lua_pushnil(cli_state.lua);
     while (lua_next(cli_state.lua, -2)) {
@@ -132,7 +133,7 @@ static char **input_completion(const char *line, int start, int end)
         lua_pop(cli_state.lua, 1);
     }
     lua_pop(cli_state.lua, 1);
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->lua_lock);
 
     if (matches) {
         /* libedit wants two empty NULLs if there's a single match and start
@@ -178,7 +179,7 @@ static void *cli_thread_fn(void *arg)
         atomic_store(&cli_state.do_not_update, 1);
 
         if (atomic_load(&cli_state.has_event)) {
-            goto passthrough;
+            ; /* Falls through */
         } else if (!strlen(line)) {
             atomic_store(&cli_state.do_not_update, 0);
             free(line);
@@ -217,8 +218,7 @@ static void *cli_thread_fn(void *arg)
             break;
         }
 
-passthrough:
-        LUA_LOCK_INTERFACE();
+        pthread_mutex_lock(&ctx->lua_lock);
 
         if (atomic_load(&cli_state.has_event)) {
             SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
@@ -445,7 +445,7 @@ passthrough:
         lua_pop(cli_state.lua, 1);
 
 line_end:
-        pthread_mutex_unlock(&ctx->lock);
+        pthread_mutex_unlock(&ctx->lua_lock);
 line_end_nolock:
         add_history(line);
         atomic_store(&cli_state.do_not_update, 0);

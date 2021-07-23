@@ -24,20 +24,7 @@
 #include "cli.h"
 #include "logging.h"
 
-static struct {
-    SPClass *class;
-    TXMainContext *ctx;
-    lua_State *lua;
-    int lua_thread_ref; /* Thread ref in the main context */
-
-    atomic_int has_event;
-    atomic_int do_not_update;
-    atomic_int selfquit;
-
-    SPBufferList *events;
-
-    pthread_t thread;
-} cli_state = { 0 };
+_Thread_local TXCLIContext *cli_ctx_tls_ptr = NULL;
 
 static const char *built_in_commands[] = {
     "quit",
@@ -89,6 +76,7 @@ static const char *lua_ctx_default_blacklist[] = {
 
 static char **input_completion(const char *line, int start, int end)
 {
+    TXCLIContext *cli_ctx = cli_ctx_tls_ptr;
     char **matches = NULL;
     int num_matches = 0;
 
@@ -109,13 +97,12 @@ static char **input_completion(const char *line, int start, int end)
         }
     }
 
-    TXMainContext *ctx = cli_state.ctx;
+    lua_State *L = sp_lua_lock_interface(cli_ctx->lua);
 
-    pthread_mutex_lock(&ctx->lua_lock);
-    lua_pushglobaltable(cli_state.lua);
-    lua_pushnil(cli_state.lua);
-    while (lua_next(cli_state.lua, -2)) {
-        name = lua_tostring(cli_state.lua, -2);
+    lua_pushglobaltable(L);
+    lua_pushnil(L);
+    while (lua_next(L, -2)) {
+        name = lua_tostring(L, -2);
         name_len = strlen(name);
         if (accept_all) {
             int i;
@@ -130,10 +117,10 @@ static char **input_completion(const char *line, int start, int end)
             matches = realloc(matches, sizeof(*matches) * (num_matches + 1));
             matches[num_matches++] = strdup(name);
         }
-        lua_pop(cli_state.lua, 1);
+        lua_pop(L, 1);
     }
-    lua_pop(cli_state.lua, 1);
-    pthread_mutex_unlock(&ctx->lua_lock);
+    lua_pop(L, 1);
+    sp_lua_unlock_interface(cli_ctx->lua, 0);
 
     if (matches) {
         /* libedit wants two empty NULLs if there's a single match and start
@@ -148,17 +135,21 @@ static char **input_completion(const char *line, int start, int end)
 
 static void prompt_newline_cb(void *s, int newline_started)
 {
-    if (newline_started) {
+    TXCLIContext *cli_ctx = s;
+
+    if (newline_started)
         printf("\r");
-    } else if (!atomic_load(&cli_state.do_not_update)) {
+    else if (!atomic_load(&cli_ctx->do_not_update))
         rl_forced_update_display();
-    }
 }
 
 static void *cli_thread_fn(void *arg)
 {
     int ret;
-    TXMainContext *ctx = arg;
+    TXCLIContext *cli_ctx = arg;
+    TXMainContext *ctx = cli_ctx->main_ctx;
+    cli_ctx_tls_ptr = cli_ctx;
+
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
     sp_set_thread_name_self("cli");
@@ -176,12 +167,12 @@ static void *cli_thread_fn(void *arg)
 
     while ((line = readline(prompt))) {
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-        atomic_store(&cli_state.do_not_update, 1);
+        atomic_store(&cli_ctx->do_not_update, 1);
 
-        if (atomic_load(&cli_state.has_event)) {
+        if (atomic_load(&cli_ctx->has_event)) {
             ; /* Falls through */
         } else if (!strlen(line)) {
-            atomic_store(&cli_state.do_not_update, 0);
+            atomic_store(&cli_ctx->do_not_update, 0);
             free(line);
             continue;
         } else if (!strncmp(line, "loglevel", strlen("loglevel"))) {
@@ -196,7 +187,7 @@ static void *cli_thread_fn(void *arg)
 
             ret = sp_log_set_ctx_lvl_str(token, lvl);
             if (ret < 0)
-                sp_log(&cli_state, SP_LOG_ERROR, "Invalid verbose level \"%s\", syntax "
+                sp_log(&cli_ctx, SP_LOG_ERROR, "Invalid verbose level \"%s\", syntax "
                        "is loglevel \"component (optional)\" \"level\"!\n", lvl);
 
             goto line_end_nolock;
@@ -207,23 +198,23 @@ static void *cli_thread_fn(void *arg)
 
             ret = sp_log_set_file(token);
             if (ret < 0)
-                sp_log(&cli_state, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
+                sp_log(&cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
                        token, av_err2str(ret));
 
             goto line_end_nolock;
         } else if (!strcmp("quit", line) || !strcmp("exit", line)) {
-            atomic_store(&cli_state.do_not_update, 0);
+            atomic_store(&cli_ctx->do_not_update, 0);
             free(line);
             pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             break;
         }
 
-        pthread_mutex_lock(&ctx->lua_lock);
+        lua_State *L = sp_lua_lock_interface(cli_ctx->lua);
 
-        if (atomic_load(&cli_state.has_event)) {
+        if (atomic_load(&cli_ctx->has_event)) {
             SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
-            sp_eventlist_dispatch(&cli_state, cli_state.events, SP_EVENT_ON_DESTROY, &inp);
-            atomic_store(&cli_state.has_event, 0);
+            sp_eventlist_dispatch(&cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
+            atomic_store(&cli_ctx->has_event, 0);
             goto line_end;
         } else if (!strncmp("help", line, strlen("help"))) {
             sp_log_sync("Lua globals (\"help all\" to list all):\n");
@@ -232,10 +223,10 @@ static void *cli_thread_fn(void *arg)
             token = av_strtok(NULL, " ", &save); /* Skip "help" */
             int list_all = token ? !strcmp(token, "all") : 0;
 
-            lua_pushglobaltable(cli_state.lua);
-            lua_pushnil(cli_state.lua);
-            while (lua_next(cli_state.lua, -2)) {
-                name = lua_tostring(cli_state.lua, -2);
+            lua_pushglobaltable(L);
+            lua_pushnil(L);
+            while (lua_next(L, -2)) {
+                name = lua_tostring(L, -2);
 
                 int i = 0;
                 if (!list_all) {
@@ -247,9 +238,9 @@ static void *cli_thread_fn(void *arg)
                 if (list_all || i == SP_ARRAY_ELEMS(lua_ctx_default_blacklist))
                     sp_log_sync("    %s\n", name);
 
-                lua_pop(cli_state.lua, 1);
+                lua_pop(L, 1);
             }
-            lua_pop(cli_state.lua, 1);
+            lua_pop(L, 1);
 
             sp_log_sync("Built-in functions:\n");
             int cnt = 0;
@@ -268,23 +259,23 @@ static void *cli_thread_fn(void *arg)
             while (token) {
                 if (!script_name) {
                     script_name = token;
-                    if (sp_lfn_loadfile(ctx, script_name) < 0)
+                    if (sp_lua_load_file(cli_ctx->lua, script_name) < 0)
                         break;
-                    if (lua_pcall(cli_state.lua, 0, 0, 0) != LUA_OK) {
-                        sp_log(&cli_state, SP_LOG_ERROR, "Lua script error: %s\n",
-                               lua_tostring(cli_state.lua, -1));
+                    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                        sp_log(&cli_ctx, SP_LOG_ERROR, "Lua script error: %s\n",
+                               lua_tostring(L, -1));
                         break;
                     }
                 } else if (!script_entrypoint) {
                     script_entrypoint = token;
-                    lua_getglobal(cli_state.lua, script_entrypoint);
-                    if (!lua_isfunction(cli_state.lua, -1)) {
-                        sp_log(&cli_state, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
+                    lua_getglobal(L, script_entrypoint);
+                    if (!lua_isfunction(L, -1)) {
+                        sp_log(&cli_ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                                script_entrypoint);
                         break;
                     }
                 } else {
-                    lua_pushstring(cli_state.lua, token);
+                    lua_pushstring(L, token);
                     num_arguments++;
                 }
                 token = av_strtok(NULL, " ", &save);
@@ -292,19 +283,19 @@ static void *cli_thread_fn(void *arg)
 
             /* No error encountered */
             if (!script_name) {
-                sp_log(&cli_state, SP_LOG_ERROR, "Missing path for \"load\"!\n");
+                sp_log(&cli_ctx, SP_LOG_ERROR, "Missing path for \"load\"!\n");
             } else if (!token) {
                 if (script_entrypoint) {
-                    if (lua_pcall(cli_state.lua, num_arguments, 0, 0) != LUA_OK) {
-                        sp_log(&cli_state, SP_LOG_ERROR, "Error running \"%s\": %s\n",
-                               script_entrypoint, lua_tostring(cli_state.lua, -1));
+                    if (lua_pcall(L, num_arguments, 0, 0) != LUA_OK) {
+                        sp_log(&cli_ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
+                               script_entrypoint, lua_tostring(L, -1));
                     }
                 }
             }
 
             goto line_end;
         } else if (!strcmp("stats", line)) {
-            size_t mem_used = 1024*lua_gc(cli_state.lua, LUA_GCCOUNT) + lua_gc(cli_state.lua, LUA_GCCOUNTB);
+            size_t mem_used = 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
             double mem_used_f;
             const char *mem_used_suffix;
             if (mem_used >= 1048576) {
@@ -318,11 +309,11 @@ static void *cli_thread_fn(void *arg)
                 mem_used_suffix = "B";
             }
 
-            sp_log(&cli_state, SP_LOG_INFO, "Lua memory used:     %.2f %s\n",
+            sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory used:     %.2f %s\n",
                    mem_used_f, mem_used_suffix);
-            sp_log(&cli_state, SP_LOG_INFO, "Lua contexts: %i\n",
-                   sp_bufferlist_len(cli_state.ctx->lua_buf_refs));
-            sp_log(&cli_state, SP_LOG_INFO, "Pending commands: %i\n",
+            sp_log(&cli_ctx, SP_LOG_INFO, "Lua contexts: %i\n",
+                   sp_bufferlist_len(cli_ctx->main_ctx->ext_buf_refs));
+            sp_log(&cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
                    sp_bufferlist_len(ctx->commit_list));
             goto line_end;
         } else if (!strncmp(line, "require", strlen("require"))) {
@@ -331,13 +322,13 @@ static void *cli_thread_fn(void *arg)
             token = av_strtok(NULL, " ,", &save); /* Skip "require" */
 
             if (!token) {
-                sp_log(&cli_state, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
+                sp_log(&cli_ctx, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
                 goto line_end;
             }
 
             while (token) {
-                if ((ret = sp_load_lua_library(ctx, ctx->lua, token)) < 0) {
-                    sp_log(&cli_state, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
+                if ((ret = sp_lua_load_library(cli_ctx->lua, token)) < 0) {
+                    sp_log(&cli_ctx, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
                            token, av_err2str(ret));
                     goto line_end;
                 }
@@ -362,54 +353,54 @@ static void *cli_thread_fn(void *arg)
                 }
             }
 
-            lua_pushglobaltable(cli_state.lua);
-            lua_pushnil(cli_state.lua);
-            while (lua_next(cli_state.lua, -2)) {
-                name = lua_tostring(cli_state.lua, -2);
+            lua_pushglobaltable(L);
+            lua_pushnil(L);
+            while (lua_next(L, -2)) {
+                name = lua_tostring(L, -2);
                 if (!strcmp(name, token)) {
                     sp_log_sync("\"%s\": lua %s%s\n",
-                                token, lua_typename(cli_state.lua, lua_type(cli_state.lua, -1)),
-                                (lua_type(cli_state.lua, -1) != LUA_TTABLE &&
-                                 lua_type(cli_state.lua, -1) != LUA_TSTRING) ? "" :
+                                token, lua_typename(L, lua_type(L, -1)),
+                                (lua_type(L, -1) != LUA_TTABLE &&
+                                 lua_type(L, -1) != LUA_TSTRING) ? "" :
                                 ", contents:");
 
-                    if (lua_type(cli_state.lua, -1) == LUA_TTABLE) {
-                        lua_pushnil(cli_state.lua);
-                        while (lua_next(cli_state.lua, -2)) {
+                    if (lua_type(L, -1) == LUA_TTABLE) {
+                        lua_pushnil(L);
+                        while (lua_next(L, -2)) {
                             const char *fname;
 
                             /* If the "key" is a number, we have a keyless table */
-                            if (lua_isnumber(cli_state.lua, -2))
-                                fname = lua_tostring(cli_state.lua, -1);
+                            if (lua_isnumber(L, -2))
+                                fname = lua_tostring(L, -1);
                             else
-                                fname = lua_tostring(cli_state.lua, -2);
+                                fname = lua_tostring(L, -2);
 
-                            const char *type = lua_typename(cli_state.lua, lua_type(cli_state.lua, -1));
+                            const char *type = lua_typename(L, lua_type(L, -1));
                             if (fname)
                                 sp_log_sync("    %s.%s: %s\n", name, fname, type);
                             else
                                 sp_log_sync("    %s\n", type);
 
-                            lua_pop(cli_state.lua, 1);
+                            lua_pop(L, 1);
                         }
-                        lua_pop(cli_state.lua, 1);
-                    } else if (lua_type(cli_state.lua, -1) == LUA_TSTRING) {
-                        sp_log_sync("    %s\n", lua_tostring(cli_state.lua, -1));
+                        lua_pop(L, 1);
+                    } else if (lua_type(L, -1) == LUA_TSTRING) {
+                        sp_log_sync("    %s\n", lua_tostring(L, -1));
                     }
 
-                    lua_pop(cli_state.lua, 2);
+                    lua_pop(L, 2);
                     goto line_end;
                 }
-                lua_pop(cli_state.lua, 1);
+                lua_pop(L, 1);
             }
-            lua_pop(cli_state.lua, 1);
+            lua_pop(L, 1);
 
             sp_log_sync("No info for \"%s\"\n", token);
             goto line_end;
         } else if (!strncmp(line, "run_gc", strlen("run_gc"))) {
-            size_t mem_used = 1024*lua_gc(cli_state.lua, LUA_GCCOUNT) + lua_gc(cli_state.lua, LUA_GCCOUNTB);
-            lua_gc(cli_state.lua, LUA_GCCOLLECT, 0);
-            mem_used -= 1024*lua_gc(cli_state.lua, LUA_GCCOUNT) + lua_gc(cli_state.lua, LUA_GCCOUNTB);
+            size_t mem_used = 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
+            lua_gc(L, LUA_GCCOLLECT, 0);
+            mem_used -= 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
             double mem_used_f;
             const char *mem_used_suffix;
             if (mem_used >= 1048576) {
@@ -421,34 +412,34 @@ static void *cli_thread_fn(void *arg)
             }
 
             if (mem_used >= 1024) {
-                sp_log(&cli_state, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
+                sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
                        mem_used_f, mem_used_suffix);
             } else {
-                sp_log(&cli_state, SP_LOG_INFO, "Lua memory freed: %li B\n",
+                sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory freed: %li B\n",
                        mem_used);
             }
 
             goto line_end;
         }
 
-        ret = luaL_dostring(cli_state.lua, line);
-        if (lua_isstring(cli_state.lua, -1)) {
+        ret = luaL_dostring(L, line);
+        if (lua_isstring(L, -1)) {
             struct tmp {
                 SPClass *class;
             } tmp;
             sp_class_alloc(&tmp, "lua", SP_TYPE_SCRIPT, ctx);
             sp_log(&tmp, ret == LUA_OK ? SP_LOG_INFO : SP_LOG_ERROR,
-                   "%s\n", lua_tostring(cli_state.lua, -1));
+                   "%s\n", lua_tostring(L, -1));
             sp_class_free(&tmp);
         }
 
-        lua_pop(cli_state.lua, 1);
+        lua_pop(L, 1);
 
 line_end:
-        pthread_mutex_unlock(&ctx->lua_lock);
+        sp_lua_unlock_interface(cli_ctx->lua, 0);
 line_end_nolock:
         add_history(line);
-        atomic_store(&cli_state.do_not_update, 0);
+        atomic_store(&cli_ctx->do_not_update, 0);
         av_freep(&line_mod);
         free(line);
         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -457,65 +448,85 @@ line_end_nolock:
     if (!line)
         sp_log_sync("\n"); /* Handles Ctrl+D */
 
-    atomic_store(&cli_state.selfquit, 1);
+    atomic_store(&cli_ctx->selfquit, 1);
 
     raise(SIGINT);
 
     return NULL;
 }
 
-void sp_cli_init(TXMainContext *ctx)
+int sp_cli_init(TXCLIContext **s, TXMainContext *ctx)
 {
-    sp_class_alloc(&cli_state, "cli", SP_TYPE_SCRIPT, ctx);
+    TXCLIContext *cli_ctx = av_mallocz(sizeof(*cli_ctx));
 
-    cli_state.events = sp_bufferlist_new();
+    int err = sp_class_alloc(cli_ctx, "cli", SP_TYPE_SCRIPT, ctx);
+    if (err < 0)
+        return err;
 
-    cli_state.lua = lua_newthread(ctx->lua);
-    cli_state.lua_thread_ref = luaL_ref(ctx->lua, LUA_REGISTRYINDEX);
+    cli_ctx->lua = sp_lua_create_thread(ctx->lua);
+    if (!cli_ctx->lua) {
+        sp_class_free(&cli_ctx);
+        return AVERROR(ENOMEM);
+    }
 
-    cli_state.ctx = ctx;
-    cli_state.has_event = ATOMIC_VAR_INIT(0);
-    cli_state.do_not_update = ATOMIC_VAR_INIT(0);
-    cli_state.selfquit = ATOMIC_VAR_INIT(0);
-    pthread_create(&cli_state.thread, NULL, cli_thread_fn, ctx);
-}
+    cli_ctx->events = sp_bufferlist_new();
+    if (!cli_ctx->events) {
+        sp_lua_close_ctx(&cli_ctx->lua);
+        sp_class_free(&cli_ctx);
+        return AVERROR(ENOMEM);
+    }
 
-int sp_cli_prompt_event(AVBufferRef *event, const char *msg)
-{
-    if (!cli_state.class || atomic_load(&cli_state.has_event))
-        return AVERROR(EINVAL);
+    cli_ctx->main_ctx = ctx;
+    cli_ctx->has_event = ATOMIC_VAR_INIT(0);
+    cli_ctx->do_not_update = ATOMIC_VAR_INIT(0);
+    cli_ctx->selfquit = ATOMIC_VAR_INIT(0);
 
-    sp_eventlist_add(&cli_state, cli_state.events, event);
-    sp_log(&cli_state, SP_LOG_INFO, "%s\n", msg);
-    atomic_store(&cli_state.has_event, 1);
+    pthread_create(&cli_ctx->thread, NULL, cli_thread_fn, cli_ctx);
+
+    *s = cli_ctx;
 
     return 0;
 }
 
-void sp_cli_uninit(void)
+int sp_cli_prompt_event(TXCLIContext *cli_ctx, AVBufferRef *event, const char *msg)
 {
-    if (!cli_state.class)
+    if (!cli_ctx)
+        return 0;
+
+    if (!cli_ctx->class || atomic_load(&cli_ctx->has_event))
+        return AVERROR(EINVAL);
+
+    sp_eventlist_add(&cli_ctx, cli_ctx->events, event);
+    sp_log(&cli_ctx, SP_LOG_INFO, "%s\n", msg);
+    atomic_store(&cli_ctx->has_event, 1);
+
+    return 0;
+}
+
+void sp_cli_uninit(TXCLIContext **s)
+{
+    if (!s || !(*s))
         return;
 
-    if (!atomic_load(&cli_state.selfquit) &&
-        !atomic_load(&cli_state.do_not_update))
-        pthread_cancel(cli_state.thread);
+    TXCLIContext *cli_ctx = *s;
 
-    pthread_join(cli_state.thread, NULL);
+    if (!atomic_load(&cli_ctx->selfquit) &&
+        !atomic_load(&cli_ctx->do_not_update))
+        pthread_cancel(cli_ctx->thread);
+
+    pthread_join(cli_ctx->thread, NULL);
 
     rl_deprep_terminal();
     sp_log_set_prompt_callback(NULL, NULL);
 
-    if (!atomic_load(&cli_state.selfquit) &&
-        !atomic_load(&cli_state.do_not_update))
+    if (!atomic_load(&cli_ctx->selfquit) &&
+        !atomic_load(&cli_ctx->do_not_update))
         sp_log_sync("\n");
 
-    sp_bufferlist_free(&cli_state.events);
+    sp_bufferlist_free(&cli_ctx->events);
 
-    if (cli_state.lua_thread_ref != LUA_NOREF && cli_state.lua_thread_ref != LUA_REFNIL) {
-        lua_resetthread(cli_state.ctx->lua);
-        luaL_unref(cli_state.ctx->lua, LUA_REGISTRYINDEX, cli_state.lua_thread_ref);
-    }
+    sp_lua_close_ctx(&cli_ctx->lua);
 
-    sp_class_free(&cli_state);
+    sp_class_free(cli_ctx);
+    av_freep(s);
 }

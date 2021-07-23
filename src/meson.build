@@ -2,6 +2,10 @@
 sources = [
     'txproto_main.c',
 
+    # Lua
+    'lua_common.c',
+    'lua_api.c',
+
     # Sources
     'iosys_common.c',
 

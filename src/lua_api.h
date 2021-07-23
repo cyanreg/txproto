@@ -18,28 +18,7 @@
 
 #pragma once
 
+#include "lua_common.h"
 #include "txproto_main.h"
 
-typedef struct TXCLIContext {
-    SPClass *class;
-
-    TXMainContext *main_ctx;
-    TXLuaContext *lua;
-
-    atomic_int has_event;
-    atomic_int do_not_update;
-    atomic_int selfquit;
-
-    SPBufferList *events;
-
-    pthread_t thread;
-} TXCLIContext;
-
-/* Init CLI */
-int sp_cli_init(TXCLIContext **s, TXMainContext *ctx);
-
-/* Hook an event to prompt the user to type */
-int sp_cli_prompt_event(TXCLIContext *cli_ctx, AVBufferRef *event, const char *msg);
-
-/* Free CLI state */
-void sp_cli_uninit(TXCLIContext **s);
+int sp_lua_load_main_api(TXLuaContext *lctx, TXMainContext *ctx);

@@ -21,32 +21,32 @@
 #include <signal.h>
 #include <stdatomic.h>
 
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
-#include <luaconf.h>
-
 #include "logging.h"
 #include "utils.h"
 
 #include "version.h"
 #include "../config.h"
 
-typedef struct LuaLoadedLibrary {
-    char *name;
-    char *path;
-    void *libp;
-    void *lib_open_sym;
-} LuaLoadedLibrary;
+enum EpochMode {
+    EP_MODE_OFFSET,   /* Timestamps will start at an offset (value = system time + offset) */
+    EP_MODE_SYSTEM,   /* Timestamps will start at the system arbitrary time (value = 0) */
+    EP_MODE_SOURCE,   /* Timestamps will be set to the first output's PTS */
+    EP_MODE_EXTERNAL, /* A Lua function will give us the epoch */
+};
+
+typedef struct EpochEventCtx {
+    enum EpochMode mode;
+    int64_t value;
+    AVBufferRef *src_ref;
+    int fn_ref;
+} EpochEventCtx;
 
 typedef struct TXMainContext {
     SPClass *class;
 
-    LuaLoadedLibrary *loaded_lib_list;
-    int loaded_lib_list_len;
+    struct TXCLIContext *cli;
+    struct TXLuaContext *lua;
 
-    lua_State *lua;
-    pthread_mutex_t lua_lock;
     int lua_exit_code;
 
     int source_update_cb_ref;
@@ -57,18 +57,8 @@ typedef struct TXMainContext {
 
     SPBufferList *commit_list;
     SPBufferList *discard_list;
-    SPBufferList *lua_buf_refs;
+    SPBufferList *ext_buf_refs;
 } TXMainContext;
 
-#define LUA_PRIV_PREFIX "sp"
-#define LUA_PUB_PREFIX "tx"
-#define LUA_API_VERSION (int []){ 0, 1 } /* major, minor */
-
-/* Load file into the Lua context */
-int sp_lfn_loadfile(TXMainContext *ctx, const char *script_name);
-
-/* Load a library into the given Lua context */
-int sp_load_lua_library(TXMainContext *ctx, lua_State *L, const char *lib);
-
-/* Create a Lua context and fill it with our API */
-int sp_create_lua_ctx(TXMainContext *ctx, lua_State **dst, const char *lua_libs_list);
+#include "cli.h"
+#include "lua_common.h"

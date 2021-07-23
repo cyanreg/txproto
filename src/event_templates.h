@@ -164,5 +164,5 @@ static inline int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn, AVBuffer
             GENERIC_CTRL(d_ref, SP_EVENT_CTRL_START, NULL);                   \
         }                                                                     \
                                                                               \
-        LUA_INTERFACE_END(0);                                                 \
+        return sp_lua_unlock_interface(ctx->lua, 0);                          \
     } while (0);

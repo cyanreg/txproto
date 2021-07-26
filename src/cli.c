@@ -189,6 +189,7 @@ static void *cli_thread_fn(void *arg)
         } else if (!strlen(line)) {
             atomic_store(&cli_ctx->move_newline, 1);
             free(line);
+            pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             continue;
         } else if (!strncmp(line, "loglevel", strlen("loglevel"))) {
             line_mod = av_strdup(line);

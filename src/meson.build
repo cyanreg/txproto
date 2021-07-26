@@ -96,6 +96,7 @@ executable('txproto',
 
 summary({
     'CLI': libedit.found(),
+    'Wayland': have_wayland,
 }, section: 'Interface', bool_yn: true)
 
 summary({

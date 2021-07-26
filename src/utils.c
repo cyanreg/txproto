@@ -408,6 +408,9 @@ void sp_bufferlist_iter_halt(SPBufferList *list)
 
 void sp_bufferlist_free(SPBufferList **s)
 {
+    if (!s || !(*s))
+        return;
+
     SPBufferList *list = *s;
 
     pthread_mutex_lock(&list->lock);
@@ -692,6 +695,10 @@ int sp_eventlist_add_with_dep(void *src_ctx, SPBufferList *list,
 int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void *data)
 {
     int ret = 0, dispatched = 0, num_events;
+    if (!list && type & SP_EVENT_ON_DESTROY)
+        return 0;
+    else if (!list)
+        return AVERROR(EINVAL);
 
     pthread_mutex_lock(&list->lock);
 

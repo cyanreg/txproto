@@ -420,9 +420,11 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     if (ctx->drm_device_ref)
         av_buffer_unref(&ctx->drm_device_ref);
 
-    wl_registry_destroy(ctx->registry);
+    if (ctx->registry)
+        wl_registry_destroy(ctx->registry);
 
-    wl_display_disconnect(ctx->display);
+    if (ctx->display)
+        wl_display_disconnect(ctx->display);
 
     pthread_mutex_destroy(&ctx->lock);
     sp_class_free(ctx);

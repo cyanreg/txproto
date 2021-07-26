@@ -1705,7 +1705,7 @@ static int lua_register_io_cb(lua_State *L)
                 break;
             }
         }
-        if (api_list && !found)
+        if ((api_list && !found) || !ctx->io_api_ctx[i])
             continue;
 
         /* Add and immediately run the event to signal all devices */

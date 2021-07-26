@@ -371,10 +371,13 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     pthread_mutex_lock(&ctx_ref_lock);
 
     WaylandCtx *ctx = (WaylandCtx *)data;
+    pthread_mutex_lock(&ctx->lock);
 
-    sp_write_wakeup_pipe(ctx->wakeup_pipe, AVERROR_EOF);
-    pthread_join(ctx->event_thread, NULL);
-    sp_close_wakeup_pipe(ctx->wakeup_pipe);
+    if (ctx->event_thread) {
+        sp_write_wakeup_pipe(ctx->wakeup_pipe, AVERROR_EOF);
+        pthread_join(ctx->event_thread, NULL);
+        sp_close_wakeup_pipe(ctx->wakeup_pipe);
+    }
 
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
 
@@ -426,6 +429,7 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     if (ctx->display)
         wl_display_disconnect(ctx->display);
 
+    pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);
     sp_class_free(ctx);
     av_free(ctx);
@@ -519,8 +523,10 @@ int sp_wayland_create(AVBufferRef **ref)
     }
 
     WaylandCtx *ctx = av_mallocz(sizeof(*ctx));
-    if (!ctx)
+    if (!ctx) {
+        pthread_mutex_unlock(&ctx_ref_lock);
         return AVERROR(ENOMEM);
+    }
 
     new_ctx_ref = ctx_ref = av_buffer_create((uint8_t *)ctx, sizeof(*ctx),
                                              wayland_uninit, NULL, 0);
@@ -529,12 +535,12 @@ int sp_wayland_create(AVBufferRef **ref)
         return AVERROR(ENOMEM);
     }
 
+    /* Init context lock */
+    pthread_mutex_init(&ctx->lock, NULL);
+
     err = sp_class_alloc(ctx, "wayland_io", SP_TYPE_CONTEXT, NULL);
     if (err < 0)
         goto fail;
-
-    /* Init context lock */
-    pthread_mutex_init(&ctx->lock, NULL);
 
     /* Wakeup pipe */
     ctx->wakeup_pipe[0] = ctx->wakeup_pipe[1] = ctx->display_fd = -1;

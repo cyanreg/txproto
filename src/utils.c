@@ -72,11 +72,15 @@ int sp_make_wakeup_pipe(int pipes[2])
 
 void sp_write_wakeup_pipe(int pipes[2], int64_t val)
 {
+    if ((pipes[0] == -1) || (pipes[1] == -1))
+        return;
+
     (void)write(pipes[1], &val, sizeof(val));
 }
 
 int64_t sp_flush_wakeup_pipe(int pipes[2])
 {
+    sp_assert((pipes[0] >= 0) && (pipes[1] >= 0));
     int64_t res = INT64_MIN;
     (void)read(pipes[0], &res, sizeof(res));
     return res;

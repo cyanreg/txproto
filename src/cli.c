@@ -444,15 +444,9 @@ static void *cli_thread_fn(void *arg)
         }
 
         ret = luaL_dostring(L, line);
-        if (lua_isstring(L, -1)) {
-            struct tmp {
-                SPClass *class;
-            } tmp;
-            sp_class_alloc(&tmp, "lua", SP_TYPE_SCRIPT, ctx);
-            sp_log(&tmp, ret == LUA_OK ? SP_LOG_INFO : SP_LOG_ERROR,
+        if (lua_isstring(L, -1))
+            sp_log(cli_ctx->lua, ret == LUA_OK ? SP_LOG_INFO : SP_LOG_ERROR,
                    "%s\n", lua_tostring(L, -1));
-            sp_class_free(&tmp);
-        }
 
         lua_pop(L, 1);
 

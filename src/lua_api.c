@@ -1386,7 +1386,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         sp_log(ctx, SP_LOG_ERROR, "Warning epoch mode source, using epoch of system!\n");
         val = 0;
         break;
-    case EP_MODE_EXTERNAL:
+    case EP_MODE_EXTERNAL: {
         lua_State *L = sp_lua_lock_interface(ctx->lua);
 
         if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
@@ -1416,7 +1416,7 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
         sp_lua_unlock_interface(ctx->lua, 0);
 
-        break;
+        break; }
     }
 
     atomic_store(&ctx->epoch_value, val);

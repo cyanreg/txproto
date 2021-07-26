@@ -66,7 +66,8 @@ typedef struct WaylandSurface {
 } WaylandSurface;
 
 typedef struct WaylandGraphicsCtx {
-    AVClass *class;
+    SPClass *class;
+
     WaylandCtx *wl;
     AVBufferRef *wl_ref;
 
@@ -983,19 +984,20 @@ static int init(void **s, AVBufferRef **device_ref, const char **vk_inst_ext,
                 enum VkPresentModeKHR *present_mode)
 {
     int err = 0;
+
     WaylandGraphicsCtx *ctx = av_mallocz(sizeof(*ctx));
-    ctx->class = av_mallocz(sizeof(*ctx->class));
-    *ctx->class = (AVClass) {
-        .class_name = av_strdup("wayland_gui"),
-        .item_name  = av_default_item_name,
-        .version    = LIBAVUTIL_VERSION_INT,
-    };
+    if (!ctx)
+        return AVERROR(ENOMEM);
 
     err = sp_wayland_create(&ctx->wl_ref);
     if (err < 0)
         goto fail;
 
     ctx->wl = (WaylandCtx *)ctx->wl_ref->data;
+
+    err = sp_class_alloc(ctx, "wayland_gui", SP_TYPE_VIDEO_SINK, ctx->wl);
+    if (err < 0)
+        goto fail;
 
     ctx->keyboard.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!ctx->keyboard.xkb_ctx) {

@@ -89,7 +89,7 @@ int main(int argc, char *argv[])
 
     err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL);
     if (err < 0)
-        return AVERROR(ENOMEM);
+        return err;
 
     ctx->commit_list = sp_bufferlist_new();
     ctx->discard_list = sp_bufferlist_new();

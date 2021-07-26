@@ -20,20 +20,7 @@
 
 #include "txproto_main.h"
 
-typedef struct TXCLIContext {
-    SPClass *class;
-
-    TXMainContext *main_ctx;
-    TXLuaContext *lua;
-
-    atomic_int has_event;
-    atomic_int do_not_update;
-    atomic_int selfquit;
-
-    SPBufferList *events;
-
-    pthread_t thread;
-} TXCLIContext;
+typedef struct TXCLIContext TXCLIContext;
 
 /* Init CLI */
 int sp_cli_init(TXCLIContext **s, TXMainContext *ctx);

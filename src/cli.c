@@ -24,6 +24,21 @@
 #include "cli.h"
 #include "logging.h"
 
+struct TXCLIContext {
+    SPClass *class;
+
+    TXMainContext *main_ctx;
+    TXLuaContext *lua;
+
+    atomic_int has_event;
+    atomic_int move_newline;
+    atomic_int selfquit;
+
+    SPBufferList *events;
+
+    pthread_t thread;
+};
+
 _Thread_local TXCLIContext *cli_ctx_tls_ptr = NULL;
 
 static const char *built_in_commands[] = {
@@ -139,7 +154,7 @@ static void prompt_newline_cb(void *s, int newline_started)
 
     if (newline_started)
         printf("\r");
-    else if (!atomic_load(&cli_ctx->do_not_update))
+    else if (atomic_load(&cli_ctx->move_newline))
         rl_forced_update_display();
 }
 
@@ -167,12 +182,12 @@ static void *cli_thread_fn(void *arg)
 
     while ((line = readline(prompt))) {
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-        atomic_store(&cli_ctx->do_not_update, 1);
+        atomic_store(&cli_ctx->move_newline, 0);
 
         if (atomic_load(&cli_ctx->has_event)) {
             ; /* Falls through */
         } else if (!strlen(line)) {
-            atomic_store(&cli_ctx->do_not_update, 0);
+            atomic_store(&cli_ctx->move_newline, 1);
             free(line);
             continue;
         } else if (!strncmp(line, "loglevel", strlen("loglevel"))) {
@@ -203,7 +218,7 @@ static void *cli_thread_fn(void *arg)
 
             goto line_end_nolock;
         } else if (!strcmp("quit", line) || !strcmp("exit", line)) {
-            atomic_store(&cli_ctx->do_not_update, 0);
+            atomic_store(&cli_ctx->move_newline, 1);
             free(line);
             pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             break;
@@ -439,7 +454,7 @@ line_end:
         sp_lua_unlock_interface(cli_ctx->lua, 0);
 line_end_nolock:
         add_history(line);
-        atomic_store(&cli_ctx->do_not_update, 0);
+        atomic_store(&cli_ctx->move_newline, 1);
         av_freep(&line_mod);
         free(line);
         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -478,7 +493,7 @@ int sp_cli_init(TXCLIContext **s, TXMainContext *ctx)
 
     cli_ctx->main_ctx = ctx;
     cli_ctx->has_event = ATOMIC_VAR_INIT(0);
-    cli_ctx->do_not_update = ATOMIC_VAR_INIT(0);
+    cli_ctx->move_newline = ATOMIC_VAR_INIT(1);
     cli_ctx->selfquit = ATOMIC_VAR_INIT(0);
 
     pthread_create(&cli_ctx->thread, NULL, cli_thread_fn, cli_ctx);
@@ -510,8 +525,7 @@ void sp_cli_uninit(TXCLIContext **s)
 
     TXCLIContext *cli_ctx = *s;
 
-    if (!atomic_load(&cli_ctx->selfquit) &&
-        !atomic_load(&cli_ctx->do_not_update))
+    if (!atomic_load(&cli_ctx->selfquit))
         pthread_cancel(cli_ctx->thread);
 
     pthread_join(cli_ctx->thread, NULL);
@@ -519,8 +533,7 @@ void sp_cli_uninit(TXCLIContext **s)
     rl_deprep_terminal();
     sp_log_set_prompt_callback(NULL, NULL);
 
-    if (!atomic_load(&cli_ctx->selfquit) &&
-        !atomic_load(&cli_ctx->do_not_update))
+    if (!atomic_load(&cli_ctx->selfquit))
         sp_log_sync("\n");
 
     sp_bufferlist_free(&cli_ctx->events);

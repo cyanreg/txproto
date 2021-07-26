@@ -38,6 +38,11 @@
 jmp_buf quit_loc;
 static void on_quit_signal(int signo)
 {
+    static int signal_received = 0;
+    if (signal_received++) {
+        printf("\nQuitting gracelessly!\n");
+        exit(-1);
+    }
     longjmp(quit_loc, signo);
 }
 

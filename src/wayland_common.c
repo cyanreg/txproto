@@ -554,7 +554,7 @@ int sp_wayland_create(AVBufferRef **ref)
     ctx->display = wl_display_connect(NULL);
     if (!ctx->display) {
         pthread_mutex_unlock(&ctx_ref_lock);
-        sp_log(ctx, SP_LOG_WARN, "Unable to connect to display, backend unavailable.\n");
+        sp_log(ctx, SP_LOG_VERBOSE, "Unable to connect to display, backend unavailable.\n");
         err = AVERROR(ENOSYS);
         goto fail;
     }

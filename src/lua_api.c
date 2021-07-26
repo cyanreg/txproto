@@ -1648,6 +1648,7 @@ static int lua_register_io_cb(lua_State *L)
         ctx->io_api_ctx = av_mallocz(sp_compiled_apis_len * sizeof(*ctx->io_api_ctx));
 
     /* Initialize I/O APIs */
+    int initialized_apis = 0;
     for (int i = 0; i < sp_compiled_apis_len; i++) {
         if (ctx->io_api_ctx[i])
             continue;
@@ -1662,11 +1663,27 @@ static int lua_register_io_cb(lua_State *L)
             continue;
 
         err = sp_compiled_apis[i]->init_sys(&ctx->io_api_ctx[i]);
-        if (err < 0) {
+        if (!api_list && err == AVERROR(ENOSYS)) {
+            continue;
+        } else if (err < 0) {
             FREE_STR_LIST(api_list);
             LUA_ERROR("Unable to load API \"%s\": %s!", sp_compiled_apis[i]->name,
                       av_err2str(err));
         }
+
+        initialized_apis++;
+    }
+
+    if (!initialized_apis) {
+        FREE_STR_LIST(api_list);
+
+        if (api_list)
+            LUA_ERROR("No requested I/O API(s) available of the %i enabled at build time.\n",
+                      sp_compiled_apis_len);
+        else
+            sp_log(ctx, SP_LOG_WARN, "No I/O APIs available.\n");
+
+        return 0;
     }
 
     SP_EVENT_BUFFER_CTX_ALLOC(SPSourceEventCbCtx, source_event_ctx, source_event_free, ctx)

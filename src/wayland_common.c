@@ -431,7 +431,6 @@ static void wayland_uninit(void *opaque, uint8_t *data)
     ctx_ref = NULL;
 
     pthread_mutex_unlock(&ctx_ref_lock);
-    pthread_mutex_destroy(&ctx_ref_lock);
 }
 
 static int find_render_node(char **node)
@@ -546,8 +545,9 @@ int sp_wayland_create(AVBufferRef **ref)
     /* Connect to display */
     ctx->display = wl_display_connect(NULL);
     if (!ctx->display) {
-        sp_log(ctx, SP_LOG_ERROR, "Failed to connect to display!\n");
-        err = AVERROR(EINVAL);
+        pthread_mutex_unlock(&ctx_ref_lock);
+        sp_log(ctx, SP_LOG_WARN, "Unable to connect to display, backend unavailable.\n");
+        err = AVERROR(ENOSYS);
         goto fail;
     }
 
@@ -580,6 +580,5 @@ fail:
 
     *ref = NULL;
 
-    pthread_mutex_unlock(&ctx_ref_lock);
     return err;
 }

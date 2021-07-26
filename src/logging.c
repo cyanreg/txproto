@@ -26,8 +26,12 @@
 #include <libavutil/random_seed.h>
 
 #include "logging.h"
+#include "utils.h"
+
+#define CANARY_PATTERN 0x7e1eca57ca5ab1a9
 
 struct SPClass {
+    uint64_t canary;
     char *name;
     uint32_t id;
     enum SPType type;
@@ -61,6 +65,8 @@ static inline SPClass *get_class(void *ctx)
     struct {
         SPClass *class;
     } *s = ctx;
+
+    sp_assert(s->class->canary != CANARY_PATTERN);
 
     return s->class;
 }
@@ -334,6 +340,7 @@ int sp_class_alloc(void *ctx, const char *name, enum SPType type, void *parent)
     if (!s->class)
         return AVERROR(ENOMEM);
 
+    s->class->canary = CANARY_PATTERN;
     s->class->name = av_strdup(name);
     s->class->type = type;
     s->class->parent = parent;

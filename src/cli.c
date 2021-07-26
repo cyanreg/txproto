@@ -194,6 +194,12 @@ static void *cli_thread_fn(void *arg)
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "loglevel" */
+            if (!token) {
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing loglevel, syntax "
+                       "is loglevel \"component (optional)\" \"level\"!\n");
+                goto line_end_nolock;
+            }
+
             char *lvl = av_strtok(NULL, " ", &save);
             if (!lvl) {
                 lvl = token;
@@ -202,18 +208,18 @@ static void *cli_thread_fn(void *arg)
 
             ret = sp_log_set_ctx_lvl_str(token, lvl);
             if (ret < 0)
-                sp_log(&cli_ctx, SP_LOG_ERROR, "Invalid verbose level \"%s\", syntax "
+                sp_log(cli_ctx, SP_LOG_ERROR, "Invalid loglevel \"%s\", syntax "
                        "is loglevel \"component (optional)\" \"level\"!\n", lvl);
 
             goto line_end_nolock;
         } else if (!strncmp(line, "logfile", strlen("logfile"))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
-            token = av_strtok(NULL, " ", &save); /* Skip "loglevel" */
+            token = av_strtok(NULL, " ", &save); /* Skip "logfile" */
 
             ret = sp_log_set_file(token);
             if (ret < 0)
-                sp_log(&cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
+                sp_log(cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
                        token, av_err2str(ret));
 
             goto line_end_nolock;
@@ -228,7 +234,7 @@ static void *cli_thread_fn(void *arg)
 
         if (atomic_load(&cli_ctx->has_event)) {
             SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
-            sp_eventlist_dispatch(&cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
+            sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
             atomic_store(&cli_ctx->has_event, 0);
             goto line_end;
         } else if (!strncmp("help", line, strlen("help"))) {
@@ -277,7 +283,7 @@ static void *cli_thread_fn(void *arg)
                     if (sp_lua_load_file(cli_ctx->lua, script_name) < 0)
                         break;
                     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                        sp_log(&cli_ctx, SP_LOG_ERROR, "Lua script error: %s\n",
+                        sp_log(cli_ctx, SP_LOG_ERROR, "Lua script error: %s\n",
                                lua_tostring(L, -1));
                         break;
                     }
@@ -285,7 +291,7 @@ static void *cli_thread_fn(void *arg)
                     script_entrypoint = token;
                     lua_getglobal(L, script_entrypoint);
                     if (!lua_isfunction(L, -1)) {
-                        sp_log(&cli_ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
+                        sp_log(cli_ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                                script_entrypoint);
                         break;
                     }
@@ -298,11 +304,11 @@ static void *cli_thread_fn(void *arg)
 
             /* No error encountered */
             if (!script_name) {
-                sp_log(&cli_ctx, SP_LOG_ERROR, "Missing path for \"load\"!\n");
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing path for \"load\"!\n");
             } else if (!token) {
                 if (script_entrypoint) {
                     if (lua_pcall(L, num_arguments, 0, 0) != LUA_OK) {
-                        sp_log(&cli_ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
+                        sp_log(cli_ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
                                script_entrypoint, lua_tostring(L, -1));
                     }
                 }
@@ -324,11 +330,11 @@ static void *cli_thread_fn(void *arg)
                 mem_used_suffix = "B";
             }
 
-            sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory used:     %.2f %s\n",
+            sp_log(cli_ctx, SP_LOG_INFO, "Lua memory used:     %.2f %s\n",
                    mem_used_f, mem_used_suffix);
-            sp_log(&cli_ctx, SP_LOG_INFO, "Lua contexts: %i\n",
+            sp_log(cli_ctx, SP_LOG_INFO, "Lua contexts: %i\n",
                    sp_bufferlist_len(cli_ctx->main_ctx->ext_buf_refs));
-            sp_log(&cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
+            sp_log(cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
                    sp_bufferlist_len(ctx->commit_list));
             goto line_end;
         } else if (!strncmp(line, "require", strlen("require"))) {
@@ -337,13 +343,13 @@ static void *cli_thread_fn(void *arg)
             token = av_strtok(NULL, " ,", &save); /* Skip "require" */
 
             if (!token) {
-                sp_log(&cli_ctx, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing library name(s) for \"require\"!\n");
                 goto line_end;
             }
 
             while (token) {
                 if ((ret = sp_lua_load_library(cli_ctx->lua, token)) < 0) {
-                    sp_log(&cli_ctx, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
+                    sp_log(cli_ctx, SP_LOG_ERROR, "Error loading library \"%s\": %s!\n",
                            token, av_err2str(ret));
                     goto line_end;
                 }
@@ -427,10 +433,10 @@ static void *cli_thread_fn(void *arg)
             }
 
             if (mem_used >= 1024) {
-                sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
+                sp_log(cli_ctx, SP_LOG_INFO, "Lua memory freed: %.2f %s\n",
                        mem_used_f, mem_used_suffix);
             } else {
-                sp_log(&cli_ctx, SP_LOG_INFO, "Lua memory freed: %li B\n",
+                sp_log(cli_ctx, SP_LOG_INFO, "Lua memory freed: %li B\n",
                        mem_used);
             }
 
@@ -511,8 +517,8 @@ int sp_cli_prompt_event(TXCLIContext *cli_ctx, AVBufferRef *event, const char *m
     if (!cli_ctx->class || atomic_load(&cli_ctx->has_event))
         return AVERROR(EINVAL);
 
-    sp_eventlist_add(&cli_ctx, cli_ctx->events, event);
-    sp_log(&cli_ctx, SP_LOG_INFO, "%s\n", msg);
+    sp_eventlist_add(cli_ctx, cli_ctx->events, event);
+    sp_log(cli_ctx, SP_LOG_INFO, "%s\n", msg);
     atomic_store(&cli_ctx->has_event, 1);
 
     return 0;

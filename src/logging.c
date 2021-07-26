@@ -490,6 +490,8 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl)
         res = SP_LOG_DEBUG;
     else if (!strcmp(lvl, "trace"))
         res = SP_LOG_TRACE;
+    else if (!lvl || !component || !strlen(component) || !strlen(lvl))
+        return AVERROR(EINVAL);
     else
         return AVERROR(EINVAL);
 

@@ -21,4 +21,5 @@
 #include "lua_common.h"
 #include "txproto_main.h"
 
+/* Load the main API onto a Lua context */
 int sp_lua_load_main_api(TXLuaContext *lctx, TXMainContext *ctx);

@@ -603,7 +603,7 @@ static int sp_filter_init_graph(FilterContext *ctx)
     if (ctx->dump_graph) {
         char *graph_dump = avfilter_graph_dump(ctx->graph, NULL);
         if (graph_dump)
-            sp_log(NULL, SP_LOG_INFO, "\n%s", graph_dump);
+            sp_log(NULL, SP_LOG_INFO, "\n%s\n", graph_dump);
         av_free(graph_dump);
     }
 

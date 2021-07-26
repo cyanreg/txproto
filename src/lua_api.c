@@ -29,7 +29,7 @@
 #include "filtering.h"
 #include "interface_common.h"
 
-#include "event_templates.h"
+#include "lua_event_templates.h"
 
 #define LUA_PUSH_CONTEXTED_INTERFACE(L, fn_table, upvals) \
     do {                                                  \
@@ -57,12 +57,11 @@
         lua_pushfstring(L, fmt, __VA_ARGS__);                             \
         if (cleanup_ref && *cleanup_ref)                                  \
             av_buffer_unref(cleanup_ref);                                 \
-        return sp_lua_unlock_interface(ctx->lua, lua_error(L));           \
+        return lua_error(L);                                              \
     } while (0)
 
 #define LUA_INTERFACE_BOILERPLATE()                                            \
     do {                                                                       \
-        sp_lua_lock_interface(ctx->lua);                                       \
         if (lua_gettop(L) != 1)                                                \
             LUA_ERROR("Invalid number of arguments, expected 1, got %i!",      \
                       lua_gettop(L));                                          \
@@ -517,7 +516,6 @@ static int lua_generic_hook(lua_State *L)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "hook")
-    sp_lua_lock_interface(ctx->lua);
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -607,7 +605,7 @@ static int lua_generic_hook(lua_State *L)
     if (!(flags & SP_EVENT_FLAG_IMMEDIATE))
         add_commit_fn_to_list(ctx, fn, obj_ref);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_generic_ctrl(lua_State *L)
@@ -617,7 +615,6 @@ static int lua_generic_ctrl(lua_State *L)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "ctrl")
-    sp_lua_lock_interface(ctx->lua);
 
     int num_args = lua_gettop(L);
     if (num_args != 1 && num_args != 2)
@@ -651,7 +648,7 @@ static int lua_generic_ctrl(lua_State *L)
 
     av_dict_free(&opts);
 
-    return sp_lua_unlock_interface(ctx->lua, 0);
+    return 0;
 }
 
 typedef struct SPLinkSourceEncoderCtx {
@@ -798,7 +795,6 @@ static int lua_generic_link(lua_State *L)
     AVBufferRef *obj1 = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj1->data), "link")
-    sp_lua_lock_interface(ctx->lua);
 
     int nargs = lua_gettop(L);
     if (nargs != 1 && nargs != 2)
@@ -915,7 +911,6 @@ static int lua_interface_create_selection(lua_State *L)
     AVBufferRef *iface_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(iface_ref->data), "create_selection")
-    sp_lua_lock_interface(ctx->lua);
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));
@@ -953,7 +948,7 @@ static int lua_interface_create_selection(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_create_interface(lua_State *L)
@@ -961,7 +956,6 @@ static int lua_create_interface(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_interface")
-    sp_lua_lock_interface(ctx->lua);
 
     AVBufferRef *interface_ref = NULL;
     int err = sp_interface_init(&interface_ref);
@@ -979,7 +973,7 @@ static int lua_create_interface(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_create_muxer(lua_State *L)
@@ -1027,7 +1021,7 @@ static int lua_create_muxer(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_create_encoder(lua_State *L)
@@ -1111,7 +1105,7 @@ static int lua_create_encoder(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_create_io(lua_State *L)
@@ -1119,7 +1113,6 @@ static int lua_create_io(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_io")
-    sp_lua_lock_interface(ctx->lua);
 
     int num_args = lua_gettop(L);
     if (num_args != 1 && num_args != 2)
@@ -1148,7 +1141,7 @@ static int lua_create_io(lua_State *L)
     if (!entry) {
         lua_pushnil(L);
         av_dict_free(&opts);
-        return sp_lua_unlock_interface(ctx->lua, 1);
+        return 0;
     }
 
     int err = sp_compiled_apis[i]->init_io(ctx->io_api_ctx[i], entry, opts);
@@ -1169,7 +1162,7 @@ static int lua_create_io(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_filter_command_template(lua_State *L, int is_graph)
@@ -1179,7 +1172,6 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "command")
-    sp_lua_lock_interface(ctx->lua);
 
     /* (graph only) target, commands[] = values[], (optional) flags */
     int args = lua_gettop(L);
@@ -1224,7 +1216,7 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
 
     av_dict_free(&cmdlist);
 
-    return sp_lua_unlock_interface(ctx->lua, 0);
+    return 0;
 }
 
 static int lua_filter_command(lua_State *L)
@@ -1302,7 +1294,7 @@ static int lua_create_filter(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_filtergraph_command(lua_State *L)
@@ -1373,7 +1365,7 @@ static int lua_create_filtergraph(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
@@ -1451,7 +1443,6 @@ static int lua_set_epoch(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_epoch")
-    sp_lua_lock_interface(ctx->lua);
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!",
@@ -1512,7 +1503,7 @@ static int lua_set_epoch(lua_State *L)
     sp_eventlist_add(ctx, ctx->commit_list, epoch_event);
     av_buffer_unref(&epoch_event);
 
-    return sp_lua_unlock_interface(ctx->lua, 0);
+    return 0;
 }
 
 static int lua_commit(lua_State *L)
@@ -1615,7 +1606,6 @@ static int lua_register_io_cb(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "register_io_cb")
-    sp_lua_lock_interface(ctx->lua);
 
     int nb_args = lua_gettop(L);
     if (nb_args != 1 && nb_args != 2)
@@ -1651,7 +1641,7 @@ static int lua_register_io_cb(lua_State *L)
     int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL) {
         FREE_STR_LIST(api_list);
-        return sp_lua_unlock_interface(ctx->lua, 0);
+        return 0;
     }
 
     if (!ctx->io_api_ctx)
@@ -1725,7 +1715,7 @@ static int lua_register_io_cb(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
@@ -1733,7 +1723,6 @@ static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "log")
-    sp_lua_lock_interface(ctx->lua);
 
     int nb_args = lua_gettop(L);
     lua_rotate(L, nb_args, nb_args);
@@ -1758,7 +1747,7 @@ static int lua_log_fn(lua_State *L, enum SPLogLevel lvl)
 
     av_free(rstr);
 
-    return sp_lua_unlock_interface(ctx->lua, 0);
+    return 0;
 }
 
 static int lua_log(lua_State *L)
@@ -1781,7 +1770,6 @@ static int lua_prompt(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt");
-    sp_lua_lock_interface(ctx->lua);
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -1831,7 +1819,7 @@ end:
     LUA_ERROR("Unable to add event: %s!", "txproto was not compiled with libedit enabled");
 #endif
 
-    return sp_lua_unlock_interface(ctx->lua, 1);
+    return 1;
 }
 
 static int lua_api_version(lua_State *L)
@@ -1839,11 +1827,11 @@ static int lua_api_version(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "api_version")
-    sp_lua_lock_interface(ctx->lua);
 
     lua_pushinteger(L, LUA_API_VERSION[0]);
     lua_pushinteger(L, LUA_API_VERSION[1]);
-    return sp_lua_unlock_interface(ctx->lua, 2);
+
+    return 2;
 }
 
 static int lua_quit(lua_State *L)
@@ -1851,7 +1839,6 @@ static int lua_quit(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "quit")
-    sp_lua_lock_interface(ctx->lua);
 
     if (lua_gettop(L) != 0 && lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 0 or 1, got %i!",
@@ -1862,8 +1849,6 @@ static int lua_quit(lua_State *L)
 
     if (lua_gettop(L))
         ctx->lua_exit_code = lua_tointeger(L, -1);
-
-    sp_lua_unlock_interface(ctx->lua, 0);
 
     raise(SIGINT);
 

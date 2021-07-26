@@ -101,13 +101,15 @@ int main(int argc, char *argv[])
     int disable_cli = 0;
     const char *script_name = NULL;
     const char *script_entrypoint = NULL;
+
+    /* io, os and require not loaded due to security concerns */
     char *lua_libs_list = av_strdup(LUA_BASELIBNAME","
                                     LUA_COLIBNAME","
                                     LUA_TABLIBNAME","
                                     LUA_STRLIBNAME","
                                     LUA_UTF8LIBNAME","
                                     LUA_MATHLIBNAME","
-                                    LUA_DBLIBNAME); /* io, os and require not loaded due to security concerns */
+                                    LUA_DBLIBNAME);
 
     /* Options parsing */
     int opt;
@@ -174,15 +176,24 @@ int main(int argc, char *argv[])
             err = AVERROR(EINVAL);
         case 'h':
             printf("Usage info:\n"
-                   "    -s <filename>                 External Lua script name to load\n"
-                   "    -e <entrypoint>               Entrypoint to call into the custom script\n"
-                   "    -r <string1>,<string2>        Additional comma-separated Lua libraries/packages to load\n"
-                   "    -V <component>=<level>,...    Per-component log level, set \"global\" or leave component out for global\n"
-                   "    -L <filename>                 Logfile destination (warning: produces huge files)\n"
-                   "    -N                            Disable command line interface\n"
-                   "    -v                            Print program version\n"
-                   "    -h                            Usage help (this)\n"
-                   "    <trailing arguments>          Given directly to the script's entrypoint to interpret\n"
+                   "    -s <filename>                 "
+                            "External Lua script name to load\n"
+                   "    -e <entrypoint>               "
+                            "Entrypoint to call into the custom script\n"
+                   "    -r <string1>,<string2>        "
+                            "Additional comma-separated Lua libraries/packages to load\n"
+                   "    -V <component>=<level>,...    "
+                            "Per-component log level, set \"global\" or leave component out for global\n"
+                   "    -L <filename>                 "
+                            "Logfile destination (warning: produces huge files)\n"
+                   "    -N                            "
+                            "Disable command line interface\n"
+                   "    -v                            "
+                            "Print program version\n"
+                   "    -h                            "
+                            "Usage help (this)\n"
+                   "    <trailing arguments>          "
+                            "Given directly to the script's entrypoint to interpret\n"
                    );
             goto end;
         }

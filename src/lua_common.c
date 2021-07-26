@@ -263,8 +263,12 @@ int sp_lua_load_library(TXLuaContext *lctx, const char *lib)
     static const char *clibs_dirs[] = {
         "./",
         LUA_CDIR,
+#ifdef LUA_CDIR2
         LUA_CDIR2,
+#endif
+#ifdef LUA_CDIR3
         LUA_CDIR3,
+#endif
     };
 
     static const char *lib_suffixes[] = {
@@ -321,7 +325,9 @@ int sp_lua_load_library(TXLuaContext *lctx, const char *lib)
     static const char *libs_dirs[] = {
         "./",
         LUA_LDIR,
+#ifdef LUA_LDIR2
         LUA_LDIR2,
+#endif
     };
 
     for (int i = 0; i < SP_ARRAY_ELEMS(libs_dirs); i++) {

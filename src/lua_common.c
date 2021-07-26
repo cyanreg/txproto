@@ -60,9 +60,11 @@ void sp_lua_close_ctx(TXLuaContext **s)
     lua_State *L = sp_lua_lock_interface(lctx);
 
     if (lctx->master_thread) {
+        TXLuaContext *mctx = lctx->master_thread;
         lua_resetthread(L);
         luaL_unref(L, LUA_REGISTRYINDEX, lctx->thread_ref);
         av_freep(s);
+        sp_lua_unlock_interface(mctx, 0);
         return;
     }
 

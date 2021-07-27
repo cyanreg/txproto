@@ -153,7 +153,7 @@ static void prompt_newline_cb(void *s, int newline_started)
     TXCLIContext *cli_ctx = s;
 
     if (newline_started)
-        printf("\r");
+        printf("\033[K\r");
     else if (atomic_load(&cli_ctx->move_newline))
         rl_forced_update_display();
 }

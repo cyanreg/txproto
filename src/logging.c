@@ -278,13 +278,14 @@ static void log_ff_cb(void *ctx, int lvl, const char *format, va_list args)
     } tmp_f = { ffmpeg_class };
 
     SPClass top = {
-        .name   = avclass ? (char *)avclass->class_name : "",
+        .name   = (avclass && avclass->item_name(ctx)) ? (char *)avclass->item_name(ctx) : "",
         .parent = &tmp_f,
         .lock   = PTHREAD_MUTEX_INITIALIZER,
+        .type   = SP_TYPE_NONE,
     };
 
     if (avclass) {
-        switch (avclass->category) {
+        switch (avclass->get_category ? avclass->get_category(ctx) : avclass->category) {
         case AV_CLASS_CATEGORY_DEVICE_INPUT:        top.type = SP_TYPE_CONTEXT;      break;
         case AV_CLASS_CATEGORY_DEVICE_OUTPUT:       top.type = SP_TYPE_CONTEXT;      break;
         case AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT:  top.type = SP_TYPE_AUDIO_SOURCE; break;

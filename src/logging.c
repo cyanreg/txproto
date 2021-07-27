@@ -56,7 +56,7 @@ struct SPLogState {
     FILE *log_file;
     AVDictionary *log_levels;
 } static log_ctx = {
-    .last_was_newline = ATOMIC_VAR_INIT(0),
+    .last_was_newline = ATOMIC_VAR_INIT(1),
     .term_lock = PTHREAD_MUTEX_INITIALIZER,
     .file_lock = PTHREAD_MUTEX_INITIALIZER,
     .levels_lock = PTHREAD_MUTEX_INITIALIZER,

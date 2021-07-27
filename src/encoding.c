@@ -78,7 +78,7 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
         ctx->avctx->color_trc       = conf->color_trc;
         ctx->avctx->color_primaries = conf->color_primaries;
 
-        ctx->avctx->gop_size        = ctx->keyframe_interval;
+//        ctx->avctx->gop_size        = ctx->keyframe_interval;
         ctx->avctx->global_quality  = ctx->crf;
 
         ctx->avctx->sample_aspect_ratio = conf->sample_aspect_ratio;

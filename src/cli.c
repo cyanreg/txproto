@@ -242,7 +242,7 @@ static void *cli_thread_fn(void *arg)
             sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
             atomic_store(&cli_ctx->has_event, 0);
             goto line_end;
-        } else if (!strncmp("help ", line, strlen("help "))) {
+        } else if (!strcmp("help", line)) {
             sp_log_sync("Lua globals (\"help all\" to list all):\n");
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);

@@ -39,23 +39,34 @@ struct SPClass {
     pthread_mutex_t lock;
 };
 
-static SPClass log_ff_class = {
-    .name = "ffmpeg",
-    .type = SP_TYPE_EXTERNAL,
-    .lock = PTHREAD_MUTEX_INITIALIZER,
+struct SPLogState {
+    struct {
+        void *ctx;
+        void (*cb)(void *ctx, int newline_started);
+    } prompt;
+
+    atomic_int last_was_newline;
+
+    pthread_mutex_t term_lock;
+    pthread_mutex_t file_lock;
+    pthread_mutex_t levels_lock;
+
+    SPClass ffclass;
+
+    FILE *log_file;
+    AVDictionary *log_levels;
+} static log_ctx = {
+    .last_was_newline = ATOMIC_VAR_INIT(0),
+    .term_lock = PTHREAD_MUTEX_INITIALIZER,
+    .file_lock = PTHREAD_MUTEX_INITIALIZER,
+    .levels_lock = PTHREAD_MUTEX_INITIALIZER,
+
+    .ffclass = (SPClass){
+        .name = "ffmpeg",
+        .type = SP_TYPE_EXTERNAL,
+        .lock = PTHREAD_MUTEX_INITIALIZER,
+    },
 };
-
-static void *prompt_ctx = NULL;
-static void (*prompt_cb)(void *ctx, int newline_started) = NULL;
-
-static atomic_int last_was_newline = ATOMIC_VAR_INIT(0);
-
-static pthread_mutex_t term_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
-static FILE *log_file = NULL;
-
-static pthread_mutex_t levels_lock = PTHREAD_MUTEX_INITIALIZER;
-static AVDictionary *log_levels = NULL;
 
 static inline SPClass *get_class(void *ctx)
 {
@@ -118,7 +129,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
             av_bprintf(&bpc, "(trace)");
     }
 
-    if (class && atomic_load(&last_was_newline)) {
+    if (class && atomic_load(&log_ctx.last_was_newline)) {
         SPClass *parent = get_class(class->parent);
         if (parent && strlen(class->name))
             av_bprintf(&bpc, "[%s%s%s->%s%s%s]",
@@ -152,7 +163,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
         av_bprintf(&bpc, "\033[38;5;28m");
 
     int format_ends_with_newline = format[strlen(format) - 1] == '\n';
-    atomic_store(&last_was_newline, format_ends_with_newline);
+    atomic_store(&log_ctx.last_was_newline, format_ends_with_newline);
 
     if (with_color && colord) {
         if (format_ends_with_newline) {
@@ -180,19 +191,19 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
 
 static int decide_print_line(SPClass *class, enum SPLogLevel lvl)
 {
-    pthread_mutex_lock(&levels_lock);
+    pthread_mutex_lock(&log_ctx.levels_lock);
 
-    AVDictionaryEntry *global_lvl_entry = av_dict_get(log_levels, "global", NULL, 0);
+    AVDictionaryEntry *global_lvl_entry = av_dict_get(log_ctx.log_levels, "global", NULL, 0);
     AVDictionaryEntry *local_lvl_entry = NULL;
     AVDictionaryEntry *parent_lvl_entry = NULL;
 
     if (class) {
-        local_lvl_entry = av_dict_get(log_levels, class->name, NULL, 0);
+        local_lvl_entry = av_dict_get(log_ctx.log_levels, class->name, NULL, 0);
         if (class->parent)
-            parent_lvl_entry = av_dict_get(log_levels, sp_class_get_name(class->parent), NULL, 0);
+            parent_lvl_entry = av_dict_get(log_ctx.log_levels, sp_class_get_name(class->parent), NULL, 0);
     }
 
-    pthread_mutex_unlock(&levels_lock);
+    pthread_mutex_unlock(&log_ctx.levels_lock);
 
     if (local_lvl_entry) {
         int local_lvl = strtol(local_lvl_entry->value, NULL, 10);
@@ -212,8 +223,8 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
 {
     int with_color = 1;
     int print_line = decide_print_line(class, lvl);
-    int log_line = !!log_file;
-    int pre_nl_status = atomic_load(&last_was_newline);
+    int log_line = !!log_ctx.log_file;
+    int pre_nl_status = atomic_load(&log_ctx.last_was_newline);
 
     char *pline = NULL;
     char *lline = NULL;
@@ -225,19 +236,19 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     }
 
     if (pline) {
-        pthread_mutex_lock(&term_lock);
-        if (prompt_cb && pre_nl_status)
-            prompt_cb(prompt_ctx, 1);
+        pthread_mutex_lock(&log_ctx.term_lock);
+        if (log_ctx.prompt.cb && pre_nl_status)
+            log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
         fprintf(lvl <= SP_LOG_ERROR ? stderr : stdout, "%s", pline);
-        if (prompt_cb && atomic_load(&last_was_newline))
-            prompt_cb(prompt_ctx, 0);
-        pthread_mutex_unlock(&term_lock);
+        if (log_ctx.prompt.cb && atomic_load(&log_ctx.last_was_newline))
+            log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
+        pthread_mutex_unlock(&log_ctx.term_lock);
     }
 
     if (lline) {
-        pthread_mutex_lock(&log_lock);
-        fprintf(log_file, "%s", lline);
-        pthread_mutex_unlock(&log_lock);
+        pthread_mutex_lock(&log_ctx.file_lock);
+        fprintf(log_ctx.log_file, "%s", lline);
+        pthread_mutex_unlock(&log_ctx.file_lock);
     }
 
     av_free(pline);
@@ -257,15 +268,15 @@ void sp_log_sync(const char *format, ...)
 {
     va_list args;
     va_start(args, format);
-    pthread_mutex_lock(&log_lock);
+    pthread_mutex_lock(&log_ctx.term_lock);
     vfprintf(stdout, format, args);
-    pthread_mutex_unlock(&log_lock);
+    pthread_mutex_unlock(&log_ctx.term_lock);
     va_end(args);
 }
 
 static void log_ff_cb(void *ctx, int lvl, const char *format, va_list args)
 {
-    SPClass *ffmpeg_class = &log_ff_class;
+    SPClass *ffmpeg_class = &log_ctx.ffclass;
     pthread_mutex_lock(&ffmpeg_class->lock);
 
     const struct {
@@ -503,58 +514,60 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl)
     else
         return AVERROR(EINVAL);
 
-    pthread_mutex_lock(&levels_lock);
-    av_dict_set_int(&log_levels, component, res, 0);
-    pthread_mutex_unlock(&levels_lock);
+    pthread_mutex_lock(&log_ctx.levels_lock);
+    av_dict_set_int(&log_ctx.log_levels, component, res, 0);
+    pthread_mutex_unlock(&log_ctx.levels_lock);
 
     return 0;
 }
 
 void sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
 {
-    pthread_mutex_lock(&levels_lock);
-    av_dict_set_int(&log_levels, component, lvl, 0);
-    pthread_mutex_unlock(&levels_lock);
+    pthread_mutex_lock(&log_ctx.levels_lock);
+    av_dict_set_int(&log_ctx.log_levels, component, lvl, 0);
+    pthread_mutex_unlock(&log_ctx.levels_lock);
 }
 
 int sp_log_set_file(const char *path)
 {
     int ret = 0;
-    pthread_mutex_lock(&log_lock);
+    pthread_mutex_lock(&log_ctx.file_lock);
 
-    if (log_file) {
-        fflush(log_file);
-        fclose(log_file);
+    if (log_ctx.log_file) {
+        fflush(log_ctx.log_file);
+        fclose(log_ctx.log_file);
     }
 
-    log_file = av_fopen_utf8(path, "w");
-    if (!log_file)
+    log_ctx.log_file = av_fopen_utf8(path, "w");
+    if (!log_ctx.log_file)
         ret = AVERROR(errno);
 
-    pthread_mutex_unlock(&log_lock);
+    pthread_mutex_unlock(&log_ctx.file_lock);
     return ret;
 }
 
 void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started))
 {
-    pthread_mutex_lock(&term_lock);
-    prompt_ctx = ctx;
-    prompt_cb = cb;
-    pthread_mutex_unlock(&term_lock);
+    pthread_mutex_lock(&log_ctx.term_lock);
+    log_ctx.prompt.ctx = ctx;
+    log_ctx.prompt.cb = cb;
+    pthread_mutex_unlock(&log_ctx.term_lock);
 }
 
 void sp_log_end(void)
 {
-    pthread_mutex_lock(&levels_lock);
-    pthread_mutex_lock(&log_lock);
-    pthread_mutex_lock(&term_lock);
-    av_dict_free(&log_levels);
-    if (log_file) {
-        fflush(log_file);
-        fclose(log_file);
-        log_file = NULL;
+    pthread_mutex_lock(&log_ctx.levels_lock);
+    pthread_mutex_lock(&log_ctx.file_lock);
+    pthread_mutex_lock(&log_ctx.term_lock);
+
+    if (log_ctx.log_file) {
+        fflush(log_ctx.log_file);
+        fclose(log_ctx.log_file);
+        log_ctx.log_file = NULL;
     }
-    pthread_mutex_unlock(&term_lock);
-    pthread_mutex_unlock(&log_lock);
-    pthread_mutex_unlock(&levels_lock);
+    av_dict_free(&log_ctx.log_levels);
+
+    pthread_mutex_unlock(&log_ctx.term_lock);
+    pthread_mutex_unlock(&log_ctx.file_lock);
+    pthread_mutex_unlock(&log_ctx.levels_lock);
 }

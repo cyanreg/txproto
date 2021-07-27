@@ -50,7 +50,7 @@ dependencies = [
     dependency('vulkan', version: '>= 1.1'),
 
     # lua5.4 required
-    dependency('lua', version: '>=5.4'),
+    dependency('lua', version: ['>= 5.4', '< 5.5']),
 
     # pthreads
     threads_dep,

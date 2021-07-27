@@ -51,6 +51,7 @@ static const char *built_in_commands[] = {
     "logfile",
     "info",
     "run_gc",
+    "clear",
     NULL,
 };
 
@@ -191,7 +192,7 @@ static void *cli_thread_fn(void *arg)
             free(line);
             pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             continue;
-        } else if (!strncmp(line, "loglevel", strlen("loglevel"))) {
+        } else if (!strncmp(line, "loglevel ", strlen("loglevel "))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "loglevel" */
@@ -213,7 +214,7 @@ static void *cli_thread_fn(void *arg)
                        "is loglevel \"component (optional)\" \"level\"!\n", lvl);
 
             goto line_end_nolock;
-        } else if (!strncmp(line, "logfile", strlen("logfile"))) {
+        } else if (!strncmp(line, "logfile ", strlen("logfile "))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "logfile" */
@@ -223,6 +224,9 @@ static void *cli_thread_fn(void *arg)
                 sp_log(cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
                        token, av_err2str(ret));
 
+            goto line_end_nolock;
+        } else if (!strcmp("clear", line)) {
+            sp_log_sync("\033[2J");
             goto line_end_nolock;
         } else if (!strcmp("quit", line) || !strcmp("exit", line)) {
             atomic_store(&cli_ctx->move_newline, 1);
@@ -238,7 +242,7 @@ static void *cli_thread_fn(void *arg)
             sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
             atomic_store(&cli_ctx->has_event, 0);
             goto line_end;
-        } else if (!strncmp("help", line, strlen("help"))) {
+        } else if (!strncmp("help ", line, strlen("help "))) {
             sp_log_sync("Lua globals (\"help all\" to list all):\n");
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
@@ -270,7 +274,7 @@ static void *cli_thread_fn(void *arg)
                 sp_log_sync("    %s\n", name);
 
             goto line_end;
-        } else if (!strncmp(line, "load", strlen("load"))) {
+        } else if (!strncmp(line, "load ", strlen("load "))) {
             char *script_name = NULL;
             char *script_entrypoint = NULL;
 
@@ -338,7 +342,7 @@ static void *cli_thread_fn(void *arg)
             sp_log(cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
                    sp_bufferlist_len(ctx->commit_list));
             goto line_end;
-        } else if (!strncmp(line, "require", strlen("require"))) {
+        } else if (!strncmp(line, "require ", strlen("require "))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ,", &save); /* Skip "require" */
@@ -358,7 +362,7 @@ static void *cli_thread_fn(void *arg)
             }
 
             goto line_end;
-        } else if (!strncmp(line, "info", strlen("info"))) {
+        } else if (!strncmp(line, "info ", strlen("info "))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "info" */
@@ -419,7 +423,7 @@ static void *cli_thread_fn(void *arg)
 
             sp_log_sync("No info for \"%s\"\n", token);
             goto line_end;
-        } else if (!strncmp(line, "run_gc", strlen("run_gc"))) {
+        } else if (!strncmp(line, "run_gc ", strlen("run_gc "))) {
             size_t mem_used = 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
             lua_gc(L, LUA_GCCOLLECT, 0);
             mem_used -= 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);

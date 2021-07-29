@@ -13,111 +13,9 @@ function io_update_cb(identifier, entry)
     --if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_mic_id = identifier end
 end
 
-function dump_table_to_string(node, tree, indentation)
-    local cache, stack, output = {},{},{}
-    local depth = 1
-
-    if type(node) ~= "table" then
-        return "only table type is supported, got " .. type(node)
-    end
-
-    if nil == indentation then indentation = 1 end
-
-    local NEW_LINE = "\n"
-    local TAB_CHAR = " "
-
-    if nil == tree then
-        NEW_LINE = "\n"
-    elseif not tree then
-        NEW_LINE = ""
-        TAB_CHAR = ""
-    end
-
-    local output_str = "{" .. NEW_LINE
-
-    while true do
-        local size = 0
-        for k,v in pairs(node) do
-            size = size + 1
-        end
-
-        local cur_index = 1
-        for k,v in pairs(node) do
-            if (cache[node] == nil) or (cur_index >= cache[node]) then
-
-                if (string.find(output_str,"}",output_str:len())) then
-                    output_str = output_str .. "," .. NEW_LINE
-                elseif not (string.find(output_str,NEW_LINE,output_str:len())) then
-                    output_str = output_str .. NEW_LINE
-                end
-
-                -- This is necessary for working with HUGE tables otherwise we run out of memory using concat on huge strings
-                table.insert(output,output_str)
-                output_str = ""
-
-                local key
-                if (type(k) == "number" or type(k) == "boolean") then
-                    key = "["..tostring(k).."]"
-                else
-                    key = "['"..tostring(k).."']"
-                end
-
-                if (type(v) == "number" or type(v) == "boolean") then
-                    output_str = output_str .. string.rep(TAB_CHAR,depth*indentation) .. key .. " = "..tostring(v)
-                elseif (type(v) == "table") then
-                    output_str = output_str .. string.rep(TAB_CHAR,depth*indentation) .. key .. " = {" .. NEW_LINE
-                    table.insert(stack,node)
-                    table.insert(stack,v)
-                    cache[node] = cur_index+1
-                    break
-                else
-                    output_str = output_str .. string.rep(TAB_CHAR,depth*indentation) .. key .. " = '"..tostring(v).."'"
-                end
-
-                if (cur_index == size) then
-                    output_str = output_str .. NEW_LINE .. string.rep(TAB_CHAR,(depth-1)*indentation) .. "}"
-                else
-                    output_str = output_str .. ","
-                end
-            else
-                -- close the table
-                if (cur_index == size) then
-                    output_str = output_str .. NEW_LINE .. string.rep(TAB_CHAR,(depth-1)*indentation) .. "}"
-                end
-            end
-
-            cur_index = cur_index + 1
-        end
-
-        if (size == 0) then
-            output_str = output_str .. NEW_LINE .. string.rep(TAB_CHAR,(depth-1)*indentation) .. "}"
-        end
-
-        if (#stack > 0) then
-            node = stack[#stack]
-            stack[#stack] = nil
-            depth = cache[node] == nil and depth + 1 or depth - 1
-        else
-            break
-        end
-    end
-
-    -- This is necessary for working with HUGE tables otherwise we run out of memory using concat on huge strings
-    table.insert(output,output_str)
-    output_str = table.concat(output)
-
-    return output_str
-end
-
-function muxer_stats(stats)
---    print("Rate = " .. tostring(stats.bitrate / (1024.0)) .. "Mbps")
-end
-
 function initial_config(...)
     event = tx.register_io_cb(io_update_cb)
     event.destroy()
-
-    --print(dump_table_to_string(io_list, true, 4))
 
     tx.set_epoch(0)
 
@@ -152,7 +50,6 @@ function initial_config(...)
             priv_options = { dump_info = true, low_latency = true },
         })
     muxer_a.link(encoder_a)
-    muxer_a.hook("stats", muxer_stats)
 
     muxer_v = tx.create_muxer({
             out_url = "/dev/null",

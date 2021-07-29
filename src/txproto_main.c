@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
     sp_log_set_ff_cb();
 
     av_max_alloc(SIZE_MAX);
-    av_log_set_level(AV_LOG_INFO);
+    av_log_set_level(AV_LOG_TRACE);
 
     err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL);
     if (err < 0)
@@ -122,7 +122,7 @@ int main(int argc, char *argv[])
             script_entrypoint = optarg;
             break;
         case 'v':
-            printf("%s %s (%s)\n", PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
+            sp_log(ctx, SP_LOG_INFO, "%s %s (%s)\n", PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
             goto end;
         case 'N':
             disable_cli = 1;
@@ -175,7 +175,7 @@ int main(int argc, char *argv[])
             sp_log(ctx, SP_LOG_ERROR, "Unrecognized option \'%c\'!\n", optopt);
             err = AVERROR(EINVAL);
         case 'h':
-            printf("Usage info:\n"
+            sp_log(ctx, SP_LOG_INFO, "Usage info:\n"
                    "    -s <filename>                 "
                             "External Lua script name to load\n"
                    "    -e <entrypoint>               "

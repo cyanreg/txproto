@@ -77,6 +77,15 @@ typedef struct SPClass SPClass;
 /* ffmpeg log callback */
 void sp_log_set_ff_cb(void);
 
+enum SPStatusFlags {
+    SP_STATUS_UNLOCK   = 1 << 0,
+    SP_STATUS_LOCK     = 1 << 1,
+    SP_STATUS_NO_CLEAR = 1 << 2, /* Don't clear the old status */
+};
+
+/* Set a status that will always be on top (except for a prompt, if enabled). */
+int sp_log_set_status(const char *status, enum SPStatusFlags flags);
+
 /* Called once on starting to print a new line, and once after the newline has been printed */
 void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started));
 

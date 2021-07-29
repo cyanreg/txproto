@@ -14,6 +14,11 @@ function io_update_cb(identifier, entry)
     if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo" then audio_mic_id = identifier end
 end
 
+function muxer_stats(stats)
+    statusline = "Encoding, bitrate: " .. math.floor(stats.bitrate / 1000) .. " Kbps"
+    tx.set_status(statusline)
+end
+
 function initial_config(...)
     event = tx.register_io_cb(io_update_cb)
     event.destroy()
@@ -74,6 +79,7 @@ function initial_config(...)
         })
     muxer.link(encoder_v)
     muxer.link(encoder_a)
+    muxer.hook("stats", muxer_stats)
 
     tx.commit()
 end

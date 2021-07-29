@@ -1,8 +1,13 @@
 audio_source_id = nil
 
 function io_update_cb(identifier, entry)
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-FiiO_FiiO_USB_DAC_K1-01.analog-stereo.monitor" then audio_source_id = identifier end
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo.monitor" then audio_source_id = identifier end
+    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_source_id = identifier end
+    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo" then audio_source_id = identifier end
+end
+
+function muxer_stats(stats)
+    statusline = "Encoding, bitrate: " .. math.floor(stats.bitrate / 1000) .. " Kbps"
+    tx.set_status(statusline)
 end
 
 function initial_config(...)
@@ -31,6 +36,7 @@ function initial_config(...)
             priv_options = { dump_info = true, low_latency = false },
         })
     muxer_a.link(encoder_a)
+    muxer_a.hook("stats", muxer_stats)
 
     tx.commit()
 

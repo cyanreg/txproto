@@ -149,14 +149,14 @@ static char **input_completion(const char *line, int start, int end)
     return matches;
 }
 
-static void prompt_newline_cb(void *s, int newline_started)
+static void prompt_newline_cb(void *s, int newline_end)
 {
     TXCLIContext *cli_ctx = s;
 
-    if (newline_started)
-        printf("\033[K\r");
-    else if (atomic_load(&cli_ctx->move_newline))
+    if (newline_end && atomic_load(&cli_ctx->move_newline))
         rl_forced_update_display();
+    else
+        printf("\033[2K\r");
 }
 
 static void *cli_thread_fn(void *arg)
@@ -174,7 +174,7 @@ static void *cli_thread_fn(void *arg)
     char *line = NULL, *line_mod = NULL;
     char *prompt = LUA_PUB_PREFIX " > ";
 
-    sp_log_set_prompt_callback(ctx, prompt_newline_cb);
+    sp_log_set_prompt_callback(cli_ctx, prompt_newline_cb);
 
     rl_readline_name = PROJECT_NAME;
     rl_attempted_completion_function = input_completion;
@@ -192,10 +192,11 @@ static void *cli_thread_fn(void *arg)
             free(line);
             pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             continue;
-        } else if (!strncmp(line, "loglevel ", strlen("loglevel "))) {
+        } else if (!strncmp(line, "loglevel", strlen("loglevel"))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "loglevel" */
+
             if (!token) {
                 sp_log(cli_ctx, SP_LOG_ERROR, "Missing loglevel, syntax "
                        "is loglevel \"component (optional)\" \"level\"!\n");
@@ -214,15 +215,19 @@ static void *cli_thread_fn(void *arg)
                        "is loglevel \"component (optional)\" \"level\"!\n", lvl);
 
             goto line_end_nolock;
-        } else if (!strncmp(line, "logfile ", strlen("logfile "))) {
+        } else if (!strncmp(line, "logfile", strlen("logfile"))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "logfile" */
 
-            ret = sp_log_set_file(token);
-            if (ret < 0)
-                sp_log(cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
-                       token, av_err2str(ret));
+            if (!token) {
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing logfile path!\n");
+            } else {
+                ret = sp_log_set_file(token);
+                if (ret < 0)
+                    sp_log(cli_ctx, SP_LOG_ERROR, "Unable to set logfile to \"%s\": %s!\n",
+                           token, av_err2str(ret));
+            }
 
             goto line_end_nolock;
         } else if (!strcmp("clear", line)) {
@@ -274,7 +279,7 @@ static void *cli_thread_fn(void *arg)
                 sp_log_sync("    %s\n", name);
 
             goto line_end;
-        } else if (!strncmp(line, "load ", strlen("load "))) {
+        } else if (!strncmp(line, "load", strlen("load"))) {
             char *script_name = NULL;
             char *script_entrypoint = NULL;
 
@@ -282,6 +287,7 @@ static void *cli_thread_fn(void *arg)
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "load" */
+
             while (token) {
                 if (!script_name) {
                     script_name = token;
@@ -342,7 +348,7 @@ static void *cli_thread_fn(void *arg)
             sp_log(cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
                    sp_bufferlist_len(ctx->commit_list));
             goto line_end;
-        } else if (!strncmp(line, "require ", strlen("require "))) {
+        } else if (!strncmp(line, "require", strlen("require"))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ,", &save); /* Skip "require" */
@@ -362,7 +368,7 @@ static void *cli_thread_fn(void *arg)
             }
 
             goto line_end;
-        } else if (!strncmp(line, "info ", strlen("info "))) {
+        } else if (!strncmp(line, "info", strlen("info"))) {
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
             token = av_strtok(NULL, " ", &save); /* Skip "info" */
@@ -423,7 +429,7 @@ static void *cli_thread_fn(void *arg)
 
             sp_log_sync("No info for \"%s\"\n", token);
             goto line_end;
-        } else if (!strncmp(line, "run_gc ", strlen("run_gc "))) {
+        } else if (!strncmp(line, "run_gc", strlen("run_gc"))) {
             size_t mem_used = 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
             lua_gc(L, LUA_GCCOLLECT, 0);
             mem_used -= 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);

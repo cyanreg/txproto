@@ -57,7 +57,7 @@ static void *muxing_thread(void *arg)
     SlidingWinCtx sctx_mux = { 0 };
     int64_t last_pos_update = av_gettime_relative();
     int64_t mux_rate = 0;
-    int64_t last_pos = 0;
+    int64_t last_pos = ctx->avf->pb->pos;
     int64_t buf_bytes = 0;
 
     sp_log(ctx, SP_LOG_VERBOSE, "Muxer initialized!\n");

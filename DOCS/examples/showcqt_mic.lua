@@ -24,7 +24,7 @@ function initial_config(...)
         })
 
     filter_av = tx.create_filtergraph({
-            graph = "showcqt=r=60:s=1920x1080:count=8:axisfile=data\\\\:'" .. axis_img,
+            graph = "showcqt=r=60:s=1920x550:count=8:axisfile=data\\\\:'" .. axis_img,
             priv_options = { dump_graph = false },
         })
     filter_av.link(source_mic)
@@ -32,7 +32,7 @@ function initial_config(...)
     encoder_a = tx.create_encoder({
             encoder = "libopus",
             options = {
-                b = 10^3 --[[ Kbps ]] * 256,
+                b = 10^3 --[[ Kbps ]] * 128,
                 application = "audio",
                 frame_duration = 120,
                 vbr = "on",

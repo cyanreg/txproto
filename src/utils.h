@@ -34,6 +34,7 @@ void     sp_close_wakeup_pipe(int pipes[2]);
 #define SPMIN(a,b) ((a) > (b) ? (b) : (a))
 #define SPMAX(a,b) ((a) > (b) ? (a) : (b))
 #define SP_ARRAY_ELEMS(a) (sizeof(a) / sizeof((a)[0]))
+#define SPSWAP(type, a, b) do { type SWAP_tmp = b; b = a; a= SWAP_tmp; } while(0)
 #define SPALIGN(x, a) (((x)+(a)-1)&~((a)-1))
 
 typedef struct SPRationalValue {

@@ -45,7 +45,13 @@ struct SPLogState {
         void (*cb)(void *ctx, int newline_started);
     } prompt;
 
-    atomic_int last_was_newline;
+    struct {
+        char *str;
+        int lines;
+        enum SPStatusFlags lock;
+    } status;
+
+    int last_was_newline;
 
     pthread_mutex_t term_lock;
     pthread_mutex_t file_lock;
@@ -56,7 +62,7 @@ struct SPLogState {
     FILE *log_file;
     AVDictionary *log_levels;
 } static log_ctx = {
-    .last_was_newline = ATOMIC_VAR_INIT(1),
+    .last_was_newline = 1,
     .term_lock = PTHREAD_MUTEX_INITIALIZER,
     .file_lock = PTHREAD_MUTEX_INITIALIZER,
     .levels_lock = PTHREAD_MUTEX_INITIALIZER,
@@ -109,7 +115,8 @@ static inline const char *get_class_color(SPClass *class)
 }
 
 static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
-                        const char *format, va_list args)
+                        const char *format, va_list args, int *ends_in_nl,
+                        int last_was_nl)
 {
     AVBPrint bpc;
     av_bprint_init(&bpc, 256, AV_BPRINT_SIZE_AUTOMATIC);
@@ -129,7 +136,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
             av_bprintf(&bpc, "(trace)");
     }
 
-    if (class && atomic_load(&log_ctx.last_was_newline)) {
+    if (class && last_was_nl) {
         SPClass *parent = get_class(class->parent);
         if (parent && strlen(class->name))
             av_bprintf(&bpc, "[%s%s%s->%s%s%s]",
@@ -163,7 +170,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
         av_bprintf(&bpc, "\033[38;5;28m");
 
     int format_ends_with_newline = format[strlen(format) - 1] == '\n';
-    atomic_store(&log_ctx.last_was_newline, format_ends_with_newline);
+    *ends_in_nl = format_ends_with_newline;
 
     if (with_color && colord) {
         if (format_ends_with_newline) {
@@ -224,32 +231,58 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     int with_color = 1;
     int print_line = decide_print_line(class, lvl);
     int log_line = !!log_ctx.log_file;
-    int pre_nl_status = atomic_load(&log_ctx.last_was_newline);
+    int nl_end, last_nl_end;
+    char *pline = NULL, *lline = NULL;
 
-    char *pline = NULL;
-    char *lline = NULL;
-    if (log_line || print_line) {
-        if (print_line)
-            pline = build_line(class, lvl, with_color, format, args);
-        if (log_line)
-            lline = build_line(class, lvl, 0, format, args);
+    /* Lock needed for log_ctx.last_was_newline */
+    pthread_mutex_lock(&log_ctx.term_lock);
+
+    last_nl_end = log_ctx.last_was_newline;
+
+    if (print_line) {
+        pline = build_line(class, lvl, with_color, format, args, &nl_end, last_nl_end);
+
+        if (pline) {
+            /* Tell CLI to erase its line */
+            if (log_ctx.prompt.cb && last_nl_end)
+                log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
+
+            /* Erase status */
+            if (last_nl_end && log_ctx.status.str) {
+                for (int i = 0; i < log_ctx.status.lines; i++)
+                    printf("\033[2K\033[1F");
+                printf("\033[2K");
+            }
+
+            fprintf(lvl <= SP_LOG_ERROR ? stderr : stdout, "%s", pline);
+
+            /* Reprint status */
+            if (nl_end && log_ctx.status.str)
+                printf("%s", log_ctx.status.str);
+
+            /* Reprint CLI prompt */
+            if (log_ctx.prompt.cb && nl_end)
+                log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
+
+            /* Update newline state */
+            log_ctx.last_was_newline = nl_end;
+        }
     }
 
-    if (pline) {
-        pthread_mutex_lock(&log_ctx.term_lock);
-        if (log_ctx.prompt.cb && pre_nl_status)
-            log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
-        fprintf(lvl <= SP_LOG_ERROR ? stderr : stdout, "%s", pline);
-        if (log_ctx.prompt.cb && atomic_load(&log_ctx.last_was_newline))
-            log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
-        pthread_mutex_unlock(&log_ctx.term_lock);
+    if (log_line) {
+        if (pline && !with_color)
+            SPSWAP(char *, lline, pline);
+        else
+            lline = build_line(class, lvl, 0, format, args, &nl_end, last_nl_end);
+
+        if (lline) {
+            pthread_mutex_lock(&log_ctx.file_lock);
+            fprintf(log_ctx.log_file, "%s", lline);
+            pthread_mutex_unlock(&log_ctx.file_lock);
+        }
     }
 
-    if (lline) {
-        pthread_mutex_lock(&log_ctx.file_lock);
-        fprintf(log_ctx.log_file, "%s", lline);
-        pthread_mutex_unlock(&log_ctx.file_lock);
-    }
+    pthread_mutex_unlock(&log_ctx.term_lock);
 
     av_free(pline);
     av_free(lline);
@@ -268,8 +301,34 @@ void sp_log_sync(const char *format, ...)
 {
     va_list args;
     va_start(args, format);
+    int nl_end = format[strlen(format) - 1] == '\n';
+
     pthread_mutex_lock(&log_ctx.term_lock);
+
+    /* Tell CLI to erase its line */
+    if (log_ctx.prompt.cb && log_ctx.last_was_newline)
+        log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
+
+    /* Erase status */
+    if (log_ctx.last_was_newline && log_ctx.status.str) {
+        for (int i = 0; i < log_ctx.status.lines; i++)
+            printf("\033[2K\033[1F");
+        printf("\033[2K");
+    }
+
     vfprintf(stdout, format, args);
+
+    /* Reprint status */
+    if (nl_end && log_ctx.status.str)
+        printf("%s", log_ctx.status.str);
+
+    /* Reprint CLI prompt */
+    if (log_ctx.prompt.cb && nl_end)
+        log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
+
+    /* Update newline state */
+    log_ctx.last_was_newline = nl_end;
+
     pthread_mutex_unlock(&log_ctx.term_lock);
     va_end(args);
 }
@@ -554,8 +613,92 @@ void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_sta
     pthread_mutex_unlock(&log_ctx.term_lock);
 }
 
+int sp_log_set_status(const char *status, enum SPStatusFlags flags)
+{
+    int status_newlines = 0;
+    char *newstatus = NULL;
+
+    pthread_mutex_lock(&log_ctx.term_lock);
+
+    if (flags & (SP_STATUS_LOCK | SP_STATUS_UNLOCK)) {
+        log_ctx.status.lock = flags & SP_STATUS_LOCK;
+    } else if (log_ctx.status.lock) {
+        pthread_mutex_unlock(&log_ctx.term_lock);
+        return 0;
+    }
+
+    if (!status)
+        goto print;
+
+    int status_len = strlen(status);
+    newstatus = av_malloc(status_len + 1 + 1);
+    if (!newstatus) {
+        pthread_mutex_unlock(&log_ctx.term_lock);
+        return AVERROR(ENOMEM);
+    }
+
+    memcpy(newstatus, status, status_len);
+
+    if (status[status_len - 1] != '\n')
+        newstatus[status_len++] = '\n';
+
+    newstatus[status_len] = '\0';
+
+    int32_t cp;
+    const char *str = newstatus, *end = str + status_len;
+
+    while (str < end) {
+        int err = av_utf8_decode(&cp, (const uint8_t **)&str, end,
+                                 AV_UTF8_FLAG_ACCEPT_ALL);
+        if (err < 0) {
+            printf("Error parsing status string: %s!\n", av_err2str(err));
+            pthread_mutex_unlock(&log_ctx.term_lock);
+            av_free(newstatus);
+            return err;
+        }
+
+        if (cp == '\n')
+            status_newlines++;
+    }
+
+print:
+    /* Tell CLI to erase its line */
+    if (log_ctx.prompt.cb)
+        log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
+
+    /* Erase status if needed */
+    if (!(flags & SP_STATUS_NO_CLEAR) && log_ctx.status.str) {
+        for (int i = 0; i < log_ctx.status.lines; i++)
+            printf("\033[2K\033[1F");
+        printf("\033[2K");
+    }
+
+    /* Free old status and replace it with the new */
+    av_free(log_ctx.status.str);
+    log_ctx.status.str = newstatus;
+    log_ctx.status.lines = status_newlines;
+
+    /* Print new status */
+    if (newstatus)
+        printf("%s", newstatus);
+
+    /* Reprint CLI prompt */
+    if (log_ctx.prompt.cb)
+        log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
+
+    log_ctx.last_was_newline = 1;
+
+    newstatus = NULL;
+
+    pthread_mutex_unlock(&log_ctx.term_lock);
+
+    return 0;
+}
+
 void sp_log_end(void)
 {
+    av_log_set_callback(av_log_default_callback);
+
     pthread_mutex_lock(&log_ctx.levels_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
@@ -565,7 +708,11 @@ void sp_log_end(void)
         fclose(log_ctx.log_file);
         log_ctx.log_file = NULL;
     }
+
     av_dict_free(&log_ctx.log_levels);
+    av_freep(&log_ctx.status.str);
+    log_ctx.status.lines = 0;
+    log_ctx.status.lock = 0;
 
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);

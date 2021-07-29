@@ -1839,6 +1839,26 @@ end:
     return 1;
 }
 
+static int lua_set_status(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_status");
+
+    if (lua_gettop(L) != 1)
+        LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));
+    if (!lua_isstring(L, -1))
+        LUA_ERROR("Invalid argument, expected \"string\" (status), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
+
+    const char *message = lua_tostring(L, -1);
+    int err = sp_log_set_status(message, 0);
+    if (err < 0)
+        LUA_ERROR("Unable to set status: %s!", av_err2str(err));
+
+    return 0;
+}
+
 static int lua_api_version(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -1890,6 +1910,8 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
     { "log", lua_log },
     { "log_warn", lua_log_warn },
     { "log_err", lua_log_err },
+
+    { "set_status", lua_set_status },
 
     { "prompt", lua_prompt },
 

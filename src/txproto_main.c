@@ -208,6 +208,8 @@ int main(int argc, char *argv[])
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
 
+    sp_log_set_status("Initializing...\n", SP_STATUS_LOCK);
+
     /* Setup signal handlers */
     int quit = setjmp(quit_loc);
     if (quit)
@@ -284,12 +286,17 @@ int main(int argc, char *argv[])
         goto end;
 #endif
 
+    /* Unlock status line */
+    sp_log_set_status(NULL, SP_STATUS_UNLOCK);
+
     av_usleep(INT_MAX);
 
 end:
 #ifdef HAVE_LIBEDIT
     sp_cli_uninit(&ctx->cli);
 #endif
+
+    sp_log_set_status(NULL, SP_STATUS_LOCK | SP_STATUS_NO_CLEAR);
 
     err = ctx->lua_exit_code ? ctx->lua_exit_code : err;
     sp_log(ctx, SP_LOG_INFO, "Quitting%s!\n",

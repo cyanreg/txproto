@@ -237,7 +237,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     /* Lock needed for log_ctx.last_was_newline */
     pthread_mutex_lock(&log_ctx.term_lock);
 
-    last_nl_end = log_ctx.last_was_newline;
+    last_nl_end = lvl <= SP_LOG_ERROR ? 1 : log_ctx.last_was_newline;
 
     if (print_line) {
         pline = build_line(class, lvl, with_color, format, args, &nl_end, last_nl_end);

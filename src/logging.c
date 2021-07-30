@@ -242,7 +242,9 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     if (print_line) {
         pline = build_line(class, lvl, with_color, format, args, &nl_end, last_nl_end);
 
-        if (pline) {
+        if (pline && (lvl <= SP_LOG_ERROR)) {
+            fprintf(stderr, "%s", pline);
+        } else if (pline) {
             /* Tell CLI to erase its line */
             if (log_ctx.prompt.cb && last_nl_end)
                 log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);

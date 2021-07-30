@@ -85,7 +85,6 @@ int main(int argc, char *argv[])
     sp_log_set_ff_cb();
 
     av_max_alloc(SIZE_MAX);
-    av_log_set_level(AV_LOG_TRACE);
 
     err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL);
     if (err < 0)
@@ -216,7 +215,7 @@ int main(int argc, char *argv[])
         goto end;
 
     if (signal(SIGINT, on_quit_signal) == SIG_ERR) {
-        av_log(ctx, AV_LOG_ERROR, "Unable to install signal handler: %s!\n",
+        sp_log(ctx, SP_LOG_ERROR, "Unable to install signal handler: %s!\n",
                av_err2str(AVERROR(errno)));
         return AVERROR(EINVAL);
     }

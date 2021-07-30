@@ -23,6 +23,7 @@
 #include <libavutil/avstring.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/cpu.h>
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 {

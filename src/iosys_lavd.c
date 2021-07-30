@@ -17,6 +17,8 @@
  */
 
 #include <stdatomic.h>
+
+#include <libavcodec/avcodec.h>
 #include <libavdevice/avdevice.h>
 #include <libavutil/avstring.h>
 #include <libavutil/time.h>

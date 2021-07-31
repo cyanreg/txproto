@@ -26,6 +26,8 @@
 #include "logging.h"
 #include "utils.h"
 
+#include <zlib.h>
+
 /* Built-in scripts */
 #include "utils.lua.bin.h"
 
@@ -86,6 +88,64 @@ void sp_lua_close_ctx(TXLuaContext **s)
     av_freep(s);
 }
 
+int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len)
+{
+    int ret;
+    z_stream stream = {
+        stream.next_in = (uint8_t *)in,
+        stream.avail_in = len,
+    };
+
+#define CHUNK_SIZE 4096
+    if ((ret = inflateInit2(&stream, MAX_WBITS)) != Z_OK) {
+        sp_log(s, SP_LOG_ERROR, "Error initializing zlib: %s\n", stream.msg);
+        return ret == Z_STREAM_ERROR ? AVERROR(EINVAL) :
+               ret == Z_MEM_ERROR ? AVERROR(ENOMEM) : AVERROR_EXTERNAL;
+    }
+
+    uint8_t *buf_out = av_malloc(CHUNK_SIZE);
+    size_t buf_size = CHUNK_SIZE;
+
+    do {
+        stream.avail_out = buf_size - stream.total_out;
+        stream.next_out = buf_out + stream.total_out;
+
+        ret = inflate(&stream, Z_FINISH);
+        if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
+            sp_log(s, SP_LOG_ERROR, "Error deflating at byte %lu: %s\n",
+                   stream.total_out, stream.msg);
+            inflateEnd(&stream);
+            av_free(buf_out);
+            return AVERROR(EINVAL);
+        }
+
+        if (ret == Z_BUF_ERROR) {
+            buf_size += CHUNK_SIZE;
+            uint8_t *tmp = av_realloc(buf_out, buf_size);
+            if (!tmp) {
+                inflateEnd(&stream);
+                av_free(buf_out);
+                return AVERROR(ENOMEM);
+            }
+            buf_out = tmp;
+        }
+    } while (ret != Z_STREAM_END);
+
+    inflateEnd(&stream);
+
+    lua_State *L = sp_lua_lock_interface(s);
+
+    ret = luaL_loadbufferx(L, buf_out, stream.total_out,
+                           "compressed_chunk", "b");
+    av_free(buf_out);
+    if (ret) {
+        sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", lua_tostring(L, -1));
+        ret = AVERROR_EXTERNAL;
+    }
+
+    return sp_lua_unlock_interface(s, ret);
+}
+
 int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list)
 {
     int err;
@@ -138,13 +198,8 @@ int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list)
     av_free(list);
 
     /* Load Lua utils */
-    err = luaL_loadbufferx(L, utils_lua_bin, utils_lua_bin_len,
-                           "built-in utilities", "b");
-    if (err) {
-        sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(L, -1));
-        err = AVERROR_EXTERNAL;
+    if ((err = sp_lua_load_compressed(lctx, utils_lua_bin, utils_lua_bin_len)))
         goto fail;
-    }
 
     *s = lctx;
 

@@ -35,7 +35,6 @@ build_opts = [
 # Required dependencies
 threads_dep = dependency('threads')
 dependencies = [
-
     # ffmpeg libs
     dependency('libavcodec', version: '>= 58.82.100'),
     dependency('libavformat', version: '>= 58.42.100'),
@@ -51,6 +50,9 @@ dependencies = [
 
     # lua5.4 required
     dependency('lua', version: ['>= 5.4', '< 5.5']),
+
+    # zlib
+    dependency('zlib'),
 
     # pthreads
     threads_dep,

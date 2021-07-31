@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-# xxdi.py - Pure Python3 implementation of 'xxd -i [input] [output]'
+# xxdi.py - Pure Python3 implementation of 'xxd -i [input] [output] with zlib compression'
 import sys
 from functools import partial
 from os.path import basename
 
+import zlib
+
 count = 0
+compression_level = 9 # Best Compression
+mem_level = 9 # Best speed and compression
+strategy = zlib.Z_DEFAULT_STRATEGY
+wbits = zlib.MAX_WBITS # zlib
 
 # Convert '/', '$' and '.' to '_',
 # or if this is stdin just use "stdin" as the name.
@@ -28,14 +34,22 @@ else:
 print("#pragma once\n#include <stdint.h>", file=fd_out)
 print("static const uint8_t %s[] = {" % target_name, file=fd_out)
 
-for block in iter(partial(fd_in.read, 12), b''):
-    fd_out.write('\t')
-    for i in block:
-        print("0x%02x" % i, end=', ', file=fd_out)
-        count += 1;
-    fd_out.write('\n')
+gzip_compress_obj = zlib.compressobj(compression_level,
+                                     zlib.DEFLATED, wbits, mem_level, strategy)
 
-print('};', file=fd_out)
+uncompressed_data = fd_in.read()
+gzipped_data = gzip_compress_obj.compress(uncompressed_data)
+gzipped_data += gzip_compress_obj.flush()
+
+fd_out.write('    ')
+for byte in gzipped_data:
+    if (count + 1 == len(gzipped_data)):
+        print("0x%02x" % byte, end='\n};\n', file=fd_out)
+    elif (count + 1) % 13:
+        print("0x%02x" % byte, end=', ', file=fd_out)
+    else:
+        print("0x%02x" % byte, end=',\n    ', file=fd_out)
+    count += 1;
 
 print('static const size_t %s_len = %d;' % (target_name, count), file=fd_out)
 

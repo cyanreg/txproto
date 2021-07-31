@@ -244,13 +244,10 @@ int main(int argc, char *argv[])
         if ((err = sp_lua_load_file(ctx->lua, script_name)))
             goto end;
     } else {
-        err = luaL_loadbufferx(L, default_lua_bin, default_lua_bin_len,
-                               "built-in script", "b");
-        if (err) {
-            sp_log(ctx, SP_LOG_ERROR, "%s\n", lua_tostring(L, -1));
-            err = AVERROR_EXTERNAL;
+        if ((err = sp_lua_load_compressed(ctx->lua, default_lua_bin,
+                                          default_lua_bin_len)) < 0)
             goto end;
-        }
+
         script_entrypoint = "initial_config";
     }
 

@@ -18,6 +18,8 @@
 
 #include <unistd.h>
 
+#include <zlib.h>
+
 #include <libavutil/avstring.h>
 
 #include "lua_common.h"
@@ -25,8 +27,6 @@
 
 #include "logging.h"
 #include "utils.h"
-
-#include <zlib.h>
 
 /* Built-in scripts */
 #include "utils.lua.bin.h"
@@ -88,60 +88,171 @@ void sp_lua_close_ctx(TXLuaContext **s)
     av_freep(s);
 }
 
-int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len)
+struct SPLuaReaderContext {
+    TXLuaContext *lctx;
+
+    struct {
+        const char *path;
+        const uint8_t *buf;
+        ptrdiff_t read;
+        size_t len;
+        FILE *file;
+        int is_compressed; /* 0 for undetermined, -1 for no, 1 for yes */
+    } in;
+
+    struct {
+        uint8_t *buf;
+        size_t len;
+        size_t alloc;
+    } chunk;
+
+    struct {
+        z_stream ctx;
+        uint8_t *buf;
+        size_t buf_alloc;
+    } zlib;
+
+    int err;
+};
+
+static void lua_reader_free(struct SPLuaReaderContext *lr)
+{
+    int ret = lr->err;
+    if (lr->in.file)
+        fclose(lr->in.file);
+    av_free(lr->zlib.buf);
+    if (lr->chunk.alloc)
+        av_free(lr->chunk.buf);
+    inflateEnd(&lr->zlib.ctx);
+    memset(lr, 0, sizeof(*lr));
+    lr->err = ret;
+}
+
+static const char *lua_read_fn(lua_State *L, void *opaque, size_t *size)
 {
     int ret;
-    z_stream stream = {
-        stream.next_in = (uint8_t *)in,
-        stream.avail_in = len,
-    };
+    struct SPLuaReaderContext *lr = opaque;
 
-#define CHUNK_SIZE 4096
-    if ((ret = inflateInit2(&stream, MAX_WBITS)) != Z_OK) {
-        sp_log(s, SP_LOG_ERROR, "Error initializing zlib: %s\n", stream.msg);
-        return ret == Z_STREAM_ERROR ? AVERROR(EINVAL) :
-               ret == Z_MEM_ERROR ? AVERROR(ENOMEM) : AVERROR_EXTERNAL;
+#define CHUNK_SIZE (1024*64)
+
+more:
+    if (lr->in.file) {
+        if (!lr->chunk.buf) {
+            lr->chunk.alloc = SPMIN(lr->in.len, CHUNK_SIZE);
+            lr->chunk.buf = av_malloc(lr->chunk.alloc);
+        }
+        lr->chunk.len = fread(lr->chunk.buf, 1, lr->chunk.alloc, lr->in.file);
+        if (!lr->chunk.len && ferror(lr->in.file)) {
+            lr->err = AVERROR(errno);
+            sp_log(lr->lctx, SP_LOG_ERROR, "Error reading file \"%s\": %s!\n",
+                   lr->in.path, av_err2str(lr->err));
+            goto end;
+        }
+    } else {
+        lr->chunk.buf = (uint8_t *)(lr->in.buf + lr->in.read);
+        lr->chunk.len = SPMIN(lr->in.len - lr->in.read, CHUNK_SIZE);
     }
 
-    uint8_t *buf_out = av_malloc(CHUNK_SIZE);
-    size_t buf_size = CHUNK_SIZE;
+    if (!lr->in.is_compressed) {
+        int t = lr->chunk.buf[0] == 0x1f && lr->chunk.buf[1] == 0x8b ? 1 : -1;
+        lr->in.is_compressed = t;
+    }
 
-    do {
-        stream.avail_out = buf_size - stream.total_out;
-        stream.next_out = buf_out + stream.total_out;
-
-        ret = inflate(&stream, Z_FINISH);
-        if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
-            sp_log(s, SP_LOG_ERROR, "Error deflating at byte %lu: %s\n",
-                   stream.total_out, stream.msg);
-            inflateEnd(&stream);
-            av_free(buf_out);
-            return AVERROR(EINVAL);
-        }
-
-        if (ret == Z_BUF_ERROR) {
-            buf_size += CHUNK_SIZE;
-            uint8_t *tmp = av_realloc(buf_out, buf_size);
-            if (!tmp) {
-                inflateEnd(&stream);
-                av_free(buf_out);
-                return AVERROR(ENOMEM);
+    if (lr->in.is_compressed > 0) {
+        if (!lr->zlib.buf) {
+            if ((ret = inflateInit2(&lr->zlib.ctx, MAX_WBITS | 16)) != Z_OK) {
+                sp_log(lr->lctx, SP_LOG_ERROR, "Error initializing zlib: %s\n",
+                       lr->zlib.ctx.msg);
+                lr->err = ret == Z_STREAM_ERROR ? AVERROR(EINVAL) :
+                          ret == Z_MEM_ERROR ? AVERROR(ENOMEM) : AVERROR_EXTERNAL;
+                goto end;
             }
-            buf_out = tmp;
-        }
-    } while (ret != Z_STREAM_END);
 
-    inflateEnd(&stream);
+            lr->zlib.buf_alloc = CHUNK_SIZE;
+            lr->zlib.buf = av_malloc(lr->zlib.buf_alloc);
+        }
+
+        lr->zlib.ctx.next_in = lr->chunk.buf;
+        lr->zlib.ctx.avail_in = lr->chunk.len;
+
+        int zlib_flush = lr->chunk.len ? Z_NO_FLUSH : Z_SYNC_FLUSH;
+
+        do {
+            lr->zlib.ctx.next_out = lr->zlib.buf;
+            lr->zlib.ctx.avail_out = lr->zlib.buf_alloc;
+
+            ret = inflate(&lr->zlib.ctx, zlib_flush);
+            if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR) {
+                sp_log(lr->lctx, SP_LOG_ERROR, "Error deflating at bytes %lu to %lu: %s (%i)\n",
+                       lr->in.read, lr->in.read + lr->chunk.len, lr->zlib.ctx.msg, ret);
+                lr->err = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (ret == Z_BUF_ERROR) {
+                lr->zlib.buf_alloc += CHUNK_SIZE;
+                uint8_t *tmp = av_realloc(lr->zlib.buf, lr->zlib.buf_alloc);
+                if (!tmp) {
+                    lr->err = AVERROR(ENOMEM);
+                    goto end;
+                }
+                lr->zlib.buf = tmp;
+
+                if (zlib_flush == Z_NO_FLUSH) {
+                    if (lr->zlib.buf_alloc > 2*CHUNK_SIZE)
+                        zlib_flush = Z_BLOCK; /* Stop. */
+                    else if (lr->zlib.buf_alloc > 8*CHUNK_SIZE)
+                        zlib_flush = Z_SYNC_FLUSH; /* Pleeeeease */
+                }
+            }
+        } while (ret == Z_BUF_ERROR);
+
+        size_t avail = lr->zlib.ctx.next_out - lr->zlib.buf;
+        size_t read = lr->zlib.ctx.next_in - lr->chunk.buf;
+        lr->in.read += read;
+
+        if (!avail && read && ret == Z_OK) {
+            goto more;
+        } else if (avail) {
+            *size = avail;
+            return lr->zlib.buf;
+        } else if (ret != Z_STREAM_END) {
+            sp_log(lr->lctx, SP_LOG_ERROR, "zlib decompressing error: %i!\n", ret);
+            lr->err = AVERROR(EINVAL);
+        }
+        /* Fallthrough for EOF and generic errors */
+    } else {
+        if (!lr->chunk.len)
+            goto end; /* EOF */
+
+        lr->in.read += lr->chunk.len;
+        *size = lr->chunk.len;
+        return lr->chunk.buf;
+    }
+
+end:
+    lua_reader_free(lr);
+    *size = 0;
+    return NULL;
+}
+
+int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len)
+{
+    struct SPLuaReaderContext lr = { 0 };
+    lr.lctx = s;
+    lr.in.buf = in;
+    lr.in.len = len;
 
     lua_State *L = sp_lua_lock_interface(s);
 
-    ret = luaL_loadbufferx(L, buf_out, stream.total_out,
-                           "compressed_chunk", "b");
-    av_free(buf_out);
-    if (ret) {
+    int ret = lua_load(L, lua_read_fn, &lr, "compressed_chunk", "bt");
+    if (lr.err) {
+        ret = lr.err;
+    } else if (ret) {
         sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", lua_tostring(L, -1));
         ret = AVERROR_EXTERNAL;
     }
+    lua_reader_free(&lr);
 
     return sp_lua_unlock_interface(s, ret);
 }
@@ -248,18 +359,33 @@ int sp_lua_unlock_interface(TXLuaContext *lctx, int ret)
 
 int sp_lua_load_file(TXLuaContext *lctx, const char *script_name)
 {
-    lua_State *L = sp_lua_lock_interface(lctx);
+    struct SPLuaReaderContext lr = { 0 };
+    lr.lctx = lctx;
+    lr.in.path = script_name;
 
-    int err = luaL_loadfilex(L, script_name, "t");
-    if (err == LUA_ERRFILE) {
+    lr.in.file = av_fopen_utf8(script_name, "r");
+    if (!lr.in.file) {
         sp_log(lctx, SP_LOG_ERROR, "File \"%s\" not found!\n", script_name);
-        err = AVERROR(EINVAL);
-    } else if (err) {
-        sp_log(lctx, SP_LOG_ERROR, "%s\n", lua_tostring(L, -1));
-        err = AVERROR_EXTERNAL;
+        return AVERROR(EINVAL);
     }
 
-    return sp_lua_unlock_interface(lctx, err);
+    fseek(lr.in.file, 0, SEEK_END);
+    lr.in.len = ftell(lr.in.file);
+    rewind(lr.in.file);
+
+    lua_State *L = sp_lua_lock_interface(lctx);
+
+    int ret = lua_load(L, lua_read_fn, &lr, "file_chunk", "bt");
+    if (lr.err) {
+        ret = lr.err;
+    } else if (ret) {
+        sp_log(lctx, SP_LOG_ERROR, "Error loading Lua code: %s\n", lua_tostring(L, -1));
+        ret = AVERROR_EXTERNAL;
+    }
+
+    lua_reader_free(&lr);
+
+    return sp_lua_unlock_interface(lctx, ret);
 }
 
 static const luaL_Reg lua_internal_lib_fns[] = {

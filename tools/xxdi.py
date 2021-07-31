@@ -10,7 +10,7 @@ count = 0
 compression_level = 9 # Best Compression
 mem_level = 9 # Best speed and compression
 strategy = zlib.Z_DEFAULT_STRATEGY
-wbits = zlib.MAX_WBITS # zlib
+wbits = zlib.MAX_WBITS | 16 # gzip
 
 # Convert '/', '$' and '.' to '_',
 # or if this is stdin just use "stdin" as the name.

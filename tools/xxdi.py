@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# xxdi.py - Pure Python3 implementation of 'xxd -i [input] [output] with zlib compression'
+# xxdi.py - Pure Python3 implementation of 'xxd -i [input] [output] with gzip compression'
 import sys
 from functools import partial
 from os.path import basename
@@ -51,6 +51,7 @@ for byte in gzipped_data:
         print("0x%02x" % byte, end=',\n    ', file=fd_out)
     count += 1;
 
-print('static const size_t %s_len = %d;' % (target_name, count), file=fd_out)
+print('static const size_t %s_len = %d; // gzip compressed, saved %d bytes' %
+      (target_name, count, len(uncompressed_data) - count), file=fd_out)
 
 fd_in.close()

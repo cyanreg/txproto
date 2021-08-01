@@ -236,7 +236,7 @@ end:
     return NULL;
 }
 
-int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len)
+int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)
 {
     struct SPLuaReaderContext lr = { 0 };
     lr.lctx = s;
@@ -245,7 +245,7 @@ int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len)
 
     lua_State *L = sp_lua_lock_interface(s);
 
-    int ret = lua_load(L, lua_read_fn, &lr, "compressed_chunk", "bt");
+    int ret = lua_load(L, lua_read_fn, &lr, "chunk loader", "bt");
     if (lr.err) {
         ret = lr.err;
     } else if (ret) {
@@ -309,7 +309,7 @@ int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list)
     av_free(list);
 
     /* Load Lua utils */
-    if ((err = sp_lua_load_compressed(lctx, utils_lua_bin, utils_lua_bin_len)))
+    if ((err = sp_lua_load_chunk(lctx, utils_lua_bin, utils_lua_bin_len)))
         goto fail;
 
     *s = lctx;
@@ -375,7 +375,7 @@ int sp_lua_load_file(TXLuaContext *lctx, const char *script_name)
 
     lua_State *L = sp_lua_lock_interface(lctx);
 
-    int ret = lua_load(L, lua_read_fn, &lr, "file_chunk", "bt");
+    int ret = lua_load(L, lua_read_fn, &lr, "file loader", "bt");
     if (lr.err) {
         ret = lr.err;
     } else if (ret) {

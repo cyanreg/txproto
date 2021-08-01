@@ -65,10 +65,10 @@ lua_State *sp_lua_lock_interface(TXLuaContext *lctx);
 /* Unlock the Lua interface, ret is directly returned */
 int sp_lua_unlock_interface(TXLuaContext *lctx, int ret);
 
-/* Load a compressed Lua buffer */
-int sp_lua_load_compressed(TXLuaContext *s, const uint8_t *in, const size_t len);
+/* Load a Lua buffer, raw text or gzip compressed */
+int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len);
 
-/* Load file into the Lua context */
+/* Load file into the Lua context, raw or gzip compressed */
 int sp_lua_load_file(TXLuaContext *lctx, const char *script_name);
 
 /* Load a library into the given Lua context */

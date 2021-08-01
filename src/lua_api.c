@@ -1267,7 +1267,8 @@ static int lua_create_filter(lua_State *L)
     char **out_pads = NULL;
     GET_OPTS_LIST(out_pads, "output_pads");
 
-    err = sp_init_filter_single(fctx_ref, name, filter, in_pads, out_pads, req_fmt, opts, NULL, hwctx_type);
+    err = sp_init_filter_single(fctx_ref, name, filter, in_pads, out_pads,
+                                req_fmt, opts, NULL, hwctx_type);
     if (err < 0)
         LUA_ERROR("Unable to init filter: %s!", av_err2str(err));
 

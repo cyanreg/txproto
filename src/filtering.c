@@ -482,7 +482,7 @@ static void *filtering_thread(void *data)
     int err = 0, flushing = 0;
     FilterContext *ctx = data;
 
-    sp_set_thread_name_self("filtering");
+    sp_set_thread_name_self(sp_class_get_name(ctx));
 
     sp_log(ctx, SP_LOG_VERBOSE, "Filter initialized!\n");
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
@@ -503,9 +503,14 @@ static void *filtering_thread(void *data)
                 flushing = !in_frame;
             }
 
+            /* Takes ownership of in_frame */
             err = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame,
-                                               AV_BUFFERSRC_FLAG_PUSH | AV_BUFFERSRC_FLAG_KEEP_REF);
+                                               AV_BUFFERSRC_FLAG_PUSH);
+
+            /* It did take ownership but it just moved the ref, it doesn't free
+             * the frame as well */
             av_frame_free(&in_frame);
+
             if (err < 0) {
                 sp_log(ctx, SP_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
                 pthread_mutex_unlock(&ctx->lock);
@@ -788,6 +793,9 @@ static void filter_free(void *opaque, uint8_t *data)
 
     pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);
+
+    av_dict_free(&ctx->direct_filter_opts);
+    av_dict_free(&ctx->graph_opts);
 
     sp_class_free(ctx);
     av_free(ctx);

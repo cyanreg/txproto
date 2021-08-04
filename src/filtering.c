@@ -477,6 +477,66 @@ error:
     return err;
 }
 
+static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
+                            AVFrame **tmp_frame, int flush)
+{
+    int err;
+    AVFrame *filt_frame = *tmp_frame;
+
+    flush = flush ? AV_BUFFERSINK_FLAG_NO_REQUEST : 0;
+
+    do {
+        err = av_buffersink_get_frame_flags(out_pad->buffer, filt_frame, flush);
+        if (err < 0)
+            break;
+
+        filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
+        if (!filt_frame->opaque_ref)
+            return AVERROR(ENOMEM);
+
+        FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
+        fe->time_base = out_pad->buffer->inputs[0]->time_base;
+        if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_VIDEO)
+            fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
+        else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
+            fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
+
+        sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO on pad \"%s\", pts = %f\n",
+               out_pad->name, av_q2d(fe->time_base) * filt_frame->pts);
+
+        err = sp_frame_fifo_push(out_pad->fifo, filt_frame);
+        av_frame_free(tmp_frame);
+        if (err == AVERROR(ENOMEM))
+            return err;
+
+        *tmp_frame = filt_frame = av_frame_alloc();
+        if (!filt_frame)
+            return AVERROR(ENOMEM);
+
+        if (err == AVERROR(ENOBUFS)) {
+            out_pad->dropped_frames++;
+            sp_log(ctx, SP_LOG_WARN,
+                   "Dropping filtered frame from pad \"%s\" (%i dropped)!\n",
+                   out_pad->name, out_pad->dropped_frames);
+        } else if (err < 0) {
+            sp_log(ctx, SP_LOG_ERROR, "Error pushing frame to FIFO on pad \"%s\": %s\n",
+                   out_pad->name, av_err2str(err));
+            return err;
+        }
+    } while (1);
+
+    /* Probably overkill, but why take a chance? */
+    if ((err == AVERROR_EOF) || ((err == AVERROR(EAGAIN)) && flush)) {
+        sp_log(ctx, SP_LOG_VERBOSE, "Output pad \"%s\" flushed!\n", out_pad->name);
+        err = AVERROR_EOF;
+    } else if (err != AVERROR(EAGAIN)) {
+        sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame from pad \"%s\": %s!\n",
+               out_pad->name, av_err2str(err));
+    }
+
+    return err;
+}
+
 static void *filtering_thread(void *data)
 {
     int err = 0, flushing = 0;
@@ -486,6 +546,8 @@ static void *filtering_thread(void *data)
 
     sp_log(ctx, SP_LOG_VERBOSE, "Filter initialized!\n");
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
+
+    AVFrame *filt_frame = av_frame_alloc();
 
     while (1) {
         pthread_mutex_lock(&ctx->lock);
@@ -511,56 +573,45 @@ static void *filtering_thread(void *data)
              * the frame as well */
             av_frame_free(&in_frame);
 
-            if (err < 0) {
+            if (err == AVERROR(ENOMEM))
+                goto fail;
+            else if (err < 0)
                 sp_log(ctx, SP_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
-                pthread_mutex_unlock(&ctx->lock);
-                goto end;
-            }
         }
 
+        int pads_flushed = 0;
+        int pads_errors = 0;
         for (int i = 0; i < ctx->num_out_pads; i++) {
             FilterPad *out_pad = ctx->out_pads[i];
 
-            AVFrame *filt_frame = av_frame_alloc();
-            err = av_buffersink_get_frame(out_pad->buffer, filt_frame);
-            if (err == AVERROR(EAGAIN)) {
-                av_frame_free(&filt_frame);
-            } else if (err == AVERROR_EOF) {
-                sp_log(ctx, SP_LOG_VERBOSE, "Filter flushed!\n");
-                av_frame_free(&filt_frame);
-                pthread_mutex_unlock(&ctx->lock);
-                goto end;
-            } else if (err < 0) {
-                sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame: %s!\n", av_err2str(err));
-                av_frame_free(&filt_frame);
-                pthread_mutex_unlock(&ctx->lock);
-                goto end;
-            } else {
-                filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
-
-                FormatExtraData *fe = (FormatExtraData *)filt_frame->opaque_ref->data;
-                fe->time_base = out_pad->buffer->inputs[0]->time_base;
-                if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_VIDEO)
-                    fe->avg_frame_rate  = out_pad->buffer->inputs[0]->frame_rate;
-                else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
-                    fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
-
-                sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO on pad \"%s\", pts = %f\n",
-                       out_pad->name, av_q2d(fe->time_base) * filt_frame->pts);
-                int ret = sp_frame_fifo_push(out_pad->fifo, filt_frame);
-                if (ret == AVERROR(ENOBUFS)) {
-                    out_pad->dropped_frames++;
-                    sp_log(ctx, SP_LOG_WARN,
-                           "Dropping filtered frame (%i dropped)!\n", out_pad->dropped_frames);
-                }
-            }
-            av_frame_free(&filt_frame);
+            err = drain_output_pad(ctx, out_pad, &filt_frame, flushing);
+            if (err == AVERROR(ENOMEM))
+                goto fail;
+            else if (err == AVERROR_EOF)
+                pads_flushed++;
+            else if (err == AVERROR(EAGAIN))
+                continue;
+            else if (err < 0)
+                pads_errors++;
         }
 
         pthread_mutex_unlock(&ctx->lock);
+
+        if ((pads_flushed + pads_errors) == ctx->num_out_pads)
+            break;
     }
 
-end:
+    if (err >= 0 || (err == AVERROR_EOF))
+        sp_log(ctx, SP_LOG_DEBUG, "Filter flushed!\n");
+    else
+        sp_log(ctx, SP_LOG_ERROR, "Filter errors: %s!\n", av_err2str(err));
+
+    av_frame_free(&filt_frame);
+    return NULL;
+
+fail:
+    av_frame_free(&filt_frame);
+    pthread_mutex_unlock(&ctx->lock);
     return NULL;
 }
 

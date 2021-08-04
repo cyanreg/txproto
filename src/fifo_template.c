@@ -264,18 +264,25 @@ unlock:
     return err;
 }
 
-TYPE *RENAME(fifo_pop)(AVBufferRef *src)
+int RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
 {
-    if (!src)
-        return NULL;
+    int ret = 0;
+
+    if (!src) {
+        *dst = NULL;
+        return 0;
+    }
 
     TYPE *out = NULL;
     SNAME *ctx = (SNAME *)src->data;
     pthread_mutex_lock(&ctx->lock);
 
     if (!ctx->num_queued) {
-        if (!(ctx->block_flags & FRENAME(BLOCK_NO_INPUT)))
+        if ((flags && !(flags & FRENAME(PULL_NO_BLOCK))) ||
+            !(ctx->block_flags & FRENAME(BLOCK_NO_INPUT))) {
+            ret = AVERROR(EAGAIN);
             goto unlock;
+        }
 
         pthread_cond_wait(&ctx->cond_in, &ctx->lock);
     }
@@ -292,7 +299,16 @@ TYPE *RENAME(fifo_pop)(AVBufferRef *src)
 unlock:
     pthread_mutex_unlock(&ctx->lock);
 
-    return out;
+    *dst = out;
+
+    return ret;
+}
+
+TYPE *RENAME(fifo_pop)(AVBufferRef *src)
+{
+    TYPE *ret;
+    RENAME(fifo_pop_flags)(src, &ret, 0x0);
+    return ret;
 }
 
 TYPE *RENAME(fifo_peek)(AVBufferRef *src)

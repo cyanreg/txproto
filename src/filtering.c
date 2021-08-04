@@ -477,18 +477,112 @@ error:
     return err;
 }
 
-static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
-                            AVFrame **tmp_frame, int flush)
+static int push_input_pads(FilterContext *ctx, int *flush, int opportunistically)
 {
-    int err;
-    AVFrame *filt_frame = *tmp_frame;
+    int err = 0, ret, push_flags;
+    enum SPFrameFIFOFlags pull_flags;
 
-    flush = flush ? AV_BUFFERSINK_FLAG_NO_REQUEST : 0;
+    pull_flags = opportunistically ? FRAME_FIFO_PULL_NO_BLOCK : 0x0;
+
+    int pads_err = 0;
+    int pads_satisfied = 0;
+
+    for (int i = 0; i < ctx->num_in_pads; i++) {
+        FilterPad *in_pad = ctx->in_pads[i];
+
+        unsigned nb_req;
+        if (!in_pad->eos && !opportunistically) {
+            nb_req = sp_frame_fifo_get_size(in_pad->fifo);
+            /* If we're doing this non-opportunistically, we'll want at least
+             * one frame in */
+            if (!nb_req)
+                nb_req = 1;
+        } else {
+            nb_req = av_buffersrc_get_nb_failed_requests(in_pad->buffer);
+            if (nb_req && in_pad->eos) {
+                sp_log(ctx, SP_LOG_ERROR, "Filter asking for more frames on a "
+                       "flushed input pad \"%s\"!\n", in_pad->name);
+                return AVERROR(EINVAL);
+            }
+        }
+
+        /* If we're doing it opportunistically, don't do any processing now,
+         * since we'll likely pull right away after this and do the processing
+         * then. Otherwise, do the processing now, unless there are many frames,
+         * in which case, get them off our books as fast as possible. */
+        push_flags = (opportunistically || nb_req > 1) ? 0x0 : AV_BUFFERSRC_FLAG_PUSH;
+
+        int j;
+        for (j = 0; j < nb_req; j++) {
+            AVFrame *in_frame;
+            ret = sp_frame_fifo_pop_flags(in_pad->fifo, &in_frame, pull_flags);
+            if (ret == AVERROR(EAGAIN))
+                break;
+
+            if (!in_frame) {
+                *flush = 1;
+                push_flags = AV_BUFFERSRC_FLAG_PUSH;
+                in_pad->eos = 1;
+                pads_satisfied++;
+                j = nb_req;
+            } else {
+                FormatExtraData *fe = (FormatExtraData *)in_frame->opaque_ref->data;
+                sp_log(ctx, SP_LOG_TRACE, "Giving frame to input pad \"%s\", pts = %f\n",
+                       in_pad->name, av_q2d(fe->time_base) * in_frame->pts);
+            }
+
+            /* Takes ownership of in_frame */
+            ret = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame, push_flags);
+
+            /* It did take ownership but it just moved the ref, it doesn't free
+             * the frame as well */
+            av_frame_free(&in_frame);
+
+            if (ret == AVERROR(ENOMEM)) {
+                return ret;
+            } else if (ret < 0) {
+                sp_log(ctx, SP_LOG_ERROR, "Error pushing frame to input pad \"%s\": %s!\n",
+                       in_pad->name, av_err2str(ret));
+                pads_err++;
+                err = ret;
+            }
+        }
+
+        /* The pad is not satisfied (our own vague term) until it has
+         * received at least 1 frame, or all requested (could be none) */
+        if (j == nb_req || j)
+            pads_satisfied++;
+    }
+
+    return (err < 0 && !pads_satisfied) ? err : (pads_satisfied == ctx->num_in_pads);
+}
+
+static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
+                            AVFrame **tmp_frame, int *flush)
+{
+    int ret, input_pushed = 0;
+    AVFrame *filt_frame = *tmp_frame;
+    int pull_flags = *flush ? AV_BUFFERSINK_FLAG_NO_REQUEST : 0;
 
     do {
-        err = av_buffersink_get_frame_flags(out_pad->buffer, filt_frame, flush);
-        if (err < 0)
+        ret = av_buffersink_get_frame_flags(out_pad->buffer, filt_frame, pull_flags);
+        if (!input_pushed && ret == AVERROR(EAGAIN)) {
+            ret = push_input_pads(ctx, flush, 1);
+
+            /* The function above returns 0 if not all pads have been satisfied.
+             * If so, no point in trying again. */
+            if (ret <= 0)
+                return ret;
+
+            /* The flush status may have changed. */
+            pull_flags = *flush ? AV_BUFFERSINK_FLAG_NO_REQUEST : 0;
+            input_pushed++;
+            continue;
+        } else if (ret < 0) {
             break;
+        }
+
+        input_pushed = 0;
 
         filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
         if (!filt_frame->opaque_ref)
@@ -501,40 +595,40 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
         else if (out_pad->buffer->inputs[0]->type == AVMEDIA_TYPE_AUDIO)
             fe->bits_per_sample = av_get_bytes_per_sample(out_pad->buffer->inputs[0]->format) * 8;
 
-        sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO on pad \"%s\", pts = %f\n",
+        sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO from output pad \"%s\", pts = %f\n",
                out_pad->name, av_q2d(fe->time_base) * filt_frame->pts);
 
-        err = sp_frame_fifo_push(out_pad->fifo, filt_frame);
+        ret = sp_frame_fifo_push(out_pad->fifo, filt_frame);
         av_frame_free(tmp_frame);
-        if (err == AVERROR(ENOMEM))
-            return err;
+        if (ret == AVERROR(ENOMEM))
+            return ret;
 
         *tmp_frame = filt_frame = av_frame_alloc();
         if (!filt_frame)
             return AVERROR(ENOMEM);
 
-        if (err == AVERROR(ENOBUFS)) {
+        if (ret == AVERROR(ENOBUFS)) {
             out_pad->dropped_frames++;
             sp_log(ctx, SP_LOG_WARN,
-                   "Dropping filtered frame from pad \"%s\" (%i dropped)!\n",
+                   "Dropping filtered frame from output pad \"%s\" (%i dropped)!\n",
                    out_pad->name, out_pad->dropped_frames);
-        } else if (err < 0) {
-            sp_log(ctx, SP_LOG_ERROR, "Error pushing frame to FIFO on pad \"%s\": %s\n",
-                   out_pad->name, av_err2str(err));
-            return err;
+        } else if (ret < 0) {
+            sp_log(ctx, SP_LOG_ERROR, "Error pushing frame to FIFO on output pad \"%s\": %s\n",
+                   out_pad->name, av_err2str(ret));
+            return ret;
         }
     } while (1);
 
     /* Probably overkill, but why take a chance? */
-    if ((err == AVERROR_EOF) || ((err == AVERROR(EAGAIN)) && flush)) {
+    if ((ret == AVERROR_EOF) || ((ret == AVERROR(EAGAIN)) && *flush)) {
         sp_log(ctx, SP_LOG_VERBOSE, "Output pad \"%s\" flushed!\n", out_pad->name);
-        err = AVERROR_EOF;
-    } else if (err != AVERROR(EAGAIN)) {
-        sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame from pad \"%s\": %s!\n",
-               out_pad->name, av_err2str(err));
+        ret = AVERROR_EOF;
+    } else if (ret != AVERROR(EAGAIN)) {
+        sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame from output pad \"%s\": %s!\n",
+               out_pad->name, av_err2str(ret));
     }
 
-    return err;
+    return ret;
 }
 
 static void *filtering_thread(void *data)
@@ -552,39 +646,19 @@ static void *filtering_thread(void *data)
     while (1) {
         pthread_mutex_lock(&ctx->lock);
 
-        for (int i = 0; i < ctx->num_in_pads; i++) {
-            FilterPad *in_pad = ctx->in_pads[i];
-            if (!flushing && (av_buffersrc_get_nb_failed_requests(in_pad->buffer) < 1)) {
-                pthread_mutex_unlock(&ctx->lock);
-                continue;
-            }
+        err = push_input_pads(ctx, &flushing, 0);
+        if (err < 0)
+            goto fail;
 
-            AVFrame *in_frame = NULL;
-            if (!flushing) {
-                in_frame = sp_frame_fifo_pop(in_pad->fifo);
-                flushing = !in_frame;
-            }
-
-            /* Takes ownership of in_frame */
-            err = av_buffersrc_add_frame_flags(in_pad->buffer, in_frame,
-                                               AV_BUFFERSRC_FLAG_PUSH);
-
-            /* It did take ownership but it just moved the ref, it doesn't free
-             * the frame as well */
-            av_frame_free(&in_frame);
-
-            if (err == AVERROR(ENOMEM))
-                goto fail;
-            else if (err < 0)
-                sp_log(ctx, SP_LOG_ERROR, "Error pushing frame: %s!\n", av_err2str(err));
-        }
+        pthread_mutex_unlock(&ctx->lock);
+        pthread_mutex_lock(&ctx->lock);
 
         int pads_flushed = 0;
         int pads_errors = 0;
         for (int i = 0; i < ctx->num_out_pads; i++) {
             FilterPad *out_pad = ctx->out_pads[i];
 
-            err = drain_output_pad(ctx, out_pad, &filt_frame, flushing);
+            err = drain_output_pad(ctx, out_pad, &filt_frame, &flushing);
             if (err == AVERROR(ENOMEM))
                 goto fail;
             else if (err == AVERROR_EOF)
@@ -597,6 +671,7 @@ static void *filtering_thread(void *data)
 
         pthread_mutex_unlock(&ctx->lock);
 
+        /* Yes, I'm being clever. */
         if ((pads_flushed + pads_errors) == ctx->num_out_pads)
             break;
     }

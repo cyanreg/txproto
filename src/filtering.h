@@ -37,6 +37,9 @@ typedef struct FilterPad {
     AVFilterContext *filter;
     int filter_pad;
 
+    /* Input only */
+    int eos;
+
     /* Output only */
     int dropped_frames;
 

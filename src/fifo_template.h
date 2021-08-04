@@ -19,4 +19,5 @@ int RENAME(fifo_unmirror_all)(AVBufferRef *dst);
 /* I/O */
 int   RENAME(fifo_push)(AVBufferRef *dst, TYPE *in);
 TYPE *RENAME(fifo_pop)(AVBufferRef *src);
+int   RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **ret, FNAME flags);
 TYPE *RENAME(fifo_peek)(AVBufferRef *src);

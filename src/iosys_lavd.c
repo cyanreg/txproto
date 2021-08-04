@@ -402,7 +402,7 @@ static void *source_update_thread(void *s)
 
     while (!atomic_load(&ctx->quit)) {
         update_entries(ctx);
-        av_usleep(500000);
+        av_usleep(1000000);
     }
 
     return 0;

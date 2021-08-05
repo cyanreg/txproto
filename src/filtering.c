@@ -516,8 +516,13 @@ static int push_input_pads(FilterContext *ctx, int *flush, int opportunistically
         for (j = 0; j < nb_req; j++) {
             AVFrame *in_frame;
             ret = sp_frame_fifo_pop_flags(in_pad->fifo, &in_frame, pull_flags);
-            if (ret == AVERROR(EAGAIN))
+            if (!opportunistically && (ret == AVERROR(EAGAIN))) {
                 break;
+            } else if (ret < 0) {
+                sp_log(ctx, SP_LOG_ERROR, "Error pulling frame from FIFO at input pad \"%s\": %s!\n",
+                       in_pad->name, av_err2str(ret));
+                return ret;
+            }
 
             if (!in_frame) {
                 *flush = 1;
@@ -565,7 +570,10 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
     int pull_flags = *flush ? AV_BUFFERSINK_FLAG_NO_REQUEST : 0;
 
     do {
+        /* Pull frame */
         ret = av_buffersink_get_frame_flags(out_pad->buffer, filt_frame, pull_flags);
+
+        /* Check for EAGAIN or errors */
         if (!input_pushed && ret == AVERROR(EAGAIN)) {
             ret = push_input_pads(ctx, flush, 1);
 
@@ -584,6 +592,7 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
 
         input_pushed = 0;
 
+        av_buffer_unref(&filt_frame->opaque_ref);
         filt_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
         if (!filt_frame->opaque_ref)
             return AVERROR(ENOMEM);

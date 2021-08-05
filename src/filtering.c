@@ -171,7 +171,7 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
         pad->fifo = is_out ? sp_frame_fifo_create(ctx, 0, 0) : sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
         pad->main = ctx;
         pad->is_out = is_out;
-        pad->name = av_strdup(name);
+        pad->name = name;
         pad->type = type;
         pad->metadata = NULL;
     }
@@ -623,6 +623,7 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
     if ((ret == AVERROR_EOF) || ((ret == AVERROR(EAGAIN)) && *flush)) {
         sp_log(ctx, SP_LOG_VERBOSE, "Output pad \"%s\" flushed!\n", out_pad->name);
         ret = AVERROR_EOF;
+        out_pad->eos = 1;
     } else if (ret != AVERROR(EAGAIN)) {
         sp_log(ctx, SP_LOG_ERROR, "Error pulling filtered frame from output pad \"%s\": %s!\n",
                out_pad->name, av_err2str(ret));
@@ -657,6 +658,11 @@ static void *filtering_thread(void *data)
         int pads_errors = 0;
         for (int i = 0; i < ctx->num_out_pads; i++) {
             FilterPad *out_pad = ctx->out_pads[i];
+
+            if (out_pad->eos) {
+                pads_flushed++;
+                continue;
+            }
 
             err = drain_output_pad(ctx, out_pad, &filt_frame, &flushing);
             if (err == AVERROR(ENOMEM))
@@ -916,6 +922,20 @@ static void filter_free(void *opaque, uint8_t *data)
             av_free(ctx->out_pad_names[i]);
         av_freep(&ctx->out_pad_names);
     }
+
+    for (int i = 0; i < ctx->num_in_pads; i++) {
+        av_buffer_unref(&ctx->in_pads[i]->fifo);
+        av_frame_free(&ctx->in_pads[i]->in_fmt);
+        av_free(ctx->in_pads[i]);
+    }
+    av_free(ctx->in_pads);
+
+    for (int i = 0; i < ctx->num_out_pads; i++) {
+        av_buffer_unref(&ctx->out_pads[i]->fifo);
+        av_frame_free(&ctx->out_pads[i]->in_fmt);
+        av_free(ctx->out_pads[i]);
+    }
+    av_free(ctx->out_pads);
 
     pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);

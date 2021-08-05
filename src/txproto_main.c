@@ -24,6 +24,12 @@
 #include <libavutil/time.h>
 #include <libavutil/bprint.h>
 
+/* Needed to print the version of each library */
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavfilter/avfilter.h>
+#include <libswresample/swresample.h>
+
 #include "lua_api.h"
 #include "iosys_common.h"
 #include "txproto_main.h"
@@ -44,6 +50,33 @@ static void on_quit_signal(int signo)
         exit(-1);
     }
     longjmp(quit_loc, signo);
+}
+
+static void print_ff_libs(TXMainContext *ctx)
+{
+    struct lib {
+        const char *name;
+        unsigned buildv;
+        unsigned runv;
+    } const libs[] = {
+        {"libavutil",     LIBAVUTIL_VERSION_INT,     avutil_version()     },
+        {"libavcodec",    LIBAVCODEC_VERSION_INT,    avcodec_version()    },
+        {"libavformat",   LIBAVFORMAT_VERSION_INT,   avformat_version()   },
+        {"libavfilter",   LIBAVFILTER_VERSION_INT,   avfilter_version()   },
+        {"libswresample", LIBSWRESAMPLE_VERSION_INT, swresample_version() },
+    };
+
+    sp_log(ctx, SP_LOG_INFO, "FFmpeg library versions:\n");
+
+#define VER(x) (x) >> 16, (x) >> 8 & 255, (x) & 255
+    for (int i = 0; i < SP_ARRAY_ELEMS(libs); i++) {
+        const struct lib *l = &libs[i];
+        sp_log(ctx, SP_LOG_INFO, "   %-15s %d.%d.%d", l->name, VER(l->buildv));
+        if (l->buildv != l->runv)
+            sp_log(ctx, SP_LOG_INFO, " (runtime %d.%d.%d)", VER(l->runv));
+        sp_log(ctx, SP_LOG_INFO, "\n");
+    }
+#undef VER
 }
 
 static void cleanup_fn(TXMainContext *ctx)
@@ -89,6 +122,8 @@ int main(int argc, char *argv[])
     err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL);
     if (err < 0)
         return err;
+
+    print_ff_libs(ctx);
 
     ctx->commit_list = sp_bufferlist_new();
     ctx->discard_list = sp_bufferlist_new();

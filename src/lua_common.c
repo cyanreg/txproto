@@ -88,12 +88,16 @@ void sp_lua_close_ctx(TXLuaContext **s)
     av_freep(s);
 }
 
+#define CHUNK_SIZE (1024*64)
+
 struct SPLuaWriterContext {
     TXLuaContext *lctx;
 
     struct {
         FILE *file;
         const char *path;
+        size_t written; /* For files only */
+
         uint8_t *data;
         unsigned int alloc;
         size_t len;
@@ -103,16 +107,79 @@ struct SPLuaWriterContext {
 
     struct {
         z_stream ctx;
-        uint8_t *buf;
-        size_t buf_alloc;
     } zlib;
 };
 
-static void lua_writer_free(struct SPLuaWriterContext *lw)
+static int lua_writer_end(struct SPLuaWriterContext *lw,
+                          uint8_t **buf, size_t *len)
 {
-    if (lw->out.file)
+    int ret = 0;
+
+    if (lw->is_compressed) {
+        lw->zlib.ctx.next_in = NULL;
+        lw->zlib.ctx.avail_in = 0;
+
+        do {
+            lw->zlib.ctx.next_out = lw->out.data + lw->out.len;
+            lw->zlib.ctx.avail_out = lw->out.alloc - lw->out.len;
+
+            ret = deflate(&lw->zlib.ctx, Z_FINISH);
+
+            lw->out.len = lw->out.alloc - lw->zlib.ctx.avail_out;
+
+            if (ret == Z_OK || ret == Z_BUF_ERROR) {
+                uint8_t *new_data = av_fast_realloc(lw->out.data, &lw->out.alloc,
+                                                    CHUNK_SIZE + lw->out.len);
+                if (!new_data) {
+                    av_freep(&lw->out.data);
+                    lw->out.len = 0;
+                    ret = AVERROR(ENOMEM);
+                    goto out;
+                }
+
+                lw->out.data = new_data;
+                continue;
+            } else if (ret != Z_STREAM_END) {
+                sp_log(lw->lctx, SP_LOG_ERROR, "Unable to flush zlib buffer!\n");
+                ret = AVERROR_EXTERNAL;
+                goto out;
+            }
+        } while (ret != Z_STREAM_END);
+
+        ret = 0;
+
+        if (lw->out.file) {
+            ret = fwrite(lw->out.data, 1, lw->out.len, lw->out.file);
+            if (ret != lw->out.len) {
+                ret = AVERROR(errno);
+                sp_log(lw->lctx, SP_LOG_ERROR, "Error writing file \"%s\": %s!\n",
+                       lw->out.path, av_err2str(ret));
+                goto out;
+            }
+
+            lw->out.written += ret;
+        }
+    }
+
+out:
+    if (lw->is_compressed)
+        deflateEnd(&lw->zlib.ctx);
+
+    if (lw->out.file) {
         fclose(lw->out.file);
+        av_freep(&lw->out.data);
+        ret = ret < 0 ? ret : lw->out.written;
+    } else if (*buf && *len) {
+        *buf = lw->out.data;
+        *len = lw->out.len;
+        ret = ret < 0 ? ret : lw->out.len;
+    } else {
+        av_free(lw->out.data);
+    }
+
     memset(lw, 0, sizeof(*lw));
+
+    return ret;
 }
 
 static int lua_write_fn(lua_State *L, const void *data, size_t len, void *opaque)
@@ -120,7 +187,50 @@ static int lua_write_fn(lua_State *L, const void *data, size_t len, void *opaque
     int ret;
     struct SPLuaWriterContext *lw = opaque;
 
-    if (lw->out.file) {
+    if (lw->is_compressed) {
+        size_t start_len = lw->out.len;
+        lw->zlib.ctx.next_in = (void *)data;
+        lw->zlib.ctx.avail_in = len;
+
+        while (1) {
+            lw->zlib.ctx.next_out = lw->out.data + lw->out.len;
+            lw->zlib.ctx.avail_out = lw->out.alloc - lw->out.len;
+
+            ret = deflate(&lw->zlib.ctx, Z_NO_FLUSH);
+            if (ret == Z_STREAM_ERROR) {
+                sp_log(lw->lctx, SP_LOG_ERROR, "zlib error while compressing chunk!\n");
+                return AVERROR_EXTERNAL;
+            }
+
+            lw->out.len = lw->out.alloc - lw->zlib.ctx.avail_out;
+
+            if ((ret == Z_OK && !lw->zlib.ctx.avail_out) ||
+                (lw->out.len == lw->out.alloc)) {
+                uint8_t *new_data = av_fast_realloc(lw->out.data, &lw->out.alloc,
+                                                    CHUNK_SIZE + lw->out.len);
+                if (!new_data) {
+                    av_freep(&lw->out.data);
+                    lw->out.len = 0;
+                    return AVERROR(ENOMEM);
+                }
+
+                lw->out.data = new_data;
+                continue;
+            }
+
+            if (ret == Z_BUF_ERROR || !lw->zlib.ctx.avail_in) {
+                if (lw->out.len > start_len)
+                    break; /* Had data, let's output it */
+                else
+                    return 0; /* More input data needed */
+            }
+        }
+
+        data = lw->out.data;
+        len = lw->out.len;
+    }
+
+    if (lw->out.file && len) {
         ret = fwrite(data, 1, len, lw->out.file);
         if (ret != len) {
             sp_log(lw->lctx, SP_LOG_ERROR, "Error writing file \"%s\": %s!\n",
@@ -128,8 +238,11 @@ static int lua_write_fn(lua_State *L, const void *data, size_t len, void *opaque
             return AVERROR(errno);
         }
 
-        lw->out.len += ret;
-    } else {
+        lw->out.written += ret;
+
+        if (lw->is_compressed)
+            lw->out.len = 0;
+    } else if (!lw->is_compressed) {
         uint8_t *new_data = av_fast_realloc(lw->out.data, &lw->out.alloc,
                                             len + lw->out.len);
         if (!new_data) {
@@ -191,8 +304,6 @@ static const char *lua_read_fn(lua_State *L, void *opaque, size_t *size)
 {
     int ret;
     struct SPLuaReaderContext *lr = opaque;
-
-#define CHUNK_SIZE (1024*64)
 
 more:
     if (lr->in.file) {
@@ -310,6 +421,29 @@ int sp_lua_write_file(TXLuaContext *s, const char *path)
 
     lw.lctx = s;
     lw.out.path = path;
+    lw.is_compressed = !strcmp(&path[strlen(path) - 3], ".gz");
+
+    if (lw.is_compressed) {
+        lw.out.alloc = CHUNK_SIZE;
+        lw.out.data = av_malloc(lw.out.alloc);
+        if (!lw.out.data) {
+            ret = AVERROR(ENOMEM);
+            goto end;
+        }
+
+        ret = deflateInit2(&lw.zlib.ctx, Z_BEST_COMPRESSION, Z_DEFLATED,
+                           MAX_WBITS | 16, 9, Z_DEFAULT_STRATEGY);
+        if (ret == Z_MEM_ERROR) {
+            ret = AVERROR(ENOMEM);
+            goto end;
+        }
+        if (ret != Z_OK) {
+            sp_log(s, SP_LOG_ERROR, "Unable to initialize zlib: %s!\n",
+                   lw.zlib.ctx.msg ? lw.zlib.ctx.msg : "generic error");
+            ret = AVERROR_EXTERNAL;
+            goto end;
+        }
+    }
 
     lw.out.file = av_fopen_utf8(path, "w+");
     if (!lw.out.file) {
@@ -323,9 +457,11 @@ int sp_lua_write_file(TXLuaContext *s, const char *path)
         sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", av_err2str(ret));
 
 end:
-    size_t written = lw.out.len;
-    lua_writer_free(&lw);
-    return sp_lua_unlock_interface(s, ret < 0 ? ret : written);
+    int ret2 = lua_writer_end(&lw, NULL, NULL);
+    if (ret >= 0)
+        ret = ret2;
+
+    return sp_lua_unlock_interface(s, ret);
 }
 
 int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)

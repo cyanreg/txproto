@@ -88,6 +88,65 @@ void sp_lua_close_ctx(TXLuaContext **s)
     av_freep(s);
 }
 
+struct SPLuaWriterContext {
+    TXLuaContext *lctx;
+
+    struct {
+        FILE *file;
+        const char *path;
+        uint8_t *data;
+        unsigned int alloc;
+        size_t len;
+    } out;
+
+    int is_compressed; /* 0 for no, 1 for yes */
+
+    struct {
+        z_stream ctx;
+        uint8_t *buf;
+        size_t buf_alloc;
+    } zlib;
+};
+
+static void lua_writer_free(struct SPLuaWriterContext *lw)
+{
+    if (lw->out.file)
+        fclose(lw->out.file);
+    memset(lw, 0, sizeof(*lw));
+}
+
+static int lua_write_fn(lua_State *L, const void *data, size_t len, void *opaque)
+{
+    int ret;
+    struct SPLuaWriterContext *lw = opaque;
+
+    if (lw->out.file) {
+        ret = fwrite(data, 1, len, lw->out.file);
+        if (ret != len) {
+            sp_log(lw->lctx, SP_LOG_ERROR, "Error writing file \"%s\": %s!\n",
+                   lw->out.path, av_err2str(ret));
+            return AVERROR(errno);
+        }
+
+        lw->out.len += ret;
+    } else {
+        uint8_t *new_data = av_fast_realloc(lw->out.data, &lw->out.alloc,
+                                            len + lw->out.len);
+        if (!new_data) {
+            av_freep(&lw->out.data);
+            lw->out.len = 0;
+            return AVERROR(ENOMEM);
+        }
+
+        memcpy(new_data + lw->out.len, data, len);
+
+        lw->out.data = new_data;
+        lw->out.len += len;
+    }
+
+    return 0;
+}
+
 struct SPLuaReaderContext {
     TXLuaContext *lctx;
 
@@ -234,6 +293,39 @@ end:
     lua_reader_free(lr);
     *size = 0;
     return NULL;
+}
+
+int sp_lua_write_file(TXLuaContext *s, const char *path)
+{
+    int ret = 0;
+    struct SPLuaWriterContext lw = { 0 };
+    lua_State *L = sp_lua_lock_interface(s);
+
+    if (!lua_isfunction(L, -1)) {
+        sp_log(s, SP_LOG_ERROR, "Error writing Lua code, expected a \"function\", got \"%s\"!\n",
+               lua_typename(L, lua_type(L, -1)));
+        ret = AVERROR(EINVAL);
+        goto end;
+    }
+
+    lw.lctx = s;
+    lw.out.path = path;
+
+    lw.out.file = av_fopen_utf8(path, "w+");
+    if (!lw.out.file) {
+        sp_log(s, SP_LOG_ERROR, "File \"%s\" not found!\n", path);
+        ret = AVERROR(EINVAL);
+        goto end;
+    }
+
+    ret = lua_dump(L, lua_write_fn, &lw, 0);
+    if (ret < 0)
+        sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", av_err2str(ret));
+
+end:
+    size_t written = lw.out.len;
+    lua_writer_free(&lw);
+    return sp_lua_unlock_interface(s, ret < 0 ? ret : written);
 }
 
 int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)

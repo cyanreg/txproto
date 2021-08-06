@@ -44,6 +44,7 @@ _Thread_local TXCLIContext *cli_ctx_tls_ptr = NULL;
 static const char *built_in_commands[] = {
     "quit",
     "load",
+    "dump",
     "stats",
     "require",
     "help",
@@ -326,6 +327,32 @@ static void *cli_thread_fn(void *arg)
             }
 
             goto line_end;
+        } else if (!strncmp(line, "dump", strlen("dump"))) {
+            line_mod = av_strdup(line);
+            char *save, *fn_name = av_strtok(line_mod, " ", &save);
+            fn_name = av_strtok(NULL, " ", &save); /* Skip "load" */
+
+            if (!fn_name) {
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing path for \"dump\", "
+                       "syntax is dump <function> <path>!\n");
+                goto line_end;
+            }
+
+            char *path  = av_strtok(NULL, " ", &save);
+            if (!path) {
+                sp_log(cli_ctx, SP_LOG_ERROR, "Missing path for \"dump\", "
+                       "syntax is dump <function> <path>!\n");
+                goto line_end;
+            }
+
+            lua_getglobal(L, fn_name);
+
+            ret = sp_lua_write_file(cli_ctx->lua, path);
+            if (ret >= 0)
+                sp_log(cli_ctx, SP_LOG_INFO, "Lua function \"%s\" successfully written to \"%s\", "
+                       "length: %i bytes\n", fn_name, path, ret);
+
+            goto line_end;
         } else if (!strcmp("stats", line)) {
             size_t mem_used = 1024*lua_gc(L, LUA_GCCOUNT) + lua_gc(L, LUA_GCCOUNTB);
             double mem_used_f;
@@ -455,11 +482,11 @@ static void *cli_thread_fn(void *arg)
         }
 
         ret = luaL_dostring(L, line);
-        if (lua_isstring(L, -1))
+        int items = lua_gettop(L);
+        if (items && lua_isstring(L, -1))
             sp_log(cli_ctx->lua, ret == LUA_OK ? SP_LOG_INFO : SP_LOG_ERROR,
                    "%s\n", lua_tostring(L, -1));
-
-        lua_pop(L, 1);
+        lua_pop(L, items);
 
 line_end:
         sp_lua_unlock_interface(cli_ctx->lua, 0);

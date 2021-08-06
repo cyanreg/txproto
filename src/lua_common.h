@@ -65,6 +65,9 @@ lua_State *sp_lua_lock_interface(TXLuaContext *lctx);
 /* Unlock the Lua interface, ret is directly returned */
 int sp_lua_unlock_interface(TXLuaContext *lctx, int ret);
 
+/* Write a Lua function to a file, as a Lua binary representation */
+int sp_lua_write_file(TXLuaContext *s, const char *path);
+
 /* Load a Lua buffer, raw text or gzip compressed */
 int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len);
 

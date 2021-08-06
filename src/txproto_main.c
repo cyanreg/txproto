@@ -123,8 +123,6 @@ int main(int argc, char *argv[])
     if (err < 0)
         return err;
 
-    print_ff_libs(ctx);
-
     ctx->commit_list = sp_bufferlist_new();
     ctx->discard_list = sp_bufferlist_new();
     ctx->ext_buf_refs = sp_bufferlist_new();
@@ -241,6 +239,8 @@ int main(int argc, char *argv[])
 
     sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
            PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
+
+    print_ff_libs(ctx);
 
     sp_log_set_status("Initializing...\n", SP_STATUS_LOCK);
 

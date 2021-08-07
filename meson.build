@@ -91,9 +91,13 @@ endif
 
 add_global_arguments(build_opts, language: 'c')
 
+features = '"base'
+
 # scripts
 subdir('scripts')
 subdir('src')
+
+conf.set('FEATURE_SET', features + '"')
 
 configure_file(
     output: 'config.h',

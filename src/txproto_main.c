@@ -237,8 +237,8 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-    sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s)\n",
-           PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
+    sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s, features: %s)\n",
+           PROJECT_NAME, PROJECT_VERSION_STRING, vcstag, FEATURE_SET);
 
     print_ff_libs(ctx);
 

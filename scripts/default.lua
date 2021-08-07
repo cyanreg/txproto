@@ -27,7 +27,7 @@ end
 --[[ All events, unless indicated, are atomic and require either a tx.commit()
      to actually run or tx.discard() to scrap the entire command buffer and
      start over. ]]--
-function initial_config(...)
+function main(...)
 
     --[[ Trailing command line arguments appear here. if more than one exists,
          it can be initialized via `local argument1, argument2, etc = ... ]]--

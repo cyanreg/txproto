@@ -19,7 +19,7 @@ function muxer_stats(stats)
     tx.set_status(statusline)
 end
 
-function initial_config(...)
+function main(...)
     event = tx.register_io_cb(io_update_cb)
     event.destroy()
 

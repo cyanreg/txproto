@@ -41,6 +41,8 @@
 /* Built-in script */
 #include "default.lua.bin.h"
 
+#define DEFAULT_ENTRYPOINT "main"
+
 jmp_buf quit_loc;
 static void on_quit_signal(int signo)
 {
@@ -132,7 +134,7 @@ int main(int argc, char *argv[])
     /* Options */
     int disable_cli = 0;
     const char *script_name = NULL;
-    const char *script_entrypoint = NULL;
+    const char *script_entrypoint = DEFAULT_ENTRYPOINT;
 
     /* io, os and require not loaded due to security concerns */
     char *lua_libs_list = av_strdup(LUA_BASELIBNAME","
@@ -211,7 +213,8 @@ int main(int argc, char *argv[])
                    "    -s <filename>                 "
                             "External Lua script name to load\n"
                    "    -e <entrypoint>               "
-                            "Entrypoint to call into the custom script\n"
+                            "Entrypoint to call into the custom script (default: \""
+                            DEFAULT_ENTRYPOINT "\")\n"
                    "    -r <string1>,<string2>        "
                             "Additional comma-separated Lua libraries/packages to load\n"
                    "    -V <component>=<level>,...    "
@@ -231,8 +234,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (script_entrypoint && !script_name) {
-        sp_log(ctx, SP_LOG_ERROR, "Must specify custom script to use a custom entrypoint!\n");
+    if (strcmp(script_entrypoint, DEFAULT_ENTRYPOINT) && !script_name) {
+        sp_log(ctx, SP_LOG_ERROR, "Internal scripts must use the default entrypoint!\n");
         err = AVERROR(EINVAL);
         goto end;
     }
@@ -283,7 +286,7 @@ int main(int argc, char *argv[])
                                      default_lua_bin_len)) < 0)
             goto end;
 
-        script_entrypoint = "initial_config";
+        script_entrypoint = DEFAULT_ENTRYPOINT;
     }
 
 #ifdef HAVE_LIBEDIT

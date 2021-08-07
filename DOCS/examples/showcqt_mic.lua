@@ -10,10 +10,10 @@ function io_update_cb(identifier, entry)
     if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-FiiO_FiiO_USB_DAC_K1-01.analog-stereo.monitor" then audio_source_id = identifier end
     if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo.monitor" then audio_source_id = identifier end
     if entry ~= nil and audio_mic_id == nil and entry.name == "Microphone" then audio_mic_id = identifier end
-    --if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_mic_id = identifier end
+    if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_mic_id = identifier end
 end
 
-function initial_config(...)
+function main(...)
     event = tx.register_io_cb(io_update_cb)
     event.destroy()
 

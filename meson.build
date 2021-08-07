@@ -97,6 +97,7 @@ features = '"base'
 subdir('scripts')
 subdir('src')
 
+conf.set('COMPILER', '"' + cc.get_id() + ' ' + cc.version() + '"')
 conf.set('FEATURE_SET', features + '"')
 
 configure_file(

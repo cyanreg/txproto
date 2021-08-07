@@ -42,7 +42,7 @@ if libedit.found()
     dependencies += libedit
     sources += 'cli.c'
     conf.set('HAVE_LIBEDIT', 1)
-    features += ', ' + libedit.name()
+    features += ', ' + libedit.name() + ' ' + libedit.version()
 endif
 
 # libavdevice
@@ -51,7 +51,7 @@ if libavdevice.found()
     dependencies += libavdevice
     sources += 'iosys_lavd.c'
     conf.set('HAVE_LAVD', 1)
-    features += ', ' + libavdevice.name()
+    features += ', ' + libavdevice.name() + ' ' + libavdevice.version()
 endif
 
 # Pulseaudio
@@ -60,7 +60,7 @@ if libpulse.found()
     dependencies += libpulse
     sources += 'iosys_pulse.c'
     conf.set('HAVE_PULSEAUDIO', 1)
-    features += ', ' + libpulse.name()
+    features += ', ' + libpulse.name() + ' ' + libpulse.version()
 endif
 
 # Wayland
@@ -83,7 +83,7 @@ if have_wayland
     sources += 'interface_wayland.c'
     sources += 'wayland_common.c'
     conf.set('HAVE_WAYLAND', 1)
-    features += ', ' + 'wayland'
+    features += ', ' + 'wayland' + ' ' + wayland_deps.get(0).version()
 
     gbm_dep = dependency('gbm', version: '>=17.1.0', required: false)
     if gbm_dep.found()

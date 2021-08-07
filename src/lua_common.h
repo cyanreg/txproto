@@ -68,6 +68,9 @@ int sp_lua_unlock_interface(TXLuaContext *lctx, int ret);
 /* Write a Lua function to a file, as a Lua binary representation */
 int sp_lua_write_file(TXLuaContext *s, const char *path);
 
+/* Write a Lua function to a data buffer */
+int sp_lua_write_chunk(TXLuaContext *s, uint8_t **data, size_t *len, int gzip);
+
 /* Load a Lua buffer, raw text or gzip compressed */
 int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len);
 

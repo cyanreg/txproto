@@ -406,7 +406,9 @@ end:
     return NULL;
 }
 
-int sp_lua_write_file(TXLuaContext *s, const char *path)
+static int sp_lua_write_internal(TXLuaContext *s, const char *path,
+                                 uint8_t **dst, size_t *len,
+                                 int compress)
 {
     int ret = 0;
     struct SPLuaWriterContext lw = { 0 };
@@ -420,11 +422,21 @@ int sp_lua_write_file(TXLuaContext *s, const char *path)
     }
 
     lw.lctx = s;
-    lw.out.path = path;
+    lw.is_compressed = compress;
 
-    size_t path_len = strlen(path);
-    if (path_len > 3)
-        lw.is_compressed = !strcmp(&path[path_len - 3], ".gz");
+    if (path) {
+        size_t path_len = strlen(path);
+        if (path_len > 3 && !compress)
+            lw.is_compressed = !strcmp(&path[path_len - 3], ".gz");
+
+        lw.out.path = path;
+        lw.out.file = av_fopen_utf8(path, "w+");
+        if (!lw.out.file) {
+            sp_log(s, SP_LOG_ERROR, "File \"%s\" not found!\n", path);
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+    }
 
     if (lw.is_compressed) {
         lw.out.alloc = CHUNK_SIZE;
@@ -448,23 +460,26 @@ int sp_lua_write_file(TXLuaContext *s, const char *path)
         }
     }
 
-    lw.out.file = av_fopen_utf8(path, "w+");
-    if (!lw.out.file) {
-        sp_log(s, SP_LOG_ERROR, "File \"%s\" not found!\n", path);
-        ret = AVERROR(EINVAL);
-        goto end;
-    }
-
     ret = lua_dump(L, lua_write_fn, &lw, 0);
     if (ret < 0)
         sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", av_err2str(ret));
 
 end:
-    int ret2 = lua_writer_end(&lw, NULL, NULL);
+    int ret2 = lua_writer_end(&lw, dst, len);
     if (ret >= 0)
         ret = ret2;
 
     return sp_lua_unlock_interface(s, ret);
+}
+
+int sp_lua_write_file(TXLuaContext *s, const char *path)
+{
+    return sp_lua_write_internal(s, path, NULL, NULL, 0);
+}
+
+int sp_lua_write_chunk(TXLuaContext *s, uint8_t **data, size_t *len, int gzip)
+{
+    return sp_lua_write_internal(s, NULL, data, len, 0);
 }
 
 int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)

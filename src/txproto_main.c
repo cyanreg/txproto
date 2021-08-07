@@ -242,8 +242,6 @@ int main(int argc, char *argv[])
 
     print_ff_libs(ctx);
 
-    sp_log_set_status("Initializing...\n", SP_STATUS_LOCK);
-
     /* Setup signal handlers */
     int quit = setjmp(quit_loc);
     if (quit)
@@ -286,6 +284,11 @@ int main(int argc, char *argv[])
         script_entrypoint = "initial_config";
     }
 
+#ifdef HAVE_LIBEDIT
+    if (!disable_cli && (err = sp_cli_init(&ctx->cli, ctx) < 0))
+        goto end;
+#endif
+
     /* Run the script */
     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
         sp_log(ctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
@@ -312,22 +315,13 @@ int main(int argc, char *argv[])
 
     sp_lua_unlock_interface(ctx->lua, 0);
 
-#ifdef HAVE_LIBEDIT
-    if (!disable_cli && (err = sp_cli_init(&ctx->cli, ctx) < 0))
-        goto end;
-#endif
-
-    /* Unlock status line */
-    sp_log_set_status(NULL, SP_STATUS_UNLOCK);
-
-    av_usleep(INT_MAX);
+    while (1)
+        av_usleep(UINT_MAX);
 
 end:
 #ifdef HAVE_LIBEDIT
     sp_cli_uninit(&ctx->cli);
 #endif
-
-    sp_log_set_status(NULL, SP_STATUS_LOCK | SP_STATUS_NO_CLEAR);
 
     err = ctx->lua_exit_code ? ctx->lua_exit_code : err;
     sp_log(ctx, SP_LOG_INFO, "Quitting%s!\n",

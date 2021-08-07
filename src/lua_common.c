@@ -421,7 +421,10 @@ int sp_lua_write_file(TXLuaContext *s, const char *path)
 
     lw.lctx = s;
     lw.out.path = path;
-    lw.is_compressed = !strcmp(&path[strlen(path) - 3], ".gz");
+
+    size_t path_len = strlen(path);
+    if (path_len > 3)
+        lw.is_compressed = !strcmp(&path[path_len - 3], ".gz");
 
     if (lw.is_compressed) {
         lw.out.alloc = CHUNK_SIZE;

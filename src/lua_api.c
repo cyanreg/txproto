@@ -1548,6 +1548,9 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     SET_OPT_INT(entry->api_id, "api_id");
     SET_OPT_BOOL(entry->is_default, "default");
 
+    if (entry->type != SP_IO_TYPE_NONE)
+        SET_OPT_STR(sp_iosys_entry_type_string(entry->type), "type");
+
     if (sp_class_get_type(entry) & SP_TYPE_VIDEO_BIDIR) {
         lua_newtable(L);
 

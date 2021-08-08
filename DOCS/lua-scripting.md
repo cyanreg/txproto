@@ -31,6 +31,7 @@ The callback will be called with a single argument, a Lua table, with the follow
     description,        -- String, usually a longer, more descriptive version of the name.
     identifier,         -- Userdata. Context needed to activate the device by passing it through `tx.create_io`.
     api_id,             -- Integer, an opaque ID that to the API used identifies the entry
+    type                -- String, high-level description, can be either 'display', 'microphone', 'monitor'.
     default,            -- Boolean, true means that this is the default device used (e.g. monitor or audio device).
 
     video = {           -- Table, only available if the device type is video

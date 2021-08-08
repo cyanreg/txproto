@@ -1,17 +1,13 @@
-io_list = {}
-video_source_id = nil
-audio_source_id = nil
-audio_mic_id = nil
+audio_monitor_id = nil
+video_display_id = nil
 
 function io_update_cb(identifier, entry)
-    io_list[identifier] = entry
-    if entry ~= nil and video_source_id == nil and entry.name == "eDP-1" then video_source_id = identifier end
-    if entry ~= nil and video_source_id == nil and entry.name == "/dev/video0" then video_cam_id = identifier end
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-FiiO_FiiO_USB_DAC_K1-01.analog-stereo.monitor" then audio_source_id = identifier end
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-262a_FiiO_USB_DAC_K1-01.analog-stereo.monitor" then audio_source_id = identifier end
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo.monitor" then audio_source_id = identifier end
-    if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_mic_id = identifier end
-    if entry ~= nil and audio_mic_id == nil and entry.name == "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo" then audio_mic_id = identifier end
+    if video_display_id == nil and entry.type == "display" and entry.default then
+        video_display_id = identifier
+    end
+    if audio_monitor_id == nil and entry.type == "monitor" and entry.default then
+        audio_monitor_id = identifier
+    end
 end
 
 function muxer_stats(stats)
@@ -26,7 +22,7 @@ function main(...)
     tx.set_epoch(0)
 
     --[[ VIDEO ]] --
-    source_video = tx.create_io(video_source_id, {
+    source_video = tx.create_io(video_display_id, {
             capture_cursor = "1",
             capture_mode = "screencopy-dmabuf",
         })
@@ -43,9 +39,8 @@ function main(...)
             pix_fmt = "nv12",
             priv_options = { fifo_size = 2 },
             options = {
-                rc_mode = "VBR",
---                qp = 12,
-                b = 10^3 --[[ Kbps ]] * 3500,
+                rc_mode = "CQP",
+                qp = 24,
                 quality = 8,
                 profile = "high",
                 keyint_min = 180,
@@ -55,7 +50,7 @@ function main(...)
     encoder_v.link(filter_vid)
 
     --[[ AUDIO ]]--
-    source_audio = tx.create_io(audio_source_id, {
+    source_audio = tx.create_io(audio_monitor_id, {
             buffer_ms = 120,
         })
 
@@ -81,7 +76,7 @@ function main(...)
 
     muxer = tx.create_muxer({
             out_url = "rec.mp4",
-            priv_options = { dump_info = true, low_latency = false },
+            priv_options = { dump_info = true, low_latency = true },
         })
     muxer.link(encoder_v)
     muxer.link(encoder_a)

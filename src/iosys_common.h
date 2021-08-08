@@ -54,10 +54,22 @@ typedef const struct IOSysAPI {
     int (*ctrl)(AVBufferRef *ctx, enum SPEventType ctrl, void *arg);
 } IOSysAPI;
 
+enum IOType {
+    SP_IO_TYPE_NONE = 0,
+
+    SP_IO_TYPE_VIDEO_DISPLAY = 1,
+
+    SP_IO_TYPE_AUDIO_MICROPHONE = 2,
+    SP_IO_TYPE_AUDIO_MONITOR = 3,
+    SP_IO_TYPE_AUDIO_OUTPUT = 4,
+};
+
 typedef struct IOSysEntry {
     SPClass *class;
 
     char *desc;
+    enum IOType type;
+
     uint32_t identifier;
     uint32_t api_id;
     int is_default;
@@ -92,6 +104,8 @@ typedef struct IOSysEntry {
 
 AVBufferRef *sp_bufferlist_iosysentry_by_id(AVBufferRef *ref, void *opaque);
 uint32_t sp_iosys_gen_identifier(void *ctx, uint32_t num, uint32_t extra);
+
+const char *sp_iosys_entry_type_string(enum IOType type);
 
 extern const IOSysAPI *sp_compiled_apis[];
 extern const int sp_compiled_apis_len;

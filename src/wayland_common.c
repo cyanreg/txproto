@@ -200,6 +200,7 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
         entry->identifier = sp_iosys_gen_identifier(ctx, id, 0);
         entry->api_id = id;
         entry->api_priv = output;
+        entry->type = SP_IO_TYPE_VIDEO_DISPLAY;
 
         sp_class_alloc(entry, NULL, SP_TYPE_VIDEO_BIDIR, ctx);
 

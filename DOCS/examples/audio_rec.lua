@@ -1,8 +1,9 @@
-audio_source_id = nil
+audio_mic_id = nil
 
 function io_update_cb(identifier, entry)
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_input.pci-0000_00_1f.3.analog-stereo" then audio_source_id = identifier end
-    if entry ~= nil and audio_source_id == nil and entry.name == "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7GVA3A0647820-00.analog-stereo" then audio_source_id = identifier end
+    if audio_mic_id == nil and entry.type == "microphone" and entry.default then
+        audio_mic_id = identifier
+    end
 end
 
 function muxer_stats(stats)
@@ -16,7 +17,7 @@ function main(...)
 
     tx.set_epoch(0)
 
-    source_mic = tx.create_io(audio_source_id, {
+    source_mic = tx.create_io(audio_mic_id, {
             buffer_ms = 8,
         })
 

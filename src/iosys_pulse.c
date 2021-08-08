@@ -691,6 +691,7 @@ static void sink_cb(pa_context *context, const pa_sink_info *info,
 {
     CALLBACK_BOILERPLATE("sink", PULSE_SINK)
     entry->desc = av_strdup(info->description);
+    entry->type = SP_IO_TYPE_AUDIO_OUTPUT;
     priv->monitor_source = info->monitor_source;
     CALLBACK_FOOTER(PULSE_SINK)
 }
@@ -700,6 +701,7 @@ static void source_cb(pa_context *context, const pa_source_info *info,
 {
     CALLBACK_BOILERPLATE("source", PULSE_SOURCE)
     entry->desc = av_strdup(info->description);
+    entry->type = SP_IO_TYPE_AUDIO_MICROPHONE;
     CALLBACK_FOOTER(PULSE_SOURCE)
 }
 
@@ -708,6 +710,7 @@ static void sink_input_cb(pa_context *context, const pa_sink_input_info *info,
 {
     CALLBACK_BOILERPLATE("sink input", PULSE_SINK_INPUT)
     entry->desc = av_strdup("sink input");
+    entry->type = SP_IO_TYPE_AUDIO_MONITOR;
     priv->master_sink_index = info->sink;
     CALLBACK_FOOTER(PULSE_SINK_INPUT)
 }
@@ -844,13 +847,28 @@ static int pulse_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
             SPBufferList *tmp_event = sp_bufferlist_new();
             sp_eventlist_add(ctx, tmp_event, event);
 
+            const char *def_sink = ctx->default_sink_name;
+            int def_sink_len = def_sink ? strlen(def_sink) : 0;
+
             AVBufferRef *obj = NULL;
             while ((obj = sp_bufferlist_iter_ref(ctx->entries))) {
                 IOSysEntry *entry = (IOSysEntry *)obj->data;
                 int is_sink = sp_class_get_type(entry) & SP_TYPE_AUDIO_SINK;
-                const char *def = is_sink ? ctx->default_sink_name : ctx->default_source_name;
 
-                entry->is_default = !strcmp(sp_class_get_name(entry), def);
+                const char *def = is_sink ? def_sink : ctx->default_source_name;
+                const char *name = sp_class_get_name(entry);
+                int name_len = strlen(name);
+
+                if (def)
+                    entry->is_default = !strcmp(name, def);
+
+                if (!entry->is_default && def_sink &&
+                    !strncmp(def_sink, name, def_sink_len) &&
+                    name_len == (def_sink_len + strlen(".monitor")) &&
+                    !strcmp(name + def_sink_len, ".monitor")) {
+                    entry->is_default = 1;
+                    entry->type = SP_IO_TYPE_AUDIO_MONITOR;
+                }
 
                 sp_eventlist_dispatch(entry, tmp_event,
                                       SP_EVENT_ON_CHANGE | SP_EVENT_TYPE_SOURCE |

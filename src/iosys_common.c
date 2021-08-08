@@ -47,6 +47,22 @@ uint32_t sp_iosys_gen_identifier(void *ctx, uint32_t num, uint32_t extra)
     return crc;
 }
 
+const char *sp_iosys_entry_type_string(enum IOType type)
+{
+    static const char *io_type_map[] = {
+        [SP_IO_TYPE_NONE] = "none",
+        [SP_IO_TYPE_VIDEO_DISPLAY] = "display",
+        [SP_IO_TYPE_AUDIO_MICROPHONE] = "microphone",
+        [SP_IO_TYPE_AUDIO_MONITOR] = "monitor",
+        [SP_IO_TYPE_AUDIO_OUTPUT] = "output",
+    };
+
+    if (type < 0 || type > SP_ARRAY_ELEMS(io_type_map))
+        return "none";
+
+    return io_type_map[type];
+}
+
 #ifdef HAVE_LAVD
 extern const IOSysAPI src_lavd;
 #endif

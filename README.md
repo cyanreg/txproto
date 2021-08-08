@@ -22,7 +22,7 @@ Features
 Discussions and help
 --------------------
 
-Join [#txproto:pars.ee](https://matrix.to/#/#txproto:pars.ee) on Matrix.
+Join `#txproto` on Libera, or [#txproto:pars.ee](https://matrix.to/#/#txproto:pars.ee) on Matrix.
 
 Feature policy
 --------------

@@ -153,7 +153,7 @@ enum SPEventType {
     SP_EVENT_ON_EOS          = (1ULL <<  5), /* NULL data */
     SP_EVENT_ON_ERROR        = (1ULL <<  6), /* 32-bit integer */
     SP_EVENT_ON_DESTROY      = (1ULL <<  7), /* NULL data, or a 0-terminated SPGenericData array */
-    SP_EVENT_ON_CLOCK        = (1ULL <<  8), /* SPRationalValue */
+    SP_EVENT_ON_OUTPUT       = (1ULL <<  8), /* SPRationalValue */
     SP_EVENT_ON_MASK         = (((1ULL << 16) - 1) <<  0), /* 16 bits reserved for event triggers */
 
     /* [16:31] - Types, if ORd when comitting, will only run events with that type */

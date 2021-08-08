@@ -159,6 +159,7 @@ static int lavd_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 
 static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
 {
+    AVDictionary *dict = NULL;
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
 
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
@@ -167,7 +168,7 @@ static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
         sp_eventlist_discard(iosys_entry->events);
         return 0;
     } else if (ctrl & SP_EVENT_CTRL_OPTS) {
-        AVDictionary *dict = arg;
+        dict = arg;
     } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
         return AVERROR(ENOTSUP);
     }
@@ -176,7 +177,7 @@ static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
 
     ctrl_ctx->ctrl = ctrl;
     if (ctrl & SP_EVENT_CTRL_OPTS)
-        av_dict_copy(&ctrl_ctx->opts, arg, 0);
+        av_dict_copy(&ctrl_ctx->opts, dict, 0);
     if (ctrl & SP_EVENT_CTRL_START)
         ctrl_ctx->epoch = arg;
 
@@ -238,7 +239,7 @@ static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
 
     AVCodecParameters *codecpar = priv->avf->streams[0]->codecpar;
 
-    AVCodec *codec = avcodec_find_decoder(codecpar->codec_id);
+    const AVCodec *codec = avcodec_find_decoder(codecpar->codec_id);
 
     priv->avctx = avcodec_alloc_context3(codec);
 
@@ -273,7 +274,6 @@ static const char *blacklist[] = {
 
 static void destroy_entry(void *opaque, uint8_t *data)
 {
-    LavdCtx *ctx = (LavdCtx *)opaque;
     IOSysEntry *entry = (IOSysEntry *)data;
 
     if (entry->io_priv) {
@@ -299,8 +299,8 @@ static void destroy_entry(void *opaque, uint8_t *data)
     av_free(entry);
 }
 
-static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
-                       AVClassCategory category)
+static void mod_device(LavdCtx *ctx, const AVInputFormat *cur,
+                       AVDeviceInfo *dev_info, AVClassCategory category)
 {
     if (cur && strcmp(cur->name, "fbdev"))
         return;
@@ -328,7 +328,7 @@ static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
             entry->desc = av_strdup(dev_info->device_description);
         }
 
-        entry->api_priv = cur;
+        entry->api_priv = (void *)cur;
         entry->events = sp_bufferlist_new();
         entry->identifier = idx;
 
@@ -343,10 +343,10 @@ static void mod_device(LavdCtx *ctx, AVInputFormat *cur, AVDeviceInfo *dev_info,
     }
 }
 
-static void iter_sources(LavdCtx *ctx, AVInputFormat *(*iter)(AVInputFormat *),
+static void iter_sources(LavdCtx *ctx, const AVInputFormat *(*iter)(const AVInputFormat *),
                          AVClassCategory category)
 {
-    AVInputFormat *cur = NULL;
+    const AVInputFormat *cur = NULL;
 
 start:
     while ((cur = iter(cur))) {
@@ -469,7 +469,8 @@ static void lavd_uninit(void *opaque, uint8_t *data)
 
 static int lavd_init(AVBufferRef **s)
 {
-    int err = 0, locked = 0;
+    int err = 0;
+
     LavdCtx *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return AVERROR(ENOMEM);

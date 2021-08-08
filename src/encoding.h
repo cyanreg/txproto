@@ -40,7 +40,7 @@ typedef struct EncodingContext {
     /* Needed to start */
     AVBufferRef *src_frames;
     AVBufferRef *dst_packets;
-    AVCodec *codec;
+    const AVCodec *codec;
     int need_global_header; /* Will be forced 0 on config reinit */
 
     /* Events */

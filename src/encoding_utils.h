@@ -31,7 +31,7 @@ static const AVCodecHWConfig *get_codec_hw_config(EncodingContext *ctx)
     return NULL;
 }
 
-static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec,
+static enum AVSampleFormat pick_codec_sample_fmt(const AVCodec *codec,
                                                  enum AVSampleFormat ifmt,
                                                  int ibps)
 {
@@ -74,7 +74,7 @@ static enum AVSampleFormat pick_codec_sample_fmt(AVCodec *codec,
     return max_bps_fmt;
 }
 
-static int pick_codec_sample_rate(AVCodec *codec, int irate)
+static int pick_codec_sample_rate(const AVCodec *codec, int irate)
 {
     int i = 0, ret;
     if (!codec->supported_samplerates)
@@ -99,7 +99,8 @@ static int pick_codec_sample_rate(AVCodec *codec, int irate)
     return ret;
 }
 
-static const uint64_t pick_codec_channel_layout(AVCodec *codec, uint64_t ilayout)
+static const uint64_t pick_codec_channel_layout(const AVCodec *codec,
+                                                uint64_t ilayout)
 {
     int i = 0;
     int max_channels = 0;

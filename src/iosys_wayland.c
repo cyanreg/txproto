@@ -463,7 +463,7 @@ static void scrcpy_shm_frame_free(void *opaque, uint8_t *data)
 	av_free(f);
 }
 
-static AVBufferRef *shm_pool_alloc(void *opaque, int size)
+static AVBufferRef *shm_pool_alloc(void *opaque, size_t size)
 {
     IOSysEntry *entry = (IOSysEntry *)opaque;
     WaylandCapturePriv *priv = entry->io_priv;
@@ -570,7 +570,7 @@ static void scrcpy_dmabuf_frame_free(void *opaque, uint8_t *data)
 	av_free(f);
 }
 
-static AVBufferRef *dmabuf_pool_alloc(void *opaque, int size)
+static AVBufferRef *dmabuf_pool_alloc(void *opaque, size_t size)
 {
     IOSysEntry *entry = (IOSysEntry *)opaque;
     WaylandCapturePriv *priv = entry->io_priv;

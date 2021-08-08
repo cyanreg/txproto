@@ -919,7 +919,7 @@ char *sp_event_flags_to_str(uint64_t flags)
     COND(SP_EVENT_ON_DESTROY,        on, "destroy")
     COND(SP_EVENT_ON_EOS,            on, "eos")
     COND(SP_EVENT_ON_ERROR,          on, "error")
-    COND(SP_EVENT_ON_CLOCK,          on, "clock")
+    COND(SP_EVENT_ON_OUTPUT,         on, "output")
 
     COND(SP_EVENT_TYPE_LINK,       type, "link")
     COND(SP_EVENT_TYPE_SOURCE,     type, "source")

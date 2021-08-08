@@ -330,7 +330,7 @@ static int string_to_event_flags(TXMainContext *ctx, uint64_t *dst,
         FLAG(SP_EVENT_ON_EOS,          on,   "eos")
         FLAG(SP_EVENT_ON_ERROR,        on,   "error")
         FLAG(SP_EVENT_ON_DESTROY,      on,   "destroy")
-        FLAG(SP_EVENT_ON_CLOCK,        on,   "clock")
+        FLAG(SP_EVENT_ON_OUTPUT,       on,   "output")
         FLAG(SP_EVENT_ON_MASK,         on,   "all")
 
         FLAG(SP_EVENT_TYPE_SOURCE,     type, "source")
@@ -419,7 +419,7 @@ static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     lua_rawgeti(L, LUA_REGISTRYINDEX, event_ctx->fn_ref);
 
     int num_args = 0;
-    if (event_ctx->flags & SP_EVENT_ON_CLOCK) {
+    if (event_ctx->flags & SP_EVENT_ON_OUTPUT) {
         SPRationalValue *val = data;
         lua_pushnumber(L, val->value * av_q2d(val->base));
         num_args = 1;

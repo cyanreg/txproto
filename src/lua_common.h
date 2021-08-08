@@ -85,7 +85,8 @@ int sp_lua_load_library(TXLuaContext *lctx, const char *lib);
  * (coroutine). Stack is untouched, unless clean_stack is set to 1.
  * Returns the number of entries the function returned (unless stack is cleaned),
  * or negative on error. May return AVERROR_EXIT to signal immediate exit */
-int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack);
+int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack,
+                                 int ctx_is_locked);
 
 /* Closes a context or a thread */
 void sp_lua_close_ctx(TXLuaContext **lctx);

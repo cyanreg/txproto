@@ -814,20 +814,22 @@ end:
     return sp_lua_unlock_interface(lctx, err);
 }
 
-int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack)
+int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack,
+                                 int ctx_is_locked)
 {
     int ret, nresults = 0;
 
+    lua_State *L = ctx_is_locked ? lctx->L : sp_lua_lock_interface(lctx);
+
     do {
         AVBufferRef *event_await = NULL;
-        lua_State *L = sp_lua_lock_interface(lctx);
 
         lua_pop(L, nresults);
 
         ret = lua_resume(L, NULL, nb_args, &nresults);
         if (ret != LUA_YIELD && ret != LUA_OK) {
             sp_log(lctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
-            ret = sp_lua_unlock_interface(lctx, AVERROR_EXTERNAL);
+            ret = AVERROR_EXTERNAL;
             goto end;
         }
 
@@ -837,25 +839,33 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
         if (nresults && lua_isfunction(L, -1)) {
             lua_CFunction cfn = lua_tocfunction(L, -1);
             if (cfn == sp_lua_quit) {
-                ret = sp_lua_unlock_interface(lctx, AVERROR_EXIT);
+                ret = AVERROR_EXIT;
                 goto end;
             }
         }
 
-        sp_lua_unlock_interface(lctx, 0);
+        if (ret == LUA_YIELD || event_await) {
+            /* Unlock */
+            sp_lua_unlock_interface(lctx, 0);
 
-        /* Await event */
-        sp_event_unref_await(&event_await);
+            /* Await event, if any */
+            sp_event_unref_await(&event_await);
+
+            /* Lock again */
+            sp_lua_lock_interface(lctx);
+        }
     } while (ret == LUA_YIELD);
     ret = 0;
 
 end:
     if (clean_stack) {
-        lua_State *L = sp_lua_lock_interface(lctx);
         lua_pop(L, nresults);
-        sp_lua_unlock_interface(lctx, 0);
         nresults = 0;
     }
+
+    /* Unlock if needed */
+    if (!ctx_is_locked)
+        sp_lua_unlock_interface(lctx, 0);
 
     return ret >= 0 ? nresults : ret;
 }

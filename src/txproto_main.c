@@ -286,7 +286,7 @@ int main(int argc, char *argv[])
 #endif
 
     /* Run the script's root */
-    if ((err = sp_lua_run_generic_yieldable(ctx->lua, 0, 1)) < 0)
+    if ((err = sp_lua_run_generic_yieldable(ctx->lua, 0, 1, 0)) < 0)
         goto end;
 
     /* Run script entrypoint if specified */
@@ -305,10 +305,10 @@ int main(int argc, char *argv[])
         for(; optind < argc; optind++)
             lua_pushstring(L, argv[optind]);
 
-        sp_lua_unlock_interface(ctx->lua, 0);
-
-        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1)) < 0)
+        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1, 0)) < 0)
             goto end;
+
+        sp_lua_unlock_interface(ctx->lua, 0);
     }
 
     /* We weren't told to exit or anything, so...
@@ -318,6 +318,8 @@ int main(int argc, char *argv[])
         av_usleep(UINT_MAX);
 
 end:
+    sp_log_set_status(NULL, SP_STATUS_LOCK | SP_STATUS_NO_CLEAR);
+
 #ifdef HAVE_LIBEDIT
     sp_cli_uninit(&ctx->cli);
 #endif

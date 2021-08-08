@@ -406,20 +406,15 @@ typedef struct HookLuaEventCtx {
     enum SPEventType flags;
     int fn_ref;
     AVBufferRef *ctx_ref;
+    TXLuaContext *lctx;
 } HookLuaEventCtx;
 
 static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
 {
     int err = 0;
-    TXMainContext *ctx = av_buffer_get_opaque(opaque);
     HookLuaEventCtx *event_ctx = (HookLuaEventCtx *)opaque->data;
-    lua_State *L = sp_lua_lock_interface(ctx->lua);
 
-    if (event_ctx->fn_ref == LUA_NOREF || event_ctx->fn_ref == LUA_REFNIL) {
-        sp_log(ctx, SP_LOG_ERROR, "Invalid Lua event callback \"nil\"!\n");
-        err = AVERROR_EXTERNAL;
-        goto end;
-    }
+    lua_State *L = sp_lua_lock_interface(event_ctx->lctx);
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, event_ctx->fn_ref);
 
@@ -486,25 +481,19 @@ static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     }
 
 call:
-    if (lua_pcall(L, num_args, 0, 0) != LUA_OK) {
-        sp_log(ctx, SP_LOG_ERROR, "Error calling Lua event callback: %s!\n",
-               lua_tostring(L, -1));
-        err = AVERROR_EXTERNAL;
-        goto end;
-    }
+    err = sp_lua_run_generic_yieldable(event_ctx->lctx, num_args, 1, 1);
 
-end:
-    return sp_lua_unlock_interface(ctx->lua, err);
+    return sp_lua_unlock_interface(event_ctx->lctx, err);
 }
 
 static void hook_lua_event_free(void *opaque, uint8_t *data)
 {
-    TXMainContext *ctx = opaque;
     HookLuaEventCtx *hook_lua_ctx = (HookLuaEventCtx *)data;
 
-    lua_State *L = sp_lua_lock_interface(ctx->lua);
+    lua_State *L = sp_lua_lock_interface(hook_lua_ctx->lctx);
     luaL_unref(L, LUA_REGISTRYINDEX, hook_lua_ctx->fn_ref);
-    sp_lua_unlock_interface(ctx->lua, 0);
+    sp_lua_unlock_interface(hook_lua_ctx->lctx, 0);
+    sp_lua_close_ctx(&hook_lua_ctx->lctx);
 
     av_buffer_unref(&hook_lua_ctx->ctx_ref);
 
@@ -584,6 +573,7 @@ static int lua_generic_hook(lua_State *L)
     /* Its a user event, we do not want to deduplicate */
     flags |= SP_EVENT_FLAG_NO_DEDUP;
 
+    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
     hook_lua_ctx->flags = flags;
     hook_lua_ctx->fn_ref = fn_ref;
 
@@ -929,6 +919,7 @@ static int lua_interface_create_selection(lua_State *L)
 
     uint64_t flags = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
 
+    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
     hook_lua_ctx->flags = flags;
     hook_lua_ctx->fn_ref = fn_ref;
 
@@ -1582,11 +1573,10 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
         lua_setfield(L, -2, "audio");
     }
 
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+    err = sp_lua_run_generic_yieldable(source_cb_ctx->lua, 2, 1, 1);
+    if (err < 0)
         sp_log(entry, SP_LOG_ERROR, "Error calling external source update callback: %s!\n",
                lua_tostring(L, -1));
-        err = AVERROR_EXTERNAL;
-    }
 
     return sp_lua_unlock_interface(source_cb_ctx->lua, err);
 }
@@ -1810,6 +1800,7 @@ static int lua_prompt(lua_State *L)
 
     uint64_t flags = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
 
+    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
     hook_lua_ctx->flags = flags;
     hook_lua_ctx->fn_ref = fn_ref;
 

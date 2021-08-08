@@ -187,7 +187,10 @@ static void *cli_thread_fn(void *arg)
         atomic_store(&cli_ctx->move_newline, 0);
 
         if (atomic_load(&cli_ctx->has_event)) {
-            ; /* Falls through */
+            SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
+            sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
+            atomic_store(&cli_ctx->has_event, 0);
+            goto line_end_nolock;
         } else if (!strlen(line)) {
             atomic_store(&cli_ctx->move_newline, 1);
             free(line);
@@ -243,12 +246,7 @@ static void *cli_thread_fn(void *arg)
 
         lua_State *L = sp_lua_lock_interface(cli_ctx->lua);
 
-        if (atomic_load(&cli_ctx->has_event)) {
-            SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
-            sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
-            atomic_store(&cli_ctx->has_event, 0);
-            goto line_end;
-        } else if (!strcmp("help", line)) {
+        if (!strcmp("help", line)) {
             sp_log_sync("Lua globals (\"help all\" to list all):\n");
             line_mod = av_strdup(line);
             char *save, *token = av_strtok(line_mod, " ", &save);
@@ -294,18 +292,18 @@ static void *cli_thread_fn(void *arg)
                     script_name = token;
                     if (sp_lua_load_file(cli_ctx->lua, script_name) < 0)
                         break;
-                    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                        sp_log(cli_ctx, SP_LOG_ERROR, "Lua script error: %s\n",
-                               lua_tostring(L, -1));
-                        break;
-                    }
+
+                    ret = sp_lua_run_generic_yieldable(cli_ctx->lua, 0, 1, 1);
+                    if (ret < 0)
+                        goto line_end;
                 } else if (!script_entrypoint) {
                     script_entrypoint = token;
                     lua_getglobal(L, script_entrypoint);
                     if (!lua_isfunction(L, -1)) {
                         sp_log(cli_ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                                script_entrypoint);
-                        break;
+                        ret = AVERROR(ENOENT);
+                        goto line_end;
                     }
                 } else {
                     lua_pushstring(L, token);
@@ -319,9 +317,11 @@ static void *cli_thread_fn(void *arg)
                 sp_log(cli_ctx, SP_LOG_ERROR, "Missing path for \"load\"!\n");
             } else if (!token) {
                 if (script_entrypoint) {
-                    if (lua_pcall(L, num_arguments, 0, 0) != LUA_OK) {
+                    ret = sp_lua_run_generic_yieldable(cli_ctx->lua, num_arguments, 1, 1);
+                    if (ret < 0) {
                         sp_log(cli_ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
                                script_entrypoint, lua_tostring(L, -1));
+                        goto line_end;
                     }
                 }
             }
@@ -374,6 +374,7 @@ static void *cli_thread_fn(void *arg)
                    sp_bufferlist_len(cli_ctx->main_ctx->ext_buf_refs));
             sp_log(cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
                    sp_bufferlist_len(ctx->commit_list));
+
             goto line_end;
         } else if (!strncmp(line, "require", strlen("require"))) {
             line_mod = av_strdup(line);

@@ -54,6 +54,14 @@ static void on_quit_signal(int signo)
     longjmp(quit_loc, signo);
 }
 
+static void print_version_features(TXMainContext *ctx)
+{
+    sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s, built with %s)\n",
+           PROJECT_NAME, PROJECT_VERSION_STRING, vcstag, COMPILER);
+
+    sp_log(ctx, SP_LOG_INFO, "Features: %s\n", FEATURE_SET);
+}
+
 static void print_ff_libs(TXMainContext *ctx)
 {
     struct lib {
@@ -111,7 +119,7 @@ static void cleanup_fn(TXMainContext *ctx)
 
 int main(int argc, char *argv[])
 {
-    int ret, err = 0;
+    int ret, err = 0, print_quit = 0;
     TXMainContext *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return AVERROR(ENOMEM);
@@ -156,7 +164,7 @@ int main(int argc, char *argv[])
             script_entrypoint = optarg;
             break;
         case 'v':
-            sp_log(ctx, SP_LOG_INFO, "%s %s (%s)\n", PROJECT_NAME, PROJECT_VERSION_STRING, vcstag);
+            print_version_features(ctx);
             goto end;
         case 'N':
             disable_cli = 1;
@@ -239,12 +247,10 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-    sp_log(ctx, SP_LOG_INFO, "Starting %s %s (%s, built with %s)\n",
-           PROJECT_NAME, PROJECT_VERSION_STRING, vcstag, COMPILER);
-
-    sp_log(ctx, SP_LOG_INFO, "Features: %s\n", FEATURE_SET);
-
+    print_version_features(ctx);
     print_ff_libs(ctx);
+
+    print_quit = 1;
 
     /* Setup signal handlers */
     int quit = setjmp(quit_loc);
@@ -318,15 +324,16 @@ int main(int argc, char *argv[])
         av_usleep(UINT_MAX);
 
 end:
-    sp_log_set_status(NULL, SP_STATUS_LOCK | SP_STATUS_NO_CLEAR);
-
 #ifdef HAVE_LIBEDIT
     sp_cli_uninit(&ctx->cli);
 #endif
 
+    sp_log_set_status(NULL, SP_STATUS_LOCK | SP_STATUS_NO_CLEAR);
+
     err = ctx->lua_exit_code ? ctx->lua_exit_code : err;
-    sp_log(ctx, SP_LOG_INFO, "Quitting%s!\n",
-           err == AVERROR(ENOMEM) ? ": out of memory" : "");
+    if (print_quit)
+        sp_log(ctx, SP_LOG_INFO, "Quitting%s!\n",
+               err == AVERROR(ENOMEM) ? ": out of memory" : "");
 
     cleanup_fn(ctx);
 

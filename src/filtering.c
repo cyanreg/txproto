@@ -171,7 +171,7 @@ static void add_pad(FilterContext *ctx, int is_out, int index,
         pad->fifo = is_out ? sp_frame_fifo_create(ctx, 0, 0) : sp_frame_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
         pad->main = ctx;
         pad->is_out = is_out;
-        pad->name = name;
+        pad->name = av_strdup(name);
         pad->type = type;
         pad->metadata = NULL;
     }
@@ -935,6 +935,7 @@ static void filter_free(void *opaque, uint8_t *data)
     for (int i = 0; i < ctx->num_in_pads; i++) {
         av_buffer_unref(&ctx->in_pads[i]->fifo);
         av_frame_free(&ctx->in_pads[i]->in_fmt);
+        av_free(ctx->in_pads[i]->name);
         av_free(ctx->in_pads[i]);
     }
     av_free(ctx->in_pads);
@@ -942,6 +943,7 @@ static void filter_free(void *opaque, uint8_t *data)
     for (int i = 0; i < ctx->num_out_pads; i++) {
         av_buffer_unref(&ctx->out_pads[i]->fifo);
         av_frame_free(&ctx->out_pads[i]->in_fmt);
+        av_free(ctx->out_pads[i]->name);
         av_free(ctx->out_pads[i]);
     }
     av_free(ctx->out_pads);

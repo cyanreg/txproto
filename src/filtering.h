@@ -28,7 +28,7 @@
 
 typedef struct FilterPad {
     struct FilterContext *main;
-    const char *name;
+    char *name;
     int is_out;
     enum AVMediaType type;
     AVDictionary *metadata; /* For filters outputting metadata, num_out_pads should be 1 */

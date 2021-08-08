@@ -2,6 +2,9 @@
 
 The main programming API is fully atomic and asynchronous. All actions, unless otherwise indicated,
 will only take effect if `tx.commit()` is called, and can be discarded via `tx.discard()`.
+All scripts and functions may call `coroutine.yield()` at any point. txproto will automatically
+resume execution of other coroutines, if any, and then resume. Callbacks may yield at any point as
+well. Finally, certain txproto API calls will yield, notably any event's `await()` method.
 
 Context creation functions
 --------------------------

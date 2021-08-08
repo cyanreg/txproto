@@ -38,6 +38,7 @@ typedef struct TXLuaContext {
 
     struct TXLuaContext *master_thread;
     int thread_ref;
+    int *nb_threads;
 
     lua_State *L;
     pthread_mutex_t *lock;
@@ -52,6 +53,8 @@ typedef struct TXLuaContext {
 #ifndef LUA_BASELIBNAME
 #define LUA_BASELIBNAME "base"
 #endif
+
+#define sp_lua_get_nb_threads(x) (*((x)->nb_threads))
 
 /* Create a Lua context and fill it with our API */
 int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list);

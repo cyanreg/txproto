@@ -111,7 +111,7 @@ static void cleanup_fn(TXMainContext *ctx)
 
 int main(int argc, char *argv[])
 {
-    int err = 0;
+    int ret, err = 0;
     TXMainContext *ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return AVERROR(ENOMEM);
@@ -173,7 +173,6 @@ int main(int argc, char *argv[])
             break;
         case 'V':
             {
-                int ret = 0;
                 char *save, *token = av_strtok(optarg, ",", &save);
                 while (token) {
                     char *val = strstr(token, "=");
@@ -198,7 +197,7 @@ int main(int argc, char *argv[])
             break;
         case 'L':
             {
-                int ret = sp_log_set_file(optarg);
+                ret = sp_log_set_file(optarg);
                 if (ret < 0) {
                     sp_log(ctx, SP_LOG_ERROR, "Unable to open logfile \"%s\" for writing!\n", optarg);
                     goto end;
@@ -269,14 +268,6 @@ int main(int argc, char *argv[])
     if (err < 0)
         goto end;
 
-    lua_State *L = sp_lua_lock_interface(ctx->lua);
-
-    /* Run the utils script to put it into memory */
-    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-        sp_log(ctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
-        goto end;
-    }
-
     /* Load the initial script */
     if (script_name) {
         if ((err = sp_lua_load_file(ctx->lua, script_name)))
@@ -294,32 +285,35 @@ int main(int argc, char *argv[])
         goto end;
 #endif
 
-    /* Run the script */
-    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-        sp_log(ctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
+    /* Run the script's root */
+    if ((err = sp_lua_run_generic_yieldable(ctx->lua, 0, 1)) < 0)
         goto end;
-    }
 
     /* Run script entrypoint if specified */
-    if (script_entrypoint) {
+    if (script_entrypoint && strlen(script_entrypoint)) {
+        lua_State *L = sp_lua_lock_interface(ctx->lua);
+
         lua_getglobal(L, script_entrypoint);
         if (!lua_isfunction(L, -1)) {
             sp_log(ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                    script_entrypoint);
+            err = sp_lua_unlock_interface(ctx->lua, AVERROR(ENOENT));
             goto end;
         }
+
         int args = argc - optind;
         for(; optind < argc; optind++)
             lua_pushstring(L, argv[optind]);
-        if (lua_pcall(L, args, 0, 0) != LUA_OK) {
-            sp_log(ctx, SP_LOG_ERROR, "Error running \"%s\": %s\n",
-                   script_entrypoint, lua_tostring(L, -1));
+
+        sp_lua_unlock_interface(ctx->lua, 0);
+
+        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1)) < 0)
             goto end;
-        }
     }
 
-    sp_lua_unlock_interface(ctx->lua, 0);
-
+    /* We weren't told to exit or anything, so...
+     * In the future, maybe we should put an event loop here to process
+     * periodic events */
     while (1)
         av_usleep(UINT_MAX);
 
@@ -334,5 +328,5 @@ end:
 
     cleanup_fn(ctx);
 
-    return err;
+    return err == AVERROR_EXIT ? 0 : err;
 }

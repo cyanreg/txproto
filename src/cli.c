@@ -167,8 +167,6 @@ static void *cli_thread_fn(void *arg)
     TXMainContext *ctx = cli_ctx->main_ctx;
     cli_ctx_tls_ptr = cli_ctx;
 
-    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
-
     sp_set_thread_name_self("cli");
 
     const char *name;
@@ -181,6 +179,8 @@ static void *cli_thread_fn(void *arg)
     rl_attempted_completion_function = input_completion;
     rl_initialize();
     rl_prep_terminal(1);
+
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
     while ((line = readline(prompt))) {
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);

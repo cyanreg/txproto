@@ -283,9 +283,11 @@ static int lua_event_await(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
+
     (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
-    sp_event_unref_await(&ref);
-    return 0;
+    lua_pushlightuserdata(L, ref);
+
+    return lua_yieldk(L, 1, 0, NULL);
 }
 
 static int string_to_event_flags(TXMainContext *ctx, uint64_t *dst,
@@ -1872,7 +1874,7 @@ static int lua_api_version(lua_State *L)
     return 2;
 }
 
-static int lua_quit(lua_State *L)
+int sp_lua_quit(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
@@ -1918,7 +1920,7 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
 
     { "api_version", lua_api_version },
 
-    { "quit", lua_quit },
+    { "quit", sp_lua_quit },
 
     { NULL, NULL },
 };

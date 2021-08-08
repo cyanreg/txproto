@@ -65,10 +65,10 @@ lua_State *sp_lua_lock_interface(TXLuaContext *lctx);
 /* Unlock the Lua interface, ret is directly returned */
 int sp_lua_unlock_interface(TXLuaContext *lctx, int ret);
 
-/* Write a Lua function to a file, as a Lua binary representation */
+/* Write a Lua function (top of stack) to a file, as a Lua binary representation */
 int sp_lua_write_file(TXLuaContext *s, const char *path);
 
-/* Write a Lua function to a data buffer */
+/* Write a Lua function (top of stack) to a data buffer */
 int sp_lua_write_chunk(TXLuaContext *s, uint8_t **data, size_t *len, int gzip);
 
 /* Load a Lua buffer, raw text or gzip compressed */
@@ -79,6 +79,13 @@ int sp_lua_load_file(TXLuaContext *lctx, const char *script_name);
 
 /* Load a library into the given Lua context */
 int sp_lua_load_library(TXLuaContext *lctx, const char *lib);
+
+/* Runs a yieldable Lua function (top of stack) in a loop until it errors or
+ * exits. Locks and unlocks between each un. Must be run in a Lua thread
+ * (coroutine). Stack is untouched, unless clean_stack is set to 1.
+ * Returns the number of entries the function returned (unless stack is cleaned),
+ * or negative on error. May return AVERROR_EXIT to signal immediate exit */
+int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack);
 
 /* Closes a context or a thread */
 void sp_lua_close_ctx(TXLuaContext **lctx);

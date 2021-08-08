@@ -558,6 +558,13 @@ int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list)
     if ((err = sp_lua_load_chunk(lctx, utils_lua_bin, utils_lua_bin_len)))
         goto fail;
 
+    /* Run the utils script */
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        sp_log(lctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
+        err = AVERROR(EINVAL);
+        goto fail;
+    }
+
     *s = lctx;
 
     return 0;
@@ -805,4 +812,50 @@ int sp_lua_load_library(TXLuaContext *lctx, const char *lib)
 
 end:
     return sp_lua_unlock_interface(lctx, err);
+}
+
+int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stack)
+{
+    int ret, nresults = 0;
+
+    do {
+        AVBufferRef *event_await = NULL;
+        lua_State *L = sp_lua_lock_interface(lctx);
+
+        lua_pop(L, nresults);
+
+        ret = lua_resume(L, NULL, nb_args, &nresults);
+        if (ret != LUA_YIELD && ret != LUA_OK) {
+            sp_log(lctx, SP_LOG_ERROR, "Lua script error: %s\n", lua_tostring(L, -1));
+            ret = sp_lua_unlock_interface(lctx, AVERROR_EXTERNAL);
+            goto end;
+        }
+
+        if (nresults && lua_islightuserdata(L, -1))
+            event_await = lua_touserdata(L, -1);
+
+        if (nresults && lua_isfunction(L, -1)) {
+            lua_CFunction cfn = lua_tocfunction(L, -1);
+            if (cfn == sp_lua_quit) {
+                ret = sp_lua_unlock_interface(lctx, AVERROR_EXIT);
+                goto end;
+            }
+        }
+
+        sp_lua_unlock_interface(lctx, 0);
+
+        /* Await event */
+        sp_event_unref_await(&event_await);
+    } while (ret == LUA_YIELD);
+    ret = 0;
+
+end:
+    if (clean_stack) {
+        lua_State *L = sp_lua_lock_interface(lctx);
+        lua_pop(L, nresults);
+        sp_lua_unlock_interface(lctx, 0);
+        nresults = 0;
+    }
+
+    return ret >= 0 ? nresults : ret;
 }

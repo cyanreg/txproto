@@ -23,3 +23,6 @@
 
 /* Load the main API onto a Lua context */
 int sp_lua_load_main_api(TXLuaContext *lctx, TXMainContext *ctx);
+
+/* If a script (top-level) returns this, quit gracefully withour raise() */
+int sp_lua_quit(lua_State *L);

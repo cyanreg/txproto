@@ -43,9 +43,10 @@ function main(...)
             pix_fmt = "nv12",
             priv_options = { fifo_size = 2 },
             options = {
-                rc_mode = "CQP",
-                qp = 44,
-                quality = 100,
+                rc_mode = "VBR",
+--                qp = 12,
+                b = 10^3 --[[ Kbps ]] * 3500,
+                quality = 8,
                 profile = "high",
                 keyint_min = 180,
                 g = 180,

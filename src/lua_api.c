@@ -1233,6 +1233,8 @@ static int lua_create_filter(lua_State *L)
 
     const char *filter = NULL;
     GET_OPT_STR(filter, "filter");
+    if (!filter)
+        LUA_ERROR("Missing parameter: %s!", "filter");
 
     AVDictionary *opts = NULL;
     GET_OPTS_DICT(opts, "options");
@@ -1313,6 +1315,8 @@ static int lua_create_filtergraph(lua_State *L)
 
     const char *graph = NULL;
     GET_OPT_STR(graph, "graph");
+    if (!graph)
+        LUA_ERROR("Missing parameter: %s!", "graph");
 
     AVDictionary *opts = NULL;
     GET_OPTS_DICT(opts, "options");

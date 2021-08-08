@@ -24,6 +24,7 @@
 #include <libplacebo/vulkan.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/shaders/icc.h>
+#include <libplacebo/utils/libav.h>
 
 #include "interface_common.h"
 #include "utils.h"
@@ -34,73 +35,6 @@
                              VK_IMAGE_USAGE_STORAGE_BIT      |                 \
                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT |                 \
                              VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-
-/* 1 to 1 map (even indices are the same */
-enum pl_chroma_location placebo_chroma_loc_map[AVCHROMA_LOC_NB] = {
-    [AVCHROMA_LOC_UNSPECIFIED] = PL_CHROMA_UNKNOWN,
-    [AVCHROMA_LOC_LEFT]        = PL_CHROMA_LEFT,
-    [AVCHROMA_LOC_CENTER]      = PL_CHROMA_CENTER,
-    [AVCHROMA_LOC_TOPLEFT]     = PL_CHROMA_TOP_LEFT,
-    [AVCHROMA_LOC_TOP]         = PL_CHROMA_TOP_CENTER,
-    [AVCHROMA_LOC_BOTTOMLEFT]  = PL_CHROMA_BOTTOM_LEFT,
-    [AVCHROMA_LOC_BOTTOM]      = PL_CHROMA_BOTTOM_CENTER,
-};
-
-/* 1 to 1 map */
-enum pl_color_levels placebo_color_range_map[AVCOL_RANGE_NB] = {
-    [AVCOL_RANGE_UNSPECIFIED] = PL_COLOR_LEVELS_UNKNOWN,
-    [AVCOL_RANGE_MPEG]        = PL_COLOR_LEVELS_TV,
-    [AVCOL_RANGE_JPEG]        = PL_COLOR_LEVELS_PC,
-};
-
-static enum pl_color_primaries avprim_to_placebo(enum AVColorPrimaries pri)
-{
-    switch (pri) {
-    case AVCOL_PRI_UNSPECIFIED: return PL_COLOR_PRIM_UNKNOWN;
-    case AVCOL_PRI_SMPTE170M:   return PL_COLOR_PRIM_BT_601_525;
-    case AVCOL_PRI_SMPTE240M:   return PL_COLOR_PRIM_BT_601_525;
-    case AVCOL_PRI_BT470BG:     return PL_COLOR_PRIM_BT_601_625;
-    case AVCOL_PRI_BT709:       return PL_COLOR_PRIM_BT_709;
-    case AVCOL_PRI_BT470M:      return PL_COLOR_PRIM_BT_470M;
-    case AVCOL_PRI_BT2020:      return PL_COLOR_PRIM_BT_2020;
-    case AVCOL_PRI_SMPTE428:    return PL_COLOR_PRIM_CIE_1931;
-    case AVCOL_PRI_SMPTE431:    return PL_COLOR_PRIM_DCI_P3;
-    case AVCOL_PRI_SMPTE432:    return PL_COLOR_PRIM_DISPLAY_P3;
-    default:                    return PL_COLOR_PRIM_UNKNOWN;
-    }
-}
-
-static enum pl_color_transfer avtrc_to_placebo(enum AVColorTransferCharacteristic trc)
-{
-    switch (trc) {
-    case AVCOL_TRC_UNSPECIFIED:  return PL_COLOR_TRC_UNKNOWN;
-    case AVCOL_TRC_BT709:        return PL_COLOR_TRC_BT_1886;
-    case AVCOL_TRC_IEC61966_2_1: return PL_COLOR_TRC_SRGB;
-    case AVCOL_TRC_LINEAR:       return PL_COLOR_TRC_LINEAR;
-    case AVCOL_TRC_GAMMA22:      return PL_COLOR_TRC_GAMMA22;
-    case AVCOL_TRC_GAMMA28:      return PL_COLOR_TRC_GAMMA28;
-    case AVCOL_TRC_SMPTE2084:    return PL_COLOR_TRC_PQ;
-    case AVCOL_TRC_ARIB_STD_B67: return PL_COLOR_TRC_HLG;
-    default:                     return PL_COLOR_TRC_UNKNOWN;
-    }
-}
-
-static enum pl_color_system avspc_to_placebo(enum AVColorSpace csp)
-{
-    switch (csp) {
-    case AVCOL_SPC_UNSPECIFIED: return PL_COLOR_SYSTEM_UNKNOWN;
-    case AVCOL_SPC_BT470BG:     return PL_COLOR_SYSTEM_BT_601;
-    case AVCOL_SPC_BT709:       return PL_COLOR_SYSTEM_BT_709;
-    case AVCOL_SPC_SMPTE170M:   return PL_COLOR_SYSTEM_SMPTE_240M;
-    case AVCOL_SPC_SMPTE240M:   return PL_COLOR_SYSTEM_SMPTE_240M;
-    case AVCOL_SPC_BT2020_NCL:  return PL_COLOR_SYSTEM_BT_2020_NC;
-    case AVCOL_SPC_BT2020_CL:   return PL_COLOR_SYSTEM_BT_2020_C;
-    case AVCOL_SPC_ICTCP:       return PL_COLOR_SYSTEM_BT_2100_PQ;
-    case AVCOL_SPC_YCGCO:       return PL_COLOR_SYSTEM_YCGCO;
-    case AVCOL_SPC_RGB:         return PL_COLOR_SYSTEM_RGB;
-    default:                    return PL_COLOR_SYSTEM_UNKNOWN;
-    }
-}
 
 typedef struct InterfaceWindowCtx {
     SPClass *class;
@@ -173,11 +107,11 @@ typedef struct InterfaceCtx {
 
     struct {
         SPClass *class;
-        struct pl_context *ctx;
+        pl_log log;
     } placebo;
 } InterfaceCtx;
 
-#include "interface_main.h"
+//#include "interface_main.h"
 #include "interface_highlight.h"
 
 /* Do not call from interface, call win->main->sys->surf_destroy instead */
@@ -300,7 +234,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     vkparams.queue_transfer.count = hwctx->nb_tx_queues;
     vkparams.features             = &hwctx->device_features;
 
-    win->pl_vk_ctx = pl_vulkan_import(ctx->placebo.ctx, &vkparams);
+    win->pl_vk_ctx = pl_vulkan_import(ctx->placebo.log, &vkparams);
     if (!win->pl_vk_ctx) {
         sp_log(ctx, SP_LOG_ERROR, "Error creating libplacebo context!\n");
         sp_bufferlist_free(&ctx->events);
@@ -312,7 +246,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     win->pl_gpu = win->pl_vk_ctx->gpu;
 
     /* Set the renderer */
-    win->pl_renderer = pl_renderer_create(ctx->placebo.ctx, win->pl_gpu);
+    win->pl_renderer = pl_renderer_create(ctx->placebo.log, win->pl_gpu);
 
     return 0;
 }
@@ -519,7 +453,7 @@ int sp_interface_init(AVBufferRef **s)
     if (err < 0)
         goto fail;
 
-    ctx->placebo.ctx = pl_context_create(PL_API_VER, &(struct pl_context_params) {
+    ctx->placebo.log = pl_log_create(PL_API_VER, &(struct pl_log_params) {
         .log_cb    = log_cb_pl,
         .log_priv  = &ctx->placebo,
         .log_level = PL_LOG_TRACE,

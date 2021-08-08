@@ -299,9 +299,8 @@ static int render_main(void *wctx)
     render_params.peak_detect_params = NULL;
     render_params.color_map_params = &pl_color_map_default_params;
     render_params.dither_params = NULL;
-    render_params.lut3d_params = &pl_3dlut_default_params;
+    render_params.icc_params = &pl_icc_default_params;
     render_params.skip_anti_aliasing = 1;
-    render_params.disable_overlay_sampling = 1;
     render_params.allow_delayed_peak_detect = 1;
 
     /* Set rendering target params */

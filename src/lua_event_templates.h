@@ -44,23 +44,23 @@ static inline int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn, AVBuffer
 {
     SP_EVENT_BUFFER_CTX_ALLOC(SPCommitCbCtx, api_commit_ctx, api_commit_discard_free, NULL)
 
+    enum SPEventType type = sp_class_to_event_type(fn_ctx->data);
+    type |= SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
+
     api_commit_ctx->fn = fn;
     api_commit_ctx->fn_ctx = av_buffer_ref(fn_ctx);
 
-    uint32_t identifier = sp_event_gen_identifier(ctx, fn_ctx->data,
-                                                  SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT);
+    uint32_t identifier = sp_event_gen_identifier(ctx, fn_ctx->data, type);
 
     /* Commit */
-    AVBufferRef *commit_event = sp_event_create(api_commit_cb, NULL,
-                                                SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT,
+    AVBufferRef *commit_event = sp_event_create(api_commit_cb, NULL, type,
                                                 av_buffer_ref(api_commit_ctx_ref),
                                                 identifier);
     sp_eventlist_add(fn_ctx->data, ctx->commit_list, commit_event);
     av_buffer_unref(&commit_event);
 
     /* Discard */
-    AVBufferRef *discard_event = sp_event_create(api_discard_cb, NULL,
-                                                 SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT,
+    AVBufferRef *discard_event = sp_event_create(api_discard_cb, NULL, type,
                                                  api_commit_ctx_ref,
                                                  identifier);
     sp_eventlist_add(fn_ctx->data, ctx->discard_list, discard_event);

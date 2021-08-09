@@ -160,11 +160,12 @@ enum SPEventType {
     SP_EVENT_TYPE_LINK       = (1ULL << 16),
     SP_EVENT_TYPE_SOURCE     = (1ULL << 17),
     SP_EVENT_TYPE_FILTER     = (1ULL << 18),
-    SP_EVENT_TYPE_ENCODER    = (1ULL << 19),
-    SP_EVENT_TYPE_MUXER      = (1ULL << 20),
-    SP_EVENT_TYPE_DEMUXER    = (1ULL << 21),
-    SP_EVENT_TYPE_DECODER    = (1ULL << 22),
-    SP_EVENT_TYPE_SINK       = (1ULL << 23),
+    SP_EVENT_TYPE_BSF        = (1ULL << 19),
+    SP_EVENT_TYPE_ENCODER    = (1ULL << 20),
+    SP_EVENT_TYPE_MUXER      = (1ULL << 21),
+    SP_EVENT_TYPE_DEMUXER    = (1ULL << 22),
+    SP_EVENT_TYPE_DECODER    = (1ULL << 23),
+    SP_EVENT_TYPE_SINK       = (1ULL << 24),
     SP_EVENT_TYPE_MASK       = (((1ULL << 16) - 1) << 16), /* 16 bits reserved for event type */
 
     /* [32: 47] - Controls - same as type, but at least either a type or a ctrl must be present */
@@ -192,6 +193,8 @@ enum SPEventType {
 };
 
 typedef struct SPEvent SPEvent;
+enum SPEventType sp_class_to_event_type(void *ctx);
+
 uint32_t sp_event_gen_identifier(void *src, void *dst, uint64_t type);
 AVBufferRef *sp_event_create(int (*fn)(AVBufferRef *opaque, void *src_ctx, void *data),
                              pthread_mutex_t *lock, enum SPEventType type,

@@ -924,6 +924,7 @@ char *sp_event_flags_to_str(uint64_t flags)
     COND(SP_EVENT_TYPE_LINK,       type, "link")
     COND(SP_EVENT_TYPE_SOURCE,     type, "source")
     COND(SP_EVENT_TYPE_FILTER,     type, "filter")
+    COND(SP_EVENT_TYPE_BSF,        type, "bsf")
     COND(SP_EVENT_TYPE_ENCODER,    type, "encoder")
     COND(SP_EVENT_TYPE_MUXER,      type, "muxer")
     COND(SP_EVENT_TYPE_DEMUXER,    type, "demuxer")
@@ -950,7 +951,7 @@ char *sp_event_flags_to_str(uint64_t flags)
     COND(SP_EVENT_FLAG_ONESHOT,    flag, "oneshot")
 
     if (flags)
-        av_bprintf(&bp, "unknown(0x%lx)!", flags);
+        av_bprintf(&bp, "UNKNOWN(0x%lx)!", flags);
 
 #undef COND
 
@@ -962,4 +963,39 @@ char *sp_event_flags_to_str(uint64_t flags)
 char *sp_event_flags_to_str_buf(AVBufferRef *event)
 {
     return sp_event_flags_to_str(((SPEvent *)event->data)->type);
+}
+
+enum SPEventType sp_class_to_event_type(void *ctx)
+{
+    switch (sp_class_get_type(ctx)) {
+    case SP_TYPE_VIDEO_SOURCE:
+    case SP_TYPE_AUDIO_SOURCE:
+    case SP_TYPE_SUB_SOURCE:
+    case SP_TYPE_CLOCK_SOURCE:
+        return SP_EVENT_TYPE_SOURCE;
+
+    case SP_TYPE_VIDEO_SINK:
+    case SP_TYPE_AUDIO_SINK:
+    case SP_TYPE_SUB_SINK:
+    case SP_TYPE_CLOCK_SINK:
+        return SP_EVENT_TYPE_SINK;
+
+    case SP_TYPE_VIDEO_BIDIR:
+    case SP_TYPE_AUDIO_BIDIR:
+    case SP_TYPE_SUB_BIDIR:
+        return SP_EVENT_TYPE_SINK | SP_EVENT_TYPE_SOURCE;
+
+    case SP_TYPE_FILTER:
+        return SP_EVENT_TYPE_FILTER;
+    case SP_TYPE_BSF:
+        return SP_EVENT_TYPE_BSF;
+    case SP_TYPE_ENCODER:
+        return SP_EVENT_TYPE_ENCODER;
+    case SP_TYPE_DECODER:
+        return SP_EVENT_TYPE_DECODER;
+    case SP_TYPE_MUXER:
+        return SP_EVENT_TYPE_DEMUXER;
+    default:
+        return 0x0;
+    }
 }

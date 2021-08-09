@@ -19,6 +19,19 @@ Features
  * Minimal dependencies (FFmpeg and Lua required, libplacebo and all custom capture code optional)
  * Liberally licensed (LGPL v2.1)
 
+CLI
+---
+Arguments are optional. By default, txproto will take a screenshot on Wayland.
+
+| Argument             | Description                                                                                 |
+|----------------------|---------------------------------------------------------------------------------------------|
+| -s `path`            | Specify a script to use                                                                     |
+| -e `string`          | Specifies a script entry function (default: 'main')                                         |
+| -V `string`          | Specifies a logging level (quiet, error, warn, info, verbose, debug, trace).                |
+| -L `path`            | Specifies a log file. Warning: always at maximum verbose level, this will get big.          |
+| -h                   | Display help (this).                                                                        |
+| -v                   | Displays program version info.                                                              |
+
 Discussions and help
 --------------------
 

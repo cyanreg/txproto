@@ -956,14 +956,21 @@ enum SPEventType sp_class_to_event_type(void *ctx)
 
     case SP_TYPE_FILTER:
         return SP_EVENT_TYPE_FILTER;
+
     case SP_TYPE_BSF:
         return SP_EVENT_TYPE_BSF;
+
     case SP_TYPE_ENCODER:
         return SP_EVENT_TYPE_ENCODER;
     case SP_TYPE_DECODER:
         return SP_EVENT_TYPE_DECODER;
+
     case SP_TYPE_MUXER:
+        return SP_EVENT_TYPE_MUXER;
+    case SP_TYPE_DEMUXER:
         return SP_EVENT_TYPE_DEMUXER;
+
+
     default:
         return 0x0;
     }

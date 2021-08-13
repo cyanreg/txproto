@@ -204,7 +204,6 @@ struct SPBufferList {
     int entries_num;
     unsigned int entries_size;
 
-    pthread_mutex_t *unlock_on_delete;
     enum SPEventType *priv_flags;
     unsigned int priv_flags_size;
 
@@ -428,9 +427,6 @@ void sp_bufferlist_free(SPBufferList **s)
     pthread_mutex_unlock(&list->lock);
     pthread_mutex_destroy(&list->lock);
 
-    if (list->unlock_on_delete)
-        pthread_mutex_unlock(list->unlock_on_delete);
-
     av_freep(s);
 }
 
@@ -455,33 +451,6 @@ end:
         sp_bufferlist_free(&dst);
 
     pthread_mutex_unlock(&src->lock);
-    return err;
-}
-
-int sp_bufferlist_copy_locked(SPBufferList *dst, SPBufferList *src)
-{
-    int err = 0;
-    pthread_mutex_lock(&src->lock);
-
-    for (int i = 0; i < src->entries_num; i++) {
-        AVBufferRef *cloned = av_buffer_ref(src->entries[i]);
-        if (!cloned)
-            goto end;
-        err = sp_bufferlist_append(dst, cloned);
-        if (err < 0) {
-            av_buffer_unref(&cloned);
-            goto end;
-        }
-    }
-
-end:
-    if (err < 0) {
-        sp_bufferlist_free(&dst);
-        pthread_mutex_unlock(&src->lock);
-    }
-
-    dst->unlock_on_delete = &src->lock;
-
     return err;
 }
 

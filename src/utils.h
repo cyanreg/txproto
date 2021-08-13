@@ -129,7 +129,6 @@ SPBufferList *sp_bufferlist_new(void);
 void          sp_bufferlist_free(SPBufferList **s);
 int           sp_bufferlist_len(SPBufferList *list);
 int           sp_bufferlist_copy(SPBufferList *dst, SPBufferList *src);
-int           sp_bufferlist_copy_locked(SPBufferList *dst, SPBufferList *src);
 int           sp_bufferlist_append(SPBufferList *list, AVBufferRef *entry);
 int           sp_bufferlist_append_noref(SPBufferList *list, AVBufferRef *entry);
 

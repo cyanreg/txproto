@@ -310,29 +310,50 @@ static void mod_device(LavdCtx *ctx, const AVInputFormat *cur,
 
     uint32_t idx = sp_iosys_gen_identifier(ctx, src_crc, category);
 
-    IOSysEntry *entry;
+    IOSysEntry *entry = NULL;
     AVBufferRef *entry_ref = sp_bufferlist_ref(ctx->entries,
                                                sp_bufferlist_iosysentry_by_id,
                                                &idx);
 
     if (!entry_ref) {
         entry = av_mallocz(sizeof(*entry));
+        if (!entry)
+            return;
+
+        const char *name_src = !dev_info ? cur->name : dev_info->device_name;
+        const char *desc_src = !dev_info ? cur->long_name : dev_info->device_description;
+
+        entry->desc = av_strdup(desc_src);
+        if (!entry->desc) {
+            av_free(entry);
+            return;
+        }
+
+        int ret = sp_class_alloc(entry, name_src, sp_avcategory_to_type(category),
+                                 ctx);
+        if (ret < 0) {
+            av_free(entry->desc);
+            av_free(entry);
+            return;
+        }
+
         entry_ref = av_buffer_create((uint8_t *)entry, sizeof(*entry),
                                      destroy_entry, ctx, 0);
-
-        if (!dev_info) {
-            sp_class_set_name(entry, cur->name);
-            entry->desc = av_strdup(cur->long_name);
-        } else {
-            sp_class_set_name(entry, dev_info->device_name);
-            entry->desc = av_strdup(dev_info->device_description);
+        if (!entry_ref) {
+            sp_class_free(entry);
+            av_free(entry->desc);
+            av_free(entry);
+            return;
         }
 
         entry->api_priv = (void *)cur;
-        entry->events = sp_bufferlist_new();
         entry->identifier = idx;
 
-        sp_class_alloc(entry, cur->name, sp_avcategory_to_type(category), ctx);
+        entry->events = sp_bufferlist_new();
+        if (!entry->events) {
+            av_buffer_unref(&entry_ref);
+            return;
+        }
 
         sp_eventlist_dispatch(entry_ref->data, ctx->events,
                               SP_EVENT_ON_CHANGE | category, entry_ref->data);

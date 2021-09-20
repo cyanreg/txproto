@@ -239,7 +239,7 @@ AVBufferRef *sp_bufferlist_find_fn_first(AVBufferRef *entry, void *opaque)
     return entry;
 }
 
-AVBufferRef  *sp_bufferlist_find_fn_data(AVBufferRef *entry, void *opaque)
+AVBufferRef *sp_bufferlist_find_fn_data(AVBufferRef *entry, void *opaque)
 {
     AVBufferRef *needle = opaque;
     return needle->data == entry->data ? entry : NULL;

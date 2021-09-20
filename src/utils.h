@@ -43,7 +43,7 @@ typedef struct SPRationalValue {
 } SPRationalValue;
 
 typedef struct SPRect {
-    int x; /* All values are scaled, this is the actual number of pixesl on a surface */
+    int x; /* All values are scaled, this is the actual number of pixels on a surface */
     int y;
     int w;
     int h;
@@ -51,66 +51,67 @@ typedef struct SPRect {
 } SPRect;
 
 enum SPDataType {
-    SP_DATA_TYPE_NONE = 0,
-    SP_DATA_TYPE_FLOAT = (1 << 1),
-    SP_DATA_TYPE_DOUBLE = (1 << 2),
-    SP_DATA_TYPE_INT = (1 << 3),
-    SP_DATA_TYPE_UINT = (1 << 4),
-    SP_DATA_TYPE_U16 = (1 << 5),
-    SP_DATA_TYPE_I16 = (1 << 6),
-    SP_DATA_TYPE_I64 = (1 << 7),
-    SP_DATA_TYPE_U64 = (1 << 8),
-    SP_DATA_TYPE_NUM = (SP_DATA_TYPE_U64 - 1) & (~1),
+    SP_DATA_TYPE_NONE         = (0 << 0),
+    SP_DATA_TYPE_FLOAT        = (1 << 1),
+    SP_DATA_TYPE_DOUBLE       = (1 << 2),
+    SP_DATA_TYPE_INT          = (1 << 3),
+    SP_DATA_TYPE_UINT         = (1 << 4),
+    SP_DATA_TYPE_U16          = (1 << 5),
+    SP_DATA_TYPE_I16          = (1 << 6),
+    SP_DATA_TYPE_I64          = (1 << 7),
+    SP_DATA_TYPE_U64          = (1 << 8),
+    SP_DATA_TYPE_NUM          = (SP_DATA_TYPE_U64 - 1) & (~1),
 
-    SP_DATA_TYPE_STRING = (1 << 9),
+    SP_DATA_TYPE_STRING       = (1 << 9),
     SP_DATA_TYPE_RATIONAL_VAL = (1 << 10),
-    SP_DATA_TYPE_RECTANGLE = (1 << 11),
-    SP_DATA_TYPE_UNKNOWN = (1 << 31),
+    SP_DATA_TYPE_RECTANGLE    = (1 << 11),
+    SP_DATA_TYPE_UNKNOWN      = (1 << 31),
 };
 
-#define D_TYPE(name, parent, x) (SPGenericData)                                    \
-    { (name), (parent),                                                            \
-        _Generic((x),                                                              \
-        char *: ((x)),                                                             \
-        default: (&(x))),                                                          \
-        _Generic((x),                                                              \
-        float: SP_DATA_TYPE_FLOAT,                                                 \
-        double: SP_DATA_TYPE_DOUBLE,                                               \
-        int32_t: SP_DATA_TYPE_INT,                                                 \
-        uint32_t: SP_DATA_TYPE_UINT,                                               \
-        uint16_t: SP_DATA_TYPE_U16,                                                \
-        int16_t: SP_DATA_TYPE_I16,                                                 \
-        int64_t: SP_DATA_TYPE_I64,                                                 \
-        uint64_t: SP_DATA_TYPE_U64,                                                \
-        char *: SP_DATA_TYPE_STRING,                                               \
-        SPRationalValue: SP_DATA_TYPE_RATIONAL_VAL,                                \
-        SPRect: SP_DATA_TYPE_RECTANGLE,                                            \
-        default: SP_DATA_TYPE_UNKNOWN)                                             \
+#define D_TYPE(name, parent, x) (SPGenericData)                                 \
+    {   (name),                                                                 \
+        (parent),                                                               \
+        _Generic((x),                                                           \
+                 char *: ((x)),                                                 \
+                 default: (&(x))),                                              \
+        _Generic((x),                                                           \
+        float:           SP_DATA_TYPE_FLOAT,                                    \
+        double:          SP_DATA_TYPE_DOUBLE,                                   \
+        int32_t:         SP_DATA_TYPE_INT,                                      \
+        uint32_t:        SP_DATA_TYPE_UINT,                                     \
+        uint16_t:        SP_DATA_TYPE_U16,                                      \
+        int16_t:         SP_DATA_TYPE_I16,                                      \
+        int64_t:         SP_DATA_TYPE_I64,                                      \
+        uint64_t:        SP_DATA_TYPE_U64,                                      \
+        char *:          SP_DATA_TYPE_STRING,                                   \
+        SPRationalValue: SP_DATA_TYPE_RATIONAL_VAL,                             \
+        SPRect:          SP_DATA_TYPE_RECTANGLE,                                \
+        default:         SP_DATA_TYPE_UNKNOWN)                                  \
     }
 
 #define LOAD_GEN_DATA_NUM(entry) (                                         \
-    ((entry)->type == SP_DATA_TYPE_FLOAT) ? *((float *)(entry)->ptr) :     \
-    ((entry)->type == SP_DATA_TYPE_DOUBLE) ? *((double *)(entry)->ptr) :   \
-    ((entry)->type == SP_DATA_TYPE_INT) ? *((int32_t *)(entry)->ptr) :     \
-    ((entry)->type == SP_DATA_TYPE_UINT) ? *((uint32_t *)(entry)->ptr) :   \
-    ((entry)->type == SP_DATA_TYPE_U16) ? *((uint16_t *)(entry)->ptr) :    \
-    ((entry)->type == SP_DATA_TYPE_I16) ? *((int16_t *)(entry)->ptr) :     \
-    ((entry)->type == SP_DATA_TYPE_I64) ? *((int64_t *)(entry)->ptr) :     \
-    ((entry)->type == SP_DATA_TYPE_U64) ? *((uint64_t *)(entry)->ptr) :    \
+    ((entry)->type == SP_DATA_TYPE_FLOAT ) ? *((float    *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_DOUBLE) ? *((double   *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_INT   ) ? *((int32_t  *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_UINT  ) ? *((uint32_t *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_U16   ) ? *((uint16_t *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_I16   ) ? *((int16_t  *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_I64   ) ? *((int64_t  *)(entry)->ptr) : \
+    ((entry)->type == SP_DATA_TYPE_U64   ) ? *((uint64_t *)(entry)->ptr) : \
     sp_assert(0)                                                           \
 )
 
 #define GEN_DATA_TYPE_STRING(entry) (                             \
-    ((entry)->type == SP_DATA_TYPE_FLOAT) ? "f32" :               \
-    ((entry)->type == SP_DATA_TYPE_DOUBLE) ? "f64" :              \
-    ((entry)->type == SP_DATA_TYPE_INT) ? * "int" :               \
-    ((entry)->type == SP_DATA_TYPE_UINT) ? "uint" :               \
-    ((entry)->type == SP_DATA_TYPE_U16) ? "u16" :                 \
-    ((entry)->type == SP_DATA_TYPE_I16) ? "i16" :                 \
-    ((entry)->type == SP_DATA_TYPE_I64) ? "i64" :                 \
-    ((entry)->type == SP_DATA_TYPE_U64) ? "u64" :                 \
-    ((entry)->type == SP_DATA_TYPE_STRING) ? "string" :           \
-    ((entry)->type == SP_DATA_TYPE_RATIONAL_VAL) ? "rational" :   \
+    ((entry)->type == SP_DATA_TYPE_FLOAT        ) ? "f32" :       \
+    ((entry)->type == SP_DATA_TYPE_DOUBLE       ) ? "f64" :       \
+    ((entry)->type == SP_DATA_TYPE_INT          ) ? * "int" :     \
+    ((entry)->type == SP_DATA_TYPE_UINT         ) ? "uint" :      \
+    ((entry)->type == SP_DATA_TYPE_U16          ) ? "u16" :       \
+    ((entry)->type == SP_DATA_TYPE_I16          ) ? "i16" :       \
+    ((entry)->type == SP_DATA_TYPE_I64          ) ? "i64" :       \
+    ((entry)->type == SP_DATA_TYPE_U64          ) ? "u64" :       \
+    ((entry)->type == SP_DATA_TYPE_STRING       ) ? "string" :    \
+    ((entry)->type == SP_DATA_TYPE_RATIONAL_VAL ) ? "rational" :  \
     ((entry)->type == SP_DATA_TYPE_RECTANGLE_VAL) ? "rectangle" : \
     sp_assert(0)                                                  \
 )

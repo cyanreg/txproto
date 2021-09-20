@@ -711,7 +711,9 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
     for (i = 0; i < list->entries_num; i++) {
         SPEvent *event = (SPEvent *)list->entries[i]->data;
 
-        /* To prevent recursion */
+        /* To prevent recursion. The list is threadsafe, and its execution is
+         * threadsafe as well, however the dispatching of commands may modify
+         * the list, and even dispatch events. */
         if (list->priv_flags[i] & SP_BUF_PRIV_RUNNING)
             continue;
         list->priv_flags[i] |= SP_BUF_PRIV_RUNNING;

@@ -773,9 +773,12 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
 
         if (destroy_now) {
             pthread_mutex_unlock(event->lock);
-            av_buffer_unref(&list->entries[i]);
-            buflist_remove_idx(list, i); /* No need to remove IS_RUNNING */
-            i -= 1;
+
+            /* The list may have been modified when running events within. */
+            AVBufferRef *ev_old = sp_bufferlist_pop(list_orig, sp_bufferlist_find_fn_data,
+                                                    list->entries[i]);
+            av_buffer_unref(&ev_old);
+
             continue;
         }
 

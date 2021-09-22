@@ -353,7 +353,9 @@ static inline void buflist_remove_idx(SPBufferList *list, int index)
                                        list->entries_num * sizeof(*list->priv_flags));
 }
 
-AVBufferRef *sp_bufferlist_pop(SPBufferList *list, sp_buflist_find_fn find, void *find_opaque)
+static AVBufferRef *bufferlist_pop_internal(SPBufferList *list,
+                                            sp_buflist_find_fn find,
+                                            void *find_opaque, int *idx)
 {
     int i = 0;
     AVBufferRef *sel = NULL;
@@ -361,15 +363,24 @@ AVBufferRef *sp_bufferlist_pop(SPBufferList *list, sp_buflist_find_fn find, void
     for (i = 0; i < list->entries_num; i++)
         if ((sel = find(list->entries[i], find_opaque)))
             break;
-    if (!sel)
-        goto end;
+    if (!sel) {
+        *idx = -1;
+    } else {
+        *idx = i;
+        buflist_remove_idx(list, i);
+    }
 
-    buflist_remove_idx(list, i);
-
-end:
     pthread_mutex_unlock(&list->lock);
 
     return sel;
+}
+
+AVBufferRef *sp_bufferlist_pop(SPBufferList *list,
+                               sp_buflist_find_fn find,
+                               void *find_opaque)
+{
+    int tmp;
+    return bufferlist_pop_internal(list, find, find_opaque, &tmp);
 }
 
 AVBufferRef *sp_bufferlist_iter_ref(SPBufferList *list)
@@ -774,10 +785,12 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
         if (destroy_now) {
             pthread_mutex_unlock(event->lock);
 
-            /* The list may have been modified when running events within. */
-            AVBufferRef *ev_old = sp_bufferlist_pop(list_orig, sp_bufferlist_find_fn_data,
-                                                    list->entries[i]);
+            /* The list may have been modified when running events within.
+             * TODO: this may not be entirely correct. */
+            AVBufferRef *ev_old = bufferlist_pop_internal(list, sp_bufferlist_find_fn_data,
+                                                          list->entries[i], &i);
             av_buffer_unref(&ev_old);
+            i -= 1;
 
             continue;
         }

@@ -301,7 +301,6 @@ typedef struct SlidingWinCtx {
         AVRational tb;
     } entries[MAX_ROLLING_WIN_ENTRIES];
     int num_entries;
-    unsigned int num_entries_alloc;
 } SlidingWinCtx;
 
 int64_t sp_sliding_win(SlidingWinCtx *ctx, int64_t num, int64_t pts,

@@ -468,6 +468,13 @@ struct SPEvent {
     uint32_t identifier;
     int external_lock;
     int (*fn)(AVBufferRef *opaque, void *src_ctx, void *data);
+
+    /* Just pointers to entries in the array, only used for sorting */
+    AVBufferRef **sources;
+    int sources_num;
+
+    AVBufferRef **destinations;
+    int destinations_num;
 };
 
 static void destroy_event(void *opaque, uint8_t *data)
@@ -477,10 +484,14 @@ static void destroy_event(void *opaque, uint8_t *data)
     pthread_mutex_lock(event->lock);
     int external_lock = event->external_lock;
     pthread_mutex_unlock(event->lock);
+
     if (!external_lock) {
         pthread_mutex_destroy(event->lock);
         av_free(event->lock);
     }
+
+    av_free(event->sources);
+    av_free(event->destinations);
     av_free(event);
     av_buffer_unref(&opaque_ref);
 }
@@ -564,6 +575,48 @@ static inline AVBufferRef *find_event_identifier(AVBufferRef *entry, void *opaqu
     return NULL;
 }
 
+static int find_event_list(SPBufferList *list, AVBufferRef *entry)
+{
+    for (int i = 0; i < list->entries_num; i++)
+        if (list->entries[i] == entry)
+            return i;
+
+    return sp_assert(1); /* Should never happen */
+}
+
+static int order_events(SPBufferList *list)
+{
+    pthread_mutex_lock(&list->lock);
+
+    for (int i = 0; i < list->entries_num; i++) {
+        enum SPEventType priv_flags = list->priv_flags[i];
+        AVBufferRef *entry = list->entries[i];
+        SPEvent *event = (SPEvent *)entry->data;
+
+        int max_source = -1, min_destinations = list->entries_num;
+
+        for (int j = 0; j < event->sources_num; j++)
+            max_source = FFMAX(find_event_list(list, event->sources[i]), max_source);
+        for (int j = 0; j < event->sources_num; j++)
+            min_destinations = FFMIN(find_event_list(list, event->destinations[i]), min_destinations);
+
+        /* All good */
+        if ((i > max_source) && ((i != (list->entries_num - 1)) && (i < min_destinations)))
+            continue;
+
+        /* Set it in between in the middle */
+        int dst_i = (int)ceilf(max_source + min_destinations/2.0);
+
+        buflist_remove_idx(list, i);
+
+        internal_bufferlist_append(list, entry, priv_flags, 0, dst_i);
+    }
+
+    pthread_mutex_unlock(&list->lock);
+
+    return 0;
+}
+
 static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
                                   AVBufferRef *event, enum SPEventType when)
 {
@@ -586,6 +639,9 @@ static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
     int ret = internal_bufferlist_append(list, event, 0x0, 1, INT_MAX);
     if (ret < 0)
         return ret;
+
+    /* TODO: call this when comitting only */
+    order_events(list);
 
     list->queued |= event_ctx->type;
 

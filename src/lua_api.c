@@ -1860,6 +1860,31 @@ static int lua_set_status(lua_State *L)
     return 0;
 }
 
+static int lua_load_chunk(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "load_chunk");
+
+    if (lua_gettop(L) != 1)
+        LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));
+    if (!lua_isstring(L, -1))
+        LUA_ERROR("Invalid argument, expected \"string\" (status), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
+
+    size_t data_len;
+    const uint8_t *data = lua_tolstring(L, -1, &data_len);
+
+    int err = sp_lua_load_chunk(ctx->lua, data, data_len);
+    if (err < 0)
+        LUA_ERROR("Unable to load chunk: %s\n", av_err2str(err));
+
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK)
+        LUA_ERROR("Unable to run chunk: %s\n", lua_tostring(L, -1));
+
+    return 0;
+}
+
 static int lua_api_version(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -1926,6 +1951,8 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
     { "set_status", lua_set_status },
 
     { "prompt", lua_prompt },
+
+    { "load_chunk", lua_load_chunk },
 
     { "api_version", lua_api_version },
     { "lua_version", lua_lang_version },

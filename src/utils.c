@@ -245,14 +245,14 @@ AVBufferRef *sp_bufferlist_find_fn_data(AVBufferRef *entry, void *opaque)
     return needle->data == entry->data ? entry : NULL;
 }
 
-#define SP_BUF_PRIV_PRIORITY ((SP_EVENT_TYPE_MASK) | (SP_EVENT_CTRL_MASK))
 #define SP_BUF_PRIV_NEW      (1ULL << 48)
 #define SP_BUF_PRIV_DEP      (1ULL << 49)
 #define SP_BUF_PRIV_RUNNING  (1ULL << 50)
 #define SP_BUF_PRIV_ON_MASK  (SP_EVENT_ON_MASK)
 
 static int internal_bufferlist_append(SPBufferList *list, AVBufferRef *entry,
-                                      enum SPEventType pflags, int ref)
+                                      enum SPEventType pflags, int ref,
+                                      int position)
 {
     int err = 0;
     if (!list)
@@ -285,15 +285,11 @@ static int internal_bufferlist_append(SPBufferList *list, AVBufferRef *entry,
         goto end;
     }
 
-    enum SPEventType prio = pflags & SP_BUF_PRIV_PRIORITY;
-
     int i;
-    if (prio == SP_BUF_PRIV_PRIORITY) {
+    if (position > list->entries_num) {
         i = list->entries_num;
     } else {
-        for (i = 0; i < list->entries_num; i++)
-            if (prio > (priv_flags[i] & SP_BUF_PRIV_PRIORITY))
-                break;
+        i = position;
     }
 
     memmove(&new_entries[i + 1], &new_entries[i], (list->entries_num - i)*sizeof(*new_entries));
@@ -312,12 +308,12 @@ end:
 
 int sp_bufferlist_append(SPBufferList *list, AVBufferRef *entry)
 {
-    return internal_bufferlist_append(list, entry, SP_BUF_PRIV_NEW | SP_BUF_PRIV_PRIORITY, 1);
+    return internal_bufferlist_append(list, entry, SP_BUF_PRIV_NEW, 1, INT_MAX);
 }
 
 int sp_bufferlist_append_noref(SPBufferList *list, AVBufferRef *entry)
 {
-    return internal_bufferlist_append(list, entry, SP_BUF_PRIV_NEW | SP_BUF_PRIV_PRIORITY, 0);
+    return internal_bufferlist_append(list, entry, SP_BUF_PRIV_NEW, 0, INT_MAX);
 }
 
 AVBufferRef *sp_bufferlist_ref(SPBufferList *list, sp_buflist_find_fn find, void *find_opaque)
@@ -568,64 +564,6 @@ static inline AVBufferRef *find_event_identifier(AVBufferRef *entry, void *opaqu
     return NULL;
 }
 
-/* 31 bits for priority, must be unsigned, 0 means highest priority */
-static int get_event_priority(void *src_ctx, AVBufferRef *event)
-{
-    enum SPType ctype = sp_class_get_type(src_ctx);
-    SPEvent *event_ctx = (SPEvent *)event->data;
-    enum SPEventType f = event_ctx->type;
-
-    int prio = 128;
-    if (ctype & SP_TYPE_CLOCK_SOURCE)
-        prio += 128 * 1;
-    if (ctype & SP_TYPE_VIDEO_SOURCE ||
-        ctype & SP_TYPE_AUDIO_SOURCE ||
-        ctype & SP_TYPE_SUB_SOURCE)
-        prio += 128 * 2;
-    if (ctype & SP_TYPE_FILTER)
-        prio += 128 * 3;
-    if (ctype & SP_TYPE_ENCODER)
-        prio += 128 * 4;
-    if (ctype & SP_TYPE_BSF)
-        prio += 128 * 5;
-    if (ctype & SP_TYPE_MUXER)
-        prio += 128 * 6;
-    if (ctype & SP_TYPE_DEMUXER)
-        prio += 128 * 7;
-    if (ctype & SP_TYPE_DECODER)
-        prio += 128 * 8;
-    if (ctype & SP_TYPE_VIDEO_SINK ||
-        ctype & SP_TYPE_AUDIO_SINK ||
-        ctype & SP_TYPE_SUB_SINK)
-        prio += 128 * 9;
-    if (ctype & SP_TYPE_CONTEXT)
-        prio += 128 * 10;
-    if (ctype & SP_TYPE_INTERFACE)
-        prio += 128 * 11;
-    if (ctype & SP_TYPE_SCRIPT)
-        prio += 128 * 12;
-
-    if (f & SP_EVENT_CTRL_STOP)
-        prio += 1;
-
-    if (f & SP_EVENT_TYPE_LINK)
-        prio += 2;
-
-    if (f & SP_EVENT_CTRL_OPTS)
-        prio += 3;
-
-    if (f & SP_EVENT_CTRL_START)
-        prio += 8;
-
-    if (f & SP_EVENT_CTRL_COMMAND)
-        prio += 16;
-
-    prio += f & SP_EVENT_FLAG_HIGH_PRIO ? -1 :
-            f & SP_EVENT_FLAG_LOW_PRIO  ? +1 : 0;
-
-    return ((prio) & 31);
-}
-
 static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
                                   AVBufferRef *event, enum SPEventType when)
 {
@@ -645,22 +583,13 @@ static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
         av_buffer_unref(&dup);
     }
 
-    int priority = get_event_priority(src_ctx, event);
-    enum SPEventType pflags = priority << 16;
-    if (!(event_ctx->type & SP_EVENT_FLAG_IMMEDIATE))
-        pflags |= SP_BUF_PRIV_NEW;
-    if (when) {
-        pflags |= SP_BUF_PRIV_DEP;
-        pflags |= when & SP_BUF_PRIV_ON_MASK;
-    }
-
-    int ret = internal_bufferlist_append(list, event, pflags, 1);
+    int ret = internal_bufferlist_append(list, event, 0x0, 1, INT_MAX);
     if (ret < 0)
         return ret;
 
     list->queued |= event_ctx->type;
 
-    return priority;
+    return 0;
 }
 
 int sp_eventlist_add(void *src_ctx, SPBufferList *list, AVBufferRef *event)

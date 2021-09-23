@@ -75,7 +75,7 @@ int sp_lua_write_file(TXLuaContext *s, const char *path);
 int sp_lua_write_chunk(TXLuaContext *s, uint8_t **data, size_t *len, int gzip);
 
 /* Load a Lua buffer, raw text or gzip compressed */
-int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len);
+int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, size_t len);
 
 /* Load file into the Lua context, raw or gzip compressed */
 int sp_lua_load_file(TXLuaContext *lctx, const char *script_name);

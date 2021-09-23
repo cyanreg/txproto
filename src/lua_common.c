@@ -21,6 +21,7 @@
 #include <zlib.h>
 
 #include <libavutil/avstring.h>
+#include <libavutil/base64.h>
 
 #include "lua_common.h"
 #include "lua_api.h"
@@ -484,8 +485,28 @@ int sp_lua_write_chunk(TXLuaContext *s, uint8_t **data, size_t *len, int gzip)
     return sp_lua_write_internal(s, NULL, data, len, 0);
 }
 
-int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)
+int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, size_t len)
 {
+    if (!len)
+        return 0;
+
+    int is_base64 = 0;
+    if (in[len] == '\0') {
+        is_base64 = av_base64_decode(NULL, (const char *)in, 0) >= 0;
+
+        if (is_base64) {
+            len = AV_BASE64_DECODE_SIZE(len);
+            uint8_t *dec_in = av_mallocz(len);
+
+            if (!dec_in)
+                return AVERROR(ENOMEM);
+
+            av_base64_decode(dec_in, (const char *)in, len);
+
+            in = dec_in;
+        }
+    }
+
     struct SPLuaReaderContext lr = { 0 };
     lr.lctx = s;
     lr.in.buf = in;
@@ -494,6 +515,9 @@ int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, const size_t len)
     lua_State *L = sp_lua_lock_interface(s);
 
     int ret = lua_load(L, lua_read_fn, &lr, "chunk loader", "bt");
+    if (is_base64)
+        av_free((uint8_t *)in);
+
     if (lr.err) {
         ret = lr.err;
     } else if (ret) {

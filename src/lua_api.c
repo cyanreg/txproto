@@ -1786,7 +1786,7 @@ static int lua_prompt(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt");
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt")
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -1844,7 +1844,7 @@ static int lua_set_status(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_status");
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_status")
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));

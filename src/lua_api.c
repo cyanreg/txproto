@@ -1872,6 +1872,17 @@ static int lua_api_version(lua_State *L)
     return 2;
 }
 
+static int lua_lang_version(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "lua_lang_version")
+
+    lua_pushinteger(L, lua_version(L));
+
+    return 1;
+}
+
 int sp_lua_quit(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -1917,6 +1928,7 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
     { "prompt", lua_prompt },
 
     { "api_version", lua_api_version },
+    { "lua_version", lua_lang_version },
 
     { "quit", sp_lua_quit },
 

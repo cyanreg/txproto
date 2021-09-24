@@ -33,8 +33,8 @@
 #include <libavutil/hwcontext_drm.h>
 
 #include "iosys_common.h"
-#include "utils.h"
 #include "logging.h"
+#include "utils.h"
 
 typedef struct WaylandIOPriv {
     struct WaylandCtx *main_ctx;
@@ -79,6 +79,9 @@ typedef struct WaylandCtx {
 
     /* Display FD */
     int display_fd;
+
+    /* Sliding window capacity monitor for the FD */
+    SlidingWinCtx sctx_fd;
 
     /* Wakeup pipe to reliably run/stop the event thread */
     int wakeup_pipe[2];

@@ -23,6 +23,8 @@
 #include <libavutil/time.h>
 #include <xf86drm.h>
 
+#include <sys/ioctl.h>
+
 #include "wayland_common.h"
 #include "utils.h"
 
@@ -314,6 +316,11 @@ static void *wayland_events_thread(void *arg)
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
+    /* libwayland's buffer is 4k, plus the kernel's buffer */
+    const int capacity = 4096 + fcntl(ctx->display_fd, F_GETPIPE_SZ);
+    int64_t last_reported = av_gettime_relative();
+    const int64_t report_len = 1;
+
     while (1) {
         while (wl_display_prepare_read(ctx->display))
 			wl_display_dispatch_pending(ctx->display);
@@ -339,11 +346,24 @@ static void *wayland_events_thread(void *arg)
         }
 
         if (fds[0].revents & POLLIN) {
+            int in_bytes = 0;
+            int64_t in_time = av_gettime_relative();
+            ioctl(ctx->display_fd, FIONREAD, &in_bytes);
+
             if (wl_display_read_events(ctx->display) < 0) {
                 sp_log(ctx, SP_LOG_ERROR, "Error reading events!\n");
                 goto fail;
             }
             wl_display_dispatch_pending(ctx->display);
+
+            int64_t rate = sp_sliding_win(&ctx->sctx_fd, in_bytes, in_time,
+                                          av_make_q(1, 1000000),
+                                          10000000*report_len, 1);
+            if ((in_time + 10000000*report_len) > last_reported) {
+                sp_log(ctx, SP_LOG_VERBOSE, "Wayland FIFO capacity: %li/%i\n",
+                       rate, capacity);
+                last_reported = in_time + 10000000*report_len;
+            }
         } else {
             wl_display_cancel_read(ctx->display);
         }

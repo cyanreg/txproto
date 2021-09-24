@@ -291,9 +291,7 @@ static inline int cmp_numbers(const void *a, const void *b)
 }
 
 /* Sliding window */
-#ifndef MAX_ROLLING_WIN_ENTRIES
 #define MAX_ROLLING_WIN_ENTRIES 4096
-#endif
 typedef struct SlidingWinCtx {
     struct SPSlidingWinEntry {
         int64_t num;

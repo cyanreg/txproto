@@ -1860,16 +1860,56 @@ static int lua_set_status(lua_State *L)
     return 0;
 }
 
+static int lua_dump_chunk(lua_State *L)
+{
+    int err;
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "dump");
+
+    int nb_args = lua_gettop(L);
+    if (nb_args != 1 && nb_args != 2)
+        LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", nb_args);
+    if (nb_args == 2 && !lua_istable(L, -1))
+        LUA_ERROR("Invalid argument, expected \"table\" (options), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
+    if (!lua_isfunction(L, -nb_args))
+        LUA_ERROR("Invalid argument, expected \"function\", got \"%s\"!",
+                  lua_typename(L, lua_type(L, -nb_args)));
+
+    int gzip = 0;
+    int strip = 0;
+    int base64 = 0;
+
+    if (nb_args == 2) {
+
+
+        lua_pop(L, 1);
+    }
+
+    uint8_t *data;
+    size_t data_len;
+    err = sp_lua_write_chunk(ctx->lua, &data, &data_len, gzip, strip, base64);
+    if (err < 0)
+        LUA_ERROR("Unable to write function as binary: %s!\n", av_err2str(err));
+
+    lua_pushlstring(L, (const char *)data, data_len);
+    av_free(data);
+
+    return 1;
+}
+
 static int lua_load_chunk(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "load_chunk");
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "load");
 
     if (lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!", lua_gettop(L));
     if (!lua_isstring(L, -1))
-        LUA_ERROR("Invalid argument, expected \"string\" (status), got \"%s\"!",
+        LUA_ERROR("Invalid argument, expected \"string\" (plain text or base-64 "
+                  "coded, raw or compressed Lua string or binary data), got \"%s\"!",
                   lua_typename(L, lua_type(L, -1)));
 
     size_t data_len;
@@ -1952,7 +1992,7 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
 
     { "prompt", lua_prompt },
 
-    { "load_chunk", lua_load_chunk },
+    { "load", lua_load_chunk },
 
     { "api_version", lua_api_version },
     { "lua_version", lua_lang_version },

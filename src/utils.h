@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <assert.h>
 #include <pthread.h>
 #include <libavutil/opt.h>
@@ -60,11 +61,12 @@ enum SPDataType {
     SP_DATA_TYPE_I16          = (1 << 6),
     SP_DATA_TYPE_I64          = (1 << 7),
     SP_DATA_TYPE_U64          = (1 << 8),
-    SP_DATA_TYPE_NUM          = (SP_DATA_TYPE_U64 - 1) & (~1),
+    SP_DATA_TYPE_BOOL         = (1 << 9),
+    SP_DATA_TYPE_NUM          = (SP_DATA_TYPE_BOOL - 1) & (~1),
 
-    SP_DATA_TYPE_STRING       = (1 << 9),
-    SP_DATA_TYPE_RATIONAL_VAL = (1 << 10),
-    SP_DATA_TYPE_RECTANGLE    = (1 << 11),
+    SP_DATA_TYPE_STRING       = (1 << 10),
+    SP_DATA_TYPE_RATIONAL_VAL = (1 << 11),
+    SP_DATA_TYPE_RECTANGLE    = (1 << 12),
     SP_DATA_TYPE_UNKNOWN      = (1 << 31),
 };
 
@@ -75,6 +77,7 @@ enum SPDataType {
                  char *: ((x)),                                                 \
                  default: (&(x))),                                              \
         _Generic((x),                                                           \
+        bool:            SP_DATA_TYPE_BOOL,                                     \
         float:           SP_DATA_TYPE_FLOAT,                                    \
         double:          SP_DATA_TYPE_DOUBLE,                                   \
         int32_t:         SP_DATA_TYPE_INT,                                      \
@@ -90,6 +93,7 @@ enum SPDataType {
     }
 
 #define LOAD_GEN_DATA_NUM(entry) (                                         \
+    ((entry)->type == SP_DATA_TYPE_BOOL  ) ? *((bool     *)(entry)->ptr) : \
     ((entry)->type == SP_DATA_TYPE_FLOAT ) ? *((float    *)(entry)->ptr) : \
     ((entry)->type == SP_DATA_TYPE_DOUBLE) ? *((double   *)(entry)->ptr) : \
     ((entry)->type == SP_DATA_TYPE_INT   ) ? *((int32_t  *)(entry)->ptr) : \
@@ -102,6 +106,7 @@ enum SPDataType {
 )
 
 #define GEN_DATA_TYPE_STRING(entry) (                             \
+    ((entry)->type == SP_DATA_TYPE_BOOL         ) ? "bool" :      \
     ((entry)->type == SP_DATA_TYPE_FLOAT        ) ? "f32" :       \
     ((entry)->type == SP_DATA_TYPE_DOUBLE       ) ? "f64" :       \
     ((entry)->type == SP_DATA_TYPE_INT          ) ? * "int" :     \

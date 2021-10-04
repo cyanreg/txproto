@@ -413,7 +413,7 @@ static int sp_lua_write_internal(TXLuaContext *s, const char *path,
                                  uint8_t **dst, size_t *len,
                                  int compress, int strip, int base64)
 {
-    int ret = 0;
+    int ret = 0, ret_tmp;
     struct SPLuaWriterContext lw = { 0 };
     lua_State *L = sp_lua_lock_interface(s);
 
@@ -468,9 +468,9 @@ static int sp_lua_write_internal(TXLuaContext *s, const char *path,
         sp_log(s, SP_LOG_ERROR, "Error loading Lua code: %s\n", av_err2str(ret));
 
 end:
-    int ret2 = lua_writer_end(&lw, dst, len);
+    ret_tmp = lua_writer_end(&lw, dst, len);
     if (ret >= 0) {
-        ret = ret2;
+        ret = ret_tmp;
         if (base64) {
             size_t b64_len = AV_BASE64_SIZE(*len);
             uint8_t *b64_buf = av_mallocz(b64_len);

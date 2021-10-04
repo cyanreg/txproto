@@ -20,17 +20,11 @@
 
 #include <stdbool.h>
 #include <assert.h>
-#include <pthread.h>
 #include <libavutil/opt.h>
 #include <libavutil/buffer.h>
 #include <libavutil/avstring.h>
 
 #include "os_compat.h"
-
-int      sp_make_wakeup_pipe (int pipes[2]);
-void     sp_write_wakeup_pipe(int pipes[2], int64_t val);
-int64_t  sp_flush_wakeup_pipe(int pipes[2]);
-void     sp_close_wakeup_pipe(int pipes[2]);
 
 #define SPMIN(a,b) ((a) > (b) ? (b) : (a))
 #define SPMAX(a,b) ((a) > (b) ? (a) : (b))

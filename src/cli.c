@@ -17,12 +17,12 @@
  */
 
 #include <signal.h>
-#include <pthread.h>
 
 #include <editline/readline.h>
 
 #include "cli.h"
 #include "logging.h"
+#include "os_compat.h"
 
 struct TXCLIContext {
     SPClass *class;

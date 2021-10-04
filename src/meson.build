@@ -27,6 +27,7 @@ sources = [
     'logging.c',
     'fifo_frame.c',
     'fifo_packet.c',
+    'os_compat.c',
 
     builtin_lua_scripts,
 

@@ -16,14 +16,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "encoding.h"
-#include "encoding_utils.h"
-
-#include <pthread.h>
 #include <libavutil/avstring.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/cpu.h>
+
+#include "encoding.h"
+#include "encoding_utils.h"
+#include "os_compat.h"
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 {

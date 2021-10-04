@@ -30,6 +30,7 @@
 #include "interface_common.h"
 #include "utils.h"
 #include "logging.h"
+#include "os_compat.h"
 #include "../config.h"
 
 #define DEFAULT_USAGE_FLAGS (VK_IMAGE_USAGE_SAMPLED_BIT      |                 \

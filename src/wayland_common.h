@@ -16,8 +16,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <pthread.h>
-
 #include "wlr-export-dmabuf-unstable-v1-client-protocol.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -35,6 +33,7 @@
 #include "iosys_common.h"
 #include "logging.h"
 #include "utils.h"
+#include "os_compat.h"
 
 typedef struct WaylandIOPriv {
     struct WaylandCtx *main_ctx;

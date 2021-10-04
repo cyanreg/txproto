@@ -16,7 +16,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <pthread.h>
 #include <stdatomic.h>
 
 #include <libavutil/time.h>
@@ -26,6 +25,7 @@
 #include "fifo_frame.h"
 #include "filtering.h"
 #include "utils.h"
+#include "os_compat.h"
 
 FN_CREATING(FilterContext, FilterPad, in_pad, in_pads, num_in_pads)
 FN_CREATING(FilterContext, FilterPad, out_pad, out_pads, num_out_pads)

@@ -18,28 +18,14 @@
 
 #pragma once
 
+#include <stdint.h>
+
+#include <pthread.h>
+
 #include "../config.h"
 
-#ifdef HAVE_PTHREAD_SETNAME_NP
-#include <pthread.h>
-#include <string.h>
-#include <errno.h>
-static inline void sp_set_thread_name_self(const char *name)
-{
-    pthread_t self = pthread_self();
-    if (pthread_setname_np(self, name) == ERANGE) {
-        char trunc_name[16];
-        strncpy(trunc_name, name, 16);
-        trunc_name[15] = '\0';
-        pthread_setname_np(self, trunc_name);
-    }
-}
-#else
-static inline void sp_set_thread_name_self(const char *name)
-{
-    return;
-}
-#endif
+/* Sets the thread name, if on an implementation where it's available */
+void sp_set_thread_name_self(const char *name);
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define noreturn _Noreturn
@@ -49,5 +35,11 @@ static inline void sp_set_thread_name_self(const char *name)
 #define noreturn
 #endif
 
-/* TODO Windows */
+/* TODO Windows support for dlopen */
 #include <dlfcn.h>
+
+/* Create a non-blocking named/FIFO pipe */
+int      sp_make_wakeup_pipe (int pipes[2]);
+void     sp_write_wakeup_pipe(int pipes[2], int64_t val);
+int64_t  sp_flush_wakeup_pipe(int pipes[2]);
+void     sp_close_wakeup_pipe(int pipes[2]);

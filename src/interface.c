@@ -21,6 +21,7 @@
 #include <libavutil/pixdesc.h>
 #include <libavutil/hwcontext_vulkan.h>
 
+#include <libplacebo/log.h>
 #include <libplacebo/vulkan.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/shaders/icc.h>

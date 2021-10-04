@@ -89,7 +89,7 @@ if has_memfd
     build_opts += '-D_GNU_SOURCE'
 endif
 
-add_global_arguments(build_opts, language: 'c')
+add_project_arguments(build_opts, language: 'c')
 
 features = '"base'
 

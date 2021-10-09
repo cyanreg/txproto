@@ -5,6 +5,9 @@ project('txproto', 'c',
     meson_version: '>=0.53.0',
 )
 
+lua_ver_maj = 5
+lua_ver_min = 4
+lua_ver = lua_ver_maj.to_string() + '.' + lua_ver_min.to_string()
 conf = configuration_data()
 
 conf.set_quoted('PROJECT_NAME', meson.project_name())
@@ -48,8 +51,8 @@ dependencies = [
     # vulkan
     dependency('vulkan', version: '>= 1.1'),
 
-    # lua5.4 required
-    dependency('lua', version: ['>= 5.4', '< 5.5']),
+    # lua
+    dependency('lua', version: ['>= ' + lua_ver, '< ' + lua_ver_maj.to_string() + '.' + (lua_ver_min + 1).to_string()]),
 
     # zlib
     dependency('zlib'),

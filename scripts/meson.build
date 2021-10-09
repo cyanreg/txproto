@@ -1,4 +1,11 @@
-luac = find_program('luac')
+luac = find_program('luac' + lua_ver, required: false)
+
+if not luac.found()
+    luac = find_program('luac', required: true)
+
+    res = run_command(luac, '-v').stdout()
+    assert(res.contains(' ' + lua_ver), 'luac executable version ' + lua_ver + ' is required to compile ' + meson.project_name() + ', executable version: \'' + res)
+endif
 
 builtin_scripts = [
     'default.lua',

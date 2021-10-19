@@ -18,17 +18,14 @@
 
 #pragma once
 
-#include "lua_common.h"
-#include "txproto_main.h"
+#include "events.h"
+#include "utils.h"
 
-/* Parse a Lua table on top of stack into an AVDictionary */
-int sp_lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict);
+typedef struct SPCtrlTemplateCbCtx {
+    SPEventType ctrl;
+    AVDictionary *opts;
+    atomic_int_fast64_t *epoch;
+} SPCtrlTemplateCbCtx;
 
-/* Parse a Lua string on top of stack into an SPEventType bitmask */
-int sp_lua_table_to_event_flags(void *ctx, lua_State *L, SPEventType *dst);
-
-/* Load the main API onto a Lua context */
-int sp_lua_load_main_api(TXLuaContext *lctx, TXMainContext *ctx);
-
-/* If a script (top-level) returns this, quit gracefully withour raise() */
-int sp_lua_quit(lua_State *L);
+int sp_ctrl_template(void *ctx, SPBufferList *events,
+                     event_fn callback, SPEventType ctrl, void *arg);

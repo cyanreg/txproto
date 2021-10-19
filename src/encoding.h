@@ -81,4 +81,4 @@ typedef struct EncodingContext {
 
 AVBufferRef *sp_encoder_alloc(void);
 int sp_encoder_init(AVBufferRef *ctx_ref);
-int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg);
+int sp_encoder_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg);

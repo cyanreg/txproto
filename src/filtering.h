@@ -121,16 +121,16 @@ int sp_init_filter_graph(AVBufferRef *ctx_ref, const char *name, const char *gra
 /**
  * Maps a FIFO to a pad.
  */
-int sp_map_fifo_to_pad(AVBufferRef *ctx_ref, AVBufferRef *fifo,
+int sp_map_fifo_to_pad(FilterContext *ctx, AVBufferRef *fifo,
                        const char *name, int is_out);
 
 /**
- * Maps a pad to another pad (from maybe another context).
+ * Maps a pad to another pad (from another context).
  */
-int sp_map_pad_to_pad(AVBufferRef *dst_ref, const char *dst_pad,
-                      AVBufferRef *src_ref, const char *src_pad);
+int sp_map_pad_to_pad(FilterContext *dst, const char *dst_pad,
+                      FilterContext *src, const char *src_pad);
 
 /**
  * Filter control.
  */
-int sp_filter_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg);
+int sp_filter_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg);

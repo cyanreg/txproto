@@ -27,6 +27,7 @@
 #include "iosys_common.h"
 #include "utils.h"
 #include "logging.h"
+#include "ctrl_template.h"
 
 #include "../config.h"
 
@@ -131,17 +132,12 @@ end:
     return NULL;
 }
 
-typedef struct LavdIOCtrlCtx {
-    enum SPEventType ctrl;
-    AVDictionary *opts;
-    atomic_int_fast64_t *epoch;
-} LavdIOCtrlCtx;
-
-static int lavd_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static int lavd_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, void *ctx,
+                              void *dep_ctx, void *data)
 {
-    LavdIOCtrlCtx *event = (LavdIOCtrlCtx *)opaque->data;
+    SPCtrlTemplateCbCtx *event = callback_ctx;
 
-    IOSysEntry *entry = src_ctx;
+    IOSysEntry *entry = ctx;
     LavdCaptureCtx *priv = entry->io_priv;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
@@ -157,51 +153,11 @@ static int lavd_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     }
 }
 
-static int lavd_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
+static int lavd_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 {
-    AVDictionary *dict = NULL;
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
-
-    if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        return sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_COMMIT, NULL);
-    } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_eventlist_discard(iosys_entry->events);
-        return 0;
-    } else if (ctrl & SP_EVENT_CTRL_OPTS) {
-        dict = arg;
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
-        return AVERROR(ENOTSUP);
-    }
-
-    SP_EVENT_BUFFER_CTX_ALLOC(LavdIOCtrlCtx, ctrl_ctx, av_buffer_default_free, NULL)
-
-    ctrl_ctx->ctrl = ctrl;
-    if (ctrl & SP_EVENT_CTRL_OPTS)
-        av_dict_copy(&ctrl_ctx->opts, dict, 0);
-    if (ctrl & SP_EVENT_CTRL_START)
-        ctrl_ctx->epoch = arg;
-
-    if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = lavd_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry, NULL);
-        av_buffer_unref(&ctrl_ctx_ref);
-        return ret;
-    }
-
-    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | ctrl;
-    AVBufferRef *ctrl_event = sp_event_create(lavd_ioctx_ctrl_cb, NULL,
-                                              flags, ctrl_ctx_ref,
-                                              sp_event_gen_identifier(iosys_entry, NULL, flags));
-
-    char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
-    av_free(fstr);
-
-    int err = sp_eventlist_add(iosys_entry, iosys_entry->events, ctrl_event);
-    av_buffer_unref(&ctrl_event);
-    if (err < 0)
-        return err;
-
-    return 0;
+    return sp_ctrl_template(iosys_entry, iosys_entry->events, lavd_ioctx_ctrl_cb,
+                            ctrl, arg);
 }
 
 static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
@@ -429,7 +385,7 @@ static void *source_update_thread(void *s)
     return 0;
 }
 
-static int lavd_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
+static int lavd_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     int err = 0;
     LavdCtx *ctx = (LavdCtx *)ctx_ref->data;
@@ -443,7 +399,7 @@ static int lavd_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
             /* Bring up the new event to speed with current affairs */
             SPBufferList *tmp_event = sp_bufferlist_new();
-            sp_eventlist_add(ctx, tmp_event, event);
+            sp_eventlist_add(ctx, tmp_event, event, 1);
 
             update_entries(ctx);
 
@@ -458,7 +414,7 @@ static int lavd_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
         }
 
         /* Add it to the list now to receive events dynamically */
-        err = sp_eventlist_add(ctx, ctx->events, event);
+        err = sp_eventlist_add(ctx, ctx->events, event, 1);
         if (err < 0)
             return err;
     }

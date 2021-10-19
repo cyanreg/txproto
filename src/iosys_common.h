@@ -51,7 +51,7 @@ typedef const struct IOSysAPI {
     /**
      * IOCTL interface.
      */
-    int (*ctrl)(AVBufferRef *ctx, enum SPEventType ctrl, void *arg);
+    int (*ctrl)(AVBufferRef *ctx, SPEventType ctrl, void *arg);
 } IOSysAPI;
 
 enum IOType {
@@ -94,7 +94,7 @@ typedef struct IOSysEntry {
     AVBufferRef *frames;
 
     /* Command interface */
-    int (*ctrl)(AVBufferRef *entry, enum SPEventType ctrl, void *arg);
+    int (*ctrl)(AVBufferRef *entry, SPEventType ctrl, void *arg);
     SPBufferList *events;
 
     /* API-specific private data */

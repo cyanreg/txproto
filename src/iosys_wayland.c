@@ -33,6 +33,7 @@
 #include "utils.h"
 #include "logging.h"
 #include "iosys_common.h"
+#include "ctrl_template.h"
 #include "../config.h"
 
 #ifdef HAVE_GBM
@@ -930,12 +931,6 @@ static void schedule_frame(IOSysEntry *entry)
         scrcpy_register_cb(entry);
 }
 
-typedef struct WLCaptureIOCtrlCtx {
-    enum SPEventType ctrl;
-    AVDictionary *opts;
-    atomic_int_fast64_t *epoch;
-} WLCaptureIOCtrlCtx;
-
 static void destroy_capture(WaylandCapturePriv *priv)
 {
     pthread_mutex_lock(&priv->frame_obj_lock);
@@ -962,11 +957,12 @@ static void destroy_capture(WaylandCapturePriv *priv)
 #endif
 }
 
-static int wlcapture_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static int wlcapture_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, void *ctx,
+                                   void *dep_ctx, void *data)
 {
-    WLCaptureIOCtrlCtx *event = (WLCaptureIOCtrlCtx *)opaque->data;
+    SPCtrlTemplateCbCtx *event = callback_ctx;
 
-    IOSysEntry *entry = src_ctx;
+    IOSysEntry *entry = ctx;
     WaylandCapturePriv *priv = entry->io_priv;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
@@ -984,72 +980,11 @@ static int wlcapture_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *dat
     }
 }
 
-static int wlcapture_ioctx_ctrl(AVBufferRef *entry, enum SPEventType ctrl, void *arg)
+static int wlcapture_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 {
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
-
-    if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        sp_log(iosys_entry, SP_LOG_DEBUG, "Comitting!\n");
-        return sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_COMMIT, NULL);
-    } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_log(iosys_entry, SP_LOG_DEBUG, "Discarding!\n");
-        sp_eventlist_discard(iosys_entry->events);
-    } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
-        char *fstr = sp_event_flags_to_str_buf(arg);
-        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
-        av_free(fstr);
-        return sp_eventlist_add(iosys_entry, iosys_entry->events, arg);
-    } else if (ctrl & SP_EVENT_CTRL_DEP) {
-        char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
-        sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
-        av_free(fstr);
-        return sp_eventlist_add_with_dep(iosys_entry, iosys_entry->events, arg, ctrl);
-    } else if (ctrl & SP_EVENT_CTRL_OPTS) {
-        AVDictionary *dict = arg;
-        AVDictionaryEntry *dict_entry = NULL;
-        while ((dict_entry = av_dict_get(dict, "", dict_entry, AV_DICT_IGNORE_SUFFIX))) {
-            if (strcmp(dict_entry->key, "capture_cursor") &&
-                strcmp(dict_entry->key, "capture_mode")   &&
-                strcmp(dict_entry->key, "framerate_num")  &&
-                strcmp(dict_entry->key, "framerate_den")  &&
-                strcmp(dict_entry->key, "oneshot")) {
-                sp_log(iosys_entry, SP_LOG_ERROR, "Option \"%s\" not found!\n", dict_entry->key);
-                return AVERROR(EINVAL);
-            }
-        }
-    } else if ((ctrl & SP_EVENT_CTRL_MASK) & ~(SP_EVENT_CTRL_START | SP_EVENT_CTRL_STOP)) {
-        return AVERROR(ENOTSUP);
-    }
-
-    SP_EVENT_BUFFER_CTX_ALLOC(WLCaptureIOCtrlCtx, ctrl_ctx, av_buffer_default_free, NULL)
-
-    ctrl_ctx->ctrl = ctrl;
-    if (ctrl & SP_EVENT_CTRL_OPTS)
-        av_dict_copy(&ctrl_ctx->opts, arg, 0);
-    if (ctrl & SP_EVENT_CTRL_START)
-        ctrl_ctx->epoch = arg;
-
-    if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = wlcapture_ioctx_ctrl_cb(ctrl_ctx_ref, iosys_entry, NULL);
-        av_buffer_unref(&ctrl_ctx_ref);
-        return ret;
-    }
-
-    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | ctrl;
-    AVBufferRef *ctrl_event = sp_event_create(wlcapture_ioctx_ctrl_cb, NULL,
-                                              flags, ctrl_ctx_ref,
-                                              sp_event_gen_identifier(iosys_entry, NULL, flags));
-
-    char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    sp_log(iosys_entry, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
-    av_free(fstr);
-
-    int err = sp_eventlist_add(iosys_entry, iosys_entry->events, ctrl_event);
-    av_buffer_unref(&ctrl_event);
-    if (err < 0)
-        return err;
-
-    return 0;
+    return sp_ctrl_template(iosys_entry, iosys_entry->events, wlcapture_ioctx_ctrl_cb,
+                            ctrl, arg);
 }
 
 static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
@@ -1146,7 +1081,7 @@ end:
     return err;
 }
 
-static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
+static int wlcapture_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     int err = 0;
     WaylandCaptureCtx *ctx = (WaylandCaptureCtx *)ctx_ref->data;
@@ -1160,7 +1095,7 @@ static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg
         if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
             /* Bring up the new event to speed with current affairs */
             SPBufferList *tmp_event = sp_bufferlist_new();
-            sp_eventlist_add(ctx, tmp_event, event);
+            sp_eventlist_add(ctx, tmp_event, event, 1);
 
             AVBufferRef *obj = NULL;
             while ((obj = sp_bufferlist_iter_ref(ctx->wl->output_list))) {
@@ -1174,7 +1109,7 @@ static int wlcapture_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg
         }
 
         /* Add it to the list now to receive events dynamically */
-        err = sp_eventlist_add(ctx, ctx->events, event);
+        err = sp_eventlist_add(ctx, ctx->events, event, 1);
         if (err < 0)
             return err;
     }

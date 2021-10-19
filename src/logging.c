@@ -482,12 +482,18 @@ const char *sp_class_get_parent_name(void *ctx)
 
 uint32_t sp_class_get_id(void *ctx)
 {
-    return get_class(ctx)->id;
+    SPClass *class = get_class(ctx);
+    if (class)
+        return class->id;
+    return 0x0;
 }
 
 enum SPType sp_class_get_type(void *ctx)
 {
-    return get_class(ctx)->type;
+    SPClass *class = get_class(ctx);
+    if (class)
+        return class->type;
+    return SP_TYPE_NONE;
 }
 
 const char *sp_class_type_string(void *ctx)

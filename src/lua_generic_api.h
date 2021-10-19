@@ -18,17 +18,7 @@
 
 #pragma once
 
-#include "lua_common.h"
-#include "txproto_main.h"
+#include "lua_api.h"
 
-/* Parse a Lua table on top of stack into an AVDictionary */
-int sp_lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict);
-
-/* Parse a Lua string on top of stack into an SPEventType bitmask */
-int sp_lua_table_to_event_flags(void *ctx, lua_State *L, SPEventType *dst);
-
-/* Load the main API onto a Lua context */
-int sp_lua_load_main_api(TXLuaContext *lctx, TXMainContext *ctx);
-
-/* If a script (top-level) returns this, quit gracefully withour raise() */
-int sp_lua_quit(lua_State *L);
+int sp_lua_generic_link(lua_State *L);
+int sp_lua_generic_ctrl(lua_State *L);

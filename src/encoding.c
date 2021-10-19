@@ -24,6 +24,8 @@
 #include "encoding.h"
 #include "encoding_utils.h"
 #include "os_compat.h"
+#include "utils.h"
+#include "ctrl_template.h"
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
 {
@@ -542,7 +544,7 @@ static void *encoding_thread(void *arg)
                 goto fail;
             }
 
-            out_pkt->stream_index = sp_class_get_id(ctx);
+            out_pkt->opaque = ctx;
 
             sp_log(ctx, SP_LOG_TRACE, "Pushing packet to FIFO, pts = %f\n",
                    av_q2d(ctx->avctx->time_base) * out_pkt->pts);
@@ -568,23 +570,11 @@ fail:
     return NULL;
 }
 
-typedef struct EncoderIOCtrlCtx {
-    enum SPEventType ctrl;
-    AVDictionary *opts;
-    atomic_int_fast64_t *epoch;
-} EncoderIOCtrlCtx;
-
-static void encoder_ioctx_ctrl_free(void *opaque, uint8_t *data)
+static int encoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
+                                 void *_ctx, void *dep_ctx, void *data)
 {
-    EncoderIOCtrlCtx *event = (EncoderIOCtrlCtx *)data;
-    av_dict_free(&event->opts);
-    av_free(data);
-}
-
-static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    EncoderIOCtrlCtx *event = (EncoderIOCtrlCtx *)opaque->data;
-    EncodingContext *ctx = src_ctx;
+    SPCtrlTemplateCbCtx *event = callback_ctx;
+    EncodingContext *ctx = _ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
         if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
@@ -622,63 +612,10 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     return 0;
 }
 
-int sp_encoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg)
+int sp_encoder_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
-
-    if (ctrl & SP_EVENT_CTRL_COMMIT) {
-        sp_log(ctx, SP_LOG_DEBUG, "Comitting!\n");
-        return sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
-    } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
-        sp_log(ctx, SP_LOG_DEBUG, "Discarding!\n");
-        sp_eventlist_discard(ctx->events);
-    } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
-        char *fstr = sp_event_flags_to_str_buf(arg);
-        sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
-        av_free(fstr);
-        return sp_eventlist_add(ctx, ctx->events, arg);
-     } else if (ctrl & SP_EVENT_CTRL_DEP) {
-        char *fstr = sp_event_flags_to_str(ctrl & ~SP_EVENT_CTRL_MASK);
-        sp_log(ctx, SP_LOG_DEBUG, "Registering new dependency (%s)!\n", fstr);
-        av_free(fstr);
-        return sp_eventlist_add_with_dep(ctx, ctx->events, arg, ctrl);
-    } else if (ctrl & ~(SP_EVENT_CTRL_START |
-                        SP_EVENT_CTRL_STOP  |
-                        SP_EVENT_CTRL_OPTS  |
-                        SP_EVENT_CTRL_FLUSH |
-                        SP_EVENT_FLAG_IMMEDIATE)) {
-        return AVERROR(ENOTSUP);
-    }
-
-    SP_EVENT_BUFFER_CTX_ALLOC(EncoderIOCtrlCtx, ctrl_ctx, encoder_ioctx_ctrl_free, ctx)
-
-    ctrl_ctx->ctrl = ctrl;
-    if (ctrl & SP_EVENT_CTRL_OPTS)
-        av_dict_copy(&ctrl_ctx->opts, arg, 0);
-    if (ctrl & SP_EVENT_CTRL_START)
-        ctrl_ctx->epoch = arg;
-
-    if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
-        int ret = encoder_ioctx_ctrl_cb(ctrl_ctx_ref, ctx, NULL);
-        av_buffer_unref(&ctrl_ctx_ref);
-        return ret;
-    }
-
-    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | ctrl;
-    AVBufferRef *ctrl_event = sp_event_create(encoder_ioctx_ctrl_cb, NULL,
-                                              flags, ctrl_ctx_ref,
-                                              sp_event_gen_identifier(ctx, NULL, flags));
-
-    char *fstr = sp_event_flags_to_str_buf(ctrl_event);
-    sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);
-    av_free(fstr);
-
-    int err = sp_eventlist_add(ctx, ctx->events, ctrl_event);
-    av_buffer_unref(&ctrl_event);
-    if (err < 0)
-        return err;
-
-    return 0;
+    return sp_ctrl_template(ctx, ctx->events, encoder_ioctx_ctrl_cb, ctrl, arg);
 }
 
 int sp_encoder_init(AVBufferRef *ctx_ref)
@@ -707,6 +644,7 @@ int sp_encoder_init(AVBufferRef *ctx_ref)
         av_strlcat(new_name, ctx->codec->name, len);
         sp_class_set_name(ctx, new_name);
         av_free(new_name);
+        ctx->name = sp_class_get_name(ctx);
     } else {
         sp_class_set_name(ctx, ctx->name);
     }

@@ -29,136 +29,8 @@
 #include "filtering.h"
 #include "interface_common.h"
 
-#include "lua_event_templates.h"
-
-#define LUA_PUSH_CONTEXTED_INTERFACE(L, fn_table, upvals) \
-    do {                                                  \
-        luaL_newlibtable(L, fn_table);                    \
-        int upvals_nb = SP_ARRAY_ELEMS(upvals);           \
-        for (int c = 0; c < upvals_nb; c++)               \
-            lua_pushlightuserdata(L, upvals[c]);          \
-        luaL_setfuncs(L, fn_table, upvals_nb);            \
-    } while (0);
-
-#define LUA_CLEANUP_FN_DEFS(fnprefix, fnname)           \
-    av_unused AVBufferRef **cleanup_ref = NULL;         \
-    const av_unused char *fn_prefix = fnprefix;         \
-    const av_unused char *fn_name = fnname;
-
-#define LUA_SET_CLEANUP(ref) \
-    do {                     \
-        cleanup_ref = &ref;  \
-    } while (0)
-
-#define LUA_ERROR(fmt, ...)                                               \
-    do {                                                                  \
-        sp_log(ctx, SP_LOG_ERROR, "%s->%s: " fmt "\n",                    \
-               fn_prefix, fn_name, __VA_ARGS__);                          \
-        lua_pushfstring(L, fmt, __VA_ARGS__);                             \
-        if (cleanup_ref && *cleanup_ref)                                  \
-            av_buffer_unref(cleanup_ref);                                 \
-        return lua_error(L);                                              \
-    } while (0)
-
-#define LUA_INTERFACE_BOILERPLATE()                                            \
-    do {                                                                       \
-        if (lua_gettop(L) != 1)                                                \
-            LUA_ERROR("Invalid number of arguments, expected 1, got %i!",      \
-                      lua_gettop(L));                                          \
-        if (!lua_istable(L, -1))                                               \
-            LUA_ERROR("Invalid argument type, expected table, got \"%s\"!",    \
-                      lua_typename(L, lua_type(L, -1)));                       \
-    } while (0)
-
-#define LUA_CHECK_OPT_VAL(key, expected)                                               \
-    int type = lua_getfield(L, -1, key);                                               \
-    if (type == LUA_TNIL || type == LUA_TNONE) {                                       \
-        lua_pop(L, 1);                                                                 \
-        break;                                                                         \
-    } else if (type != expected)                                                       \
-        LUA_ERROR("Invalid value type for entry \"%s\", expected \"%s\", got \"%s\"!", \
-                  key, lua_typename(L, expected), lua_typename(L, type));              \
-
-#define GET_OPTS_CLASS(dst, key)                                              \
-    do {                                                                      \
-        LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
-        err = lua_parse_table_to_avopt(ctx, L, dst);                          \
-        if (err < 0)                                                          \
-            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
-        lua_pop(L, 1);                                                        \
-    } while (0)
-
-#define GET_OPTS_DICT(dst, key)                                               \
-    do {                                                                      \
-        LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
-        err = lua_parse_table_to_avdict(L, &dst);                             \
-        if (err < 0)                                                          \
-            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
-        lua_pop(L, 1);                                                        \
-    } while (0)
-
-#define GET_OPTS_LIST(dst, key)                                               \
-    do {                                                                      \
-        LUA_CHECK_OPT_VAL(key, LUA_TTABLE)                                    \
-        err = lua_parse_table_to_list(L, &dst);                               \
-        if (err < 0)                                                          \
-            LUA_ERROR("Unable to parse %s: %s!", key, av_err2str(err));       \
-        lua_pop(L, 1);                                                        \
-    } while (0)
-
-#define GET_OPT_STR(dst, key)               \
-    do {                                    \
-        LUA_CHECK_OPT_VAL(key, LUA_TSTRING) \
-        dst = lua_tostring(L, -1);          \
-        lua_pop(L, 1);                      \
-    } while (0)
-
-#define GET_OPT_BOOL(dst, key)               \
-    do {                                     \
-        LUA_CHECK_OPT_VAL(key, LUA_TBOOLEAN) \
-        dst = lua_toboolean(L, -1);          \
-        lua_pop(L, 1);                       \
-    } while (0)
-
-#define SET_OPT_BOOL(src, key) \
-    lua_pushboolean(L, src);   \
-    lua_setfield(L, -2, key);
-
-#define SET_OPT_STR(src, key)     \
-    do {                          \
-        lua_pushstring(L, src);   \
-        lua_setfield(L, -2, key); \
-    } while (0)
-
-#define GET_OPT_NUM(dst, key)                                                    \
-    do {                                                                         \
-        LUA_CHECK_OPT_VAL(key, LUA_TNUMBER)                                      \
-        dst = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1); \
-        lua_pop(L, 1);                                                           \
-    } while (0)
-
-#define SET_OPT_NUM(src, key)     \
-    do {                          \
-        lua_pushnumber(L, src);   \
-        lua_setfield(L, -2, key); \
-    } while (0)
-
-#define SET_OPT_INT(src, key)     \
-    do {                          \
-        lua_pushinteger(L, src);  \
-        lua_setfield(L, -2, key); \
-    } while (0)
-
-#define GET_OPT_LIGHTUSERDATA(dst, key)            \
-    do {                                           \
-        LUA_CHECK_OPT_VAL(key, LUA_TLIGHTUSERDATA) \
-        dst = (void *)lua_touserdata(L, -1);       \
-        lua_pop(L, 1);                             \
-    } while (0)
-
-#define SET_OPT_LIGHTUSERDATA(src, key) \
-    lua_pushlightuserdata(L, src);      \
-    lua_setfield(L, -2, key);
+#include "lua_generic_api.h"
+#include "lua_api_utils.h"
 
 static int lua_parse_table_to_avopt(TXMainContext *ctx, lua_State *L, void *dst)
 {
@@ -238,7 +110,7 @@ static int lua_parse_table_to_list(lua_State *L, char ***dst)
         av_free(tlist);         \
     } while (0)
 
-static int lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict)
+int sp_lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict)
 {
     lua_pushnil(L);
 
@@ -261,158 +133,18 @@ static int lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict)
     return 0;
 }
 
-static int lua_generic_destroy(lua_State *L)
-{
-    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
-    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
-    av_buffer_unref(&ref);
-    return 0;
-}
-
-static int lua_event_destroy(lua_State *L)
-{
-    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
-    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
-    sp_event_unref_expire(&ref);
-    return 0;
-}
-
-static int lua_event_await(lua_State *L)
-{
-    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
-
-    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
-    lua_pushlightuserdata(L, ref);
-
-    return lua_yieldk(L, 1, 0, NULL);
-}
-
-static int string_to_event_flags(TXMainContext *ctx, uint64_t *dst,
-                                 const char *in_str)
-{
-    uint64_t flags = 0x0;
-    int on_prefix   = 0;
-    int type_prefix = 0;
-    int ctrl_prefix = 0;
-    int flag_prefix = 0;
-
-    /* We have to modify it */
-    char *str = av_strdup(in_str);
-
-    *dst = 0x0;
-
-#define FLAG(flag, prf, name)                                    \
-    if (!strcmp(tok, #prf ":" name) || !strcmp(tok, name)) {     \
-        flags |= flag;                                           \
-        on_prefix = type_prefix = ctrl_prefix = flag_prefix = 0; \
-        prf## _prefix = 1;                                       \
-    } else if (!strcmp(tok, ":" name)) {                         \
-        if (prf## _prefix) {                                     \
-            flags |= flag;                                       \
-        } else {                                                 \
-            sp_log(ctx, SP_LOG_ERROR, "Error parsing flags, no " \
-                   "%s prefix specified for %s!\n", #prf, name); \
-            av_free(str);                                        \
-            return AVERROR(EINVAL);                              \
-        }                                                        \
-    } else
-
-    char *save, *tok = av_strtok(str, " ,+", &save);
-    while (tok) {
-        FLAG(SP_EVENT_ON_COMMIT,       on,   "commit")
-        FLAG(SP_EVENT_ON_CONFIG,       on,   "config")
-        FLAG(SP_EVENT_ON_INIT,         on,   "init")
-        FLAG(SP_EVENT_ON_CHANGE,       on,   "change")
-        FLAG(SP_EVENT_ON_STATS,        on,   "stats")
-        FLAG(SP_EVENT_ON_EOS,          on,   "eos")
-        FLAG(SP_EVENT_ON_ERROR,        on,   "error")
-        FLAG(SP_EVENT_ON_DESTROY,      on,   "destroy")
-        FLAG(SP_EVENT_ON_OUTPUT,       on,   "output")
-        FLAG(SP_EVENT_ON_MASK,         on,   "all")
-
-        FLAG(SP_EVENT_TYPE_SOURCE,     type, "source")
-        FLAG(SP_EVENT_TYPE_SINK,       type, "sink")
-        FLAG(SP_EVENT_TYPE_LINK,       type, "link")
-        FLAG(SP_EVENT_TYPE_MASK,       type, "all")
-
-        FLAG(SP_EVENT_CTRL_START,      ctrl, "start")
-        FLAG(SP_EVENT_CTRL_STOP,       ctrl, "stop")
-        FLAG(SP_EVENT_CTRL_OPTS,       ctrl, "opts")
-        FLAG(SP_EVENT_CTRL_COMMIT,     ctrl, "commit")
-        FLAG(SP_EVENT_CTRL_DISCARD,    ctrl, "discard")
-        FLAG(SP_EVENT_CTRL_FLUSH,      ctrl, "flush")
-
-        FLAG(SP_EVENT_FLAG_NO_REORDER, flag, "no_reorder")
-        FLAG(SP_EVENT_FLAG_NO_DEDUP,   flag, "no_dedup")
-        FLAG(SP_EVENT_FLAG_HIGH_PRIO,  flag, "high_prio")
-        FLAG(SP_EVENT_FLAG_LOW_PRIO,   flag, "low_prio")
-        FLAG(SP_EVENT_FLAG_IMMEDIATE,  flag, "immediate")
-        FLAG(SP_EVENT_FLAG_ONESHOT,    flag, "oneshot")
-
-        /* else */ if (!strcmp(tok, "on:")) {
-            type_prefix = ctrl_prefix = flag_prefix = 0;
-            on_prefix = 1;
-        } else if (!strcmp(tok, "type:")) {
-            on_prefix = ctrl_prefix = flag_prefix = 0;
-            type_prefix = 1;
-        } else if (!strcmp(tok, "ctrl:")) {
-            on_prefix = type_prefix = flag_prefix = 0;
-            ctrl_prefix = 1;
-        } else if (!strcmp(tok, "type:")) {
-            on_prefix = type_prefix = ctrl_prefix = 0;
-            flag_prefix = 1;
-        } else {
-            sp_log(ctx, SP_LOG_ERROR, "Error parsing flags, \"%s\" not found!\n", tok);
-            av_free(str);
-            return AVERROR(EINVAL);
-        }
-
-        tok = av_strtok(NULL, " ,+", &save);
-    }
-
-    av_free(str);
-    *dst = flags;
-
-#undef FLAG
-    return 0;
-}
-
-static int table_to_event_flags(lua_State *L, TXMainContext *ctx, enum SPEventType *dst)
-{
-    lua_pushnil(L);
-
-    *dst = 0x0;
-    enum SPEventType flags = 0x0;
-    while (lua_next(L, -2)) {
-        if (!lua_isstring(L, -1))
-            return AVERROR(EINVAL);
-        uint64_t tmp_flags;
-        int err = string_to_event_flags(ctx, &tmp_flags, lua_tostring(L, -1));
-        if (err < 0)
-            return err;
-        flags |= tmp_flags;
-        lua_pop(L, 1);
-    }
-
-    *dst = flags;
-
-    return 0;
-}
-
 typedef struct HookLuaEventCtx {
-    enum SPEventType flags;
+    SPEventType flags;
     int fn_ref;
     AVBufferRef *ctx_ref;
     TXLuaContext *lctx;
 } HookLuaEventCtx;
 
-static int hook_lua_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static int hook_lua_event_cb(AVBufferRef *event_ref, void *callback_ctx,
+                             void *ctx, void *dep_ctx, void *data)
 {
     int err = 0;
-    HookLuaEventCtx *event_ctx = (HookLuaEventCtx *)opaque->data;
+    HookLuaEventCtx *event_ctx = callback_ctx;
 
     lua_State *L = sp_lua_lock_interface(event_ctx->lctx);
 
@@ -486,9 +218,9 @@ call:
     return sp_lua_unlock_interface(event_ctx->lctx, err);
 }
 
-static void hook_lua_event_free(void *opaque, uint8_t *data)
+static void hook_lua_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
 {
-    HookLuaEventCtx *hook_lua_ctx = (HookLuaEventCtx *)data;
+    HookLuaEventCtx *hook_lua_ctx = callback_ctx;
 
     lua_State *L = sp_lua_lock_interface(hook_lua_ctx->lctx);
     luaL_unref(L, LUA_REGISTRYINDEX, hook_lua_ctx->fn_ref);
@@ -496,8 +228,76 @@ static void hook_lua_event_free(void *opaque, uint8_t *data)
     sp_lua_close_ctx(&hook_lua_ctx->lctx);
 
     av_buffer_unref(&hook_lua_ctx->ctx_ref);
+}
 
-    av_free(data);
+#define LUA_CREATE_HOOK_FN(ev_name, target_ctx, type_flags)                    \
+    AVBufferRef *ev_name = sp_event_create(hook_lua_event_cb,                  \
+                                           hook_lua_event_free,                \
+                                           sizeof(HookLuaEventCtx),            \
+                                           NULL,                               \
+                                           type_flags,                         \
+                                           (target_ctx),                       \
+                                           NULL);                              \
+    if (!ev_name)                                                              \
+        LUA_ERROR("Unable to add event: %s", av_err2str(AVERROR(ENOMEM)));     \
+                                                                               \
+    LUA_SET_CLEANUP(ev_name);                                                  \
+                                                                               \
+    HookLuaEventCtx *ev_name ## _ctx = av_buffer_get_opaque(ev_name);          \
+                                                                               \
+    ev_name ## _ctx->lctx = sp_lua_create_thread(ctx->lua);                    \
+    ev_name ## _ctx->flags = (type_flags);                                     \
+    ev_name ## _ctx->fn_ref = fn_ref;
+
+static int lua_generic_destroy(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
+    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
+    av_buffer_unref(&ref);
+    return 0;
+}
+
+static int lua_event_destroy(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
+    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
+    sp_event_unref_expire(&ref);
+    return 0;
+}
+
+static int lua_event_await(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    AVBufferRef *ref = lua_touserdata(L, lua_upvalueindex(2));
+
+    (void)sp_bufferlist_pop(ctx->ext_buf_refs, sp_bufferlist_find_fn_data, ref);
+    lua_pushlightuserdata(L, ref);
+
+    return lua_yieldk(L, 1, 0, NULL);
+}
+
+int sp_lua_table_to_event_flags(void *ctx, lua_State *L, SPEventType *dst)
+{
+    lua_pushnil(L);
+
+    *dst = 0x0;
+    SPEventType flags = 0x0;
+    while (lua_next(L, -2)) {
+        if (!lua_isstring(L, -1))
+            return AVERROR(EINVAL);
+        uint64_t tmp_flags;
+        int err = sp_event_string_to_flags(ctx, &tmp_flags, lua_tostring(L, -1));
+        if (err < 0)
+            return err;
+        flags |= tmp_flags;
+        lua_pop(L, 1);
+    }
+
+    *dst = flags;
+
+    return 0;
 }
 
 static int lua_generic_hook(lua_State *L)
@@ -522,9 +322,9 @@ static int lua_generic_hook(lua_State *L)
 
     uint64_t flags;
     if (lua_isstring(L, -1)) {
-        err = string_to_event_flags(ctx, &flags, lua_tostring(L, -1));
+        err = sp_event_string_to_flags(ctx, &flags, lua_tostring(L, -1));
     } else {
-        err = table_to_event_flags(L, ctx, &flags);
+        err = sp_lua_table_to_event_flags(ctx, L, &flags);
     }
 
     if (err < 0) {
@@ -568,20 +368,16 @@ static int lua_generic_hook(lua_State *L)
         LUA_ERROR("No event specified to hook function on: %s!", av_err2str(AVERROR(EINVAL)));
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(HookLuaEventCtx, hook_lua_ctx, hook_lua_event_free, ctx);
-
     /* Its a user event, we do not want to deduplicate */
-    flags |= SP_EVENT_FLAG_NO_DEDUP;
+    flags |= SP_EVENT_FLAG_UNIQUE;
 
-    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
-    hook_lua_ctx->flags = flags;
-    hook_lua_ctx->fn_ref = fn_ref;
+    /* Create the event */
+    LUA_CREATE_HOOK_FN(hook_event, obj_ref->data, flags)
 
-    AVBufferRef *hook_event = sp_event_create(hook_lua_event_cb, NULL, flags,
-                                              hook_lua_ctx_ref, 0x0);
+    /* Give the event to the corresponding ctrl function */
     err = fn(obj_ref, flags | SP_EVENT_CTRL_NEW_EVENT, hook_event);
     if (err < 0)
-         LUA_ERROR("Unable to add event: %s", av_err2str(err));
+        LUA_ERROR("Unable to add event: %s", av_err2str(err));
 
     sp_bufferlist_append_noref(ctx->ext_buf_refs, hook_event);
 
@@ -598,303 +394,6 @@ static int lua_generic_hook(lua_State *L)
         add_commit_fn_to_list(ctx, fn, obj_ref);
 
     return 1;
-}
-
-static int lua_generic_ctrl(lua_State *L)
-{
-    int err = 0;
-    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
-
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "ctrl")
-
-    int num_args = lua_gettop(L);
-    if (num_args != 1 && num_args != 2)
-        LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", num_args);
-    if (num_args == 2 && !lua_istable(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\" (options), got \"%s\"!",
-                  lua_typename(L, lua_type(L, -1)));
-    if (!lua_isstring(L, -num_args) && !lua_istable(L, -num_args))
-        LUA_ERROR("Invalid argument, expected \"string\" or \"table\" (flags), got \"%s\"!",
-                  lua_typename(L, lua_type(L, -num_args)));
-
-    AVDictionary *opts = NULL;
-    if (num_args == 2) {
-        err = lua_parse_table_to_avdict(L, &opts);
-        if (err < 0)
-            LUA_ERROR("Unable to parse given options table: %s!", av_err2str(err));
-        lua_pop(L, 1);
-    }
-
-    uint64_t flags;
-    if (lua_isstring(L, -1)) {
-        err = string_to_event_flags(ctx, &flags, lua_tostring(L, -1));
-    } else {
-        err = table_to_event_flags(L, ctx, &flags);
-    }
-
-    if (err < 0)
-        LUA_ERROR("Unable to parse given flags: %s", av_err2str(err));
-
-    GENERIC_CTRL(obj_ref, flags, opts);
-
-    av_dict_free(&opts);
-
-    return 0;
-}
-
-typedef struct SPLinkSourceEncoderCtx {
-    AVBufferRef *src_ref;
-    AVBufferRef *enc_ref;
-} SPLinkSourceEncoderCtx;
-
-static int api_link_src_enc_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    SPLinkSourceEncoderCtx *ctx = (SPLinkSourceEncoderCtx *)opaque->data;
-    IOSysEntry *sctx = (IOSysEntry *)ctx->src_ref->data;
-    EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
-
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"\n",
-           sp_class_type_string(sctx), sp_class_get_name(sctx),
-           sp_class_type_string(ectx), sp_class_get_name(ectx));
-
-    return sp_frame_fifo_mirror(ectx->src_frames, sctx->frames);
-}
-
-static void api_link_src_enc_free(void *opaque, uint8_t *data)
-{
-    SPLinkSourceEncoderCtx *ctx = (SPLinkSourceEncoderCtx *)data;
-    av_buffer_unref(&ctx->src_ref);
-    av_buffer_unref(&ctx->enc_ref);
-    av_free(data);
-}
-
-typedef struct SPLinkSourceFilterCtx {
-    AVBufferRef *src_ref;
-    AVBufferRef *filt_ref;
-    const char *filt_pad;
-} SPLinkSourceFilterCtx;
-
-static int api_link_src_filt_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    SPLinkSourceFilterCtx *ctx = (SPLinkSourceFilterCtx *)opaque->data;
-    IOSysEntry *sctx = (IOSysEntry *)ctx->src_ref->data;
-
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"\n",
-           sp_class_type_string(sctx), sp_class_get_name(sctx),
-           sp_class_type_string(ctx->filt_ref->data), sp_class_get_name(ctx->filt_ref->data));
-
-    return sp_map_fifo_to_pad(ctx->filt_ref, sctx->frames, ctx->filt_pad, 0);
-}
-
-static void api_link_src_filt_free(void *opaque, uint8_t *data)
-{
-    SPLinkSourceFilterCtx *ctx = (SPLinkSourceFilterCtx *)data;
-    av_buffer_unref(&ctx->src_ref);
-    av_buffer_unref(&ctx->filt_ref);
-    av_free(data);
-}
-
-typedef struct SPLinkFilterFilterCtx {
-    AVBufferRef *src_ref;
-    AVBufferRef *dst_ref;
-    const char *src_filt_pad;
-    const char *dst_filt_pad;
-} SPLinkFilterFilterCtx;
-
-static int api_link_filt_filt_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    SPLinkFilterFilterCtx *ctx = (SPLinkFilterFilterCtx *)opaque->data;
-
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"\n",
-           sp_class_type_string(ctx->src_ref->data), sp_class_get_name(ctx->src_ref->data),
-           sp_class_type_string(ctx->dst_ref->data), sp_class_get_name(ctx->dst_ref->data));
-
-    return sp_map_pad_to_pad(ctx->dst_ref, ctx->dst_filt_pad,
-                             ctx->src_ref, ctx->src_filt_pad);
-}
-
-static void api_link_filt_filt_free(void *opaque, uint8_t *data)
-{
-    SPLinkFilterFilterCtx *ctx = (SPLinkFilterFilterCtx *)data;
-    av_buffer_unref(&ctx->src_ref);
-    av_buffer_unref(&ctx->dst_ref);
-    av_free(data);
-}
-
-typedef struct SPLinkFilterEncoderCtx {
-    AVBufferRef *filt_ref;
-    AVBufferRef *enc_ref;
-    const char *filt_pad;
-} SPLinkFilterEncoderCtx;
-
-static int api_link_filt_enc_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    SPLinkFilterEncoderCtx *ctx = (SPLinkFilterEncoderCtx *)opaque->data;
-    EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
-
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"%s%s\n",
-           sp_class_type_string(ectx), sp_class_get_name(ectx),
-           sp_class_type_string(ctx->filt_ref->data), sp_class_get_name(ctx->filt_ref->data),
-           ctx->filt_pad ? ", pad: " : "",
-           ctx->filt_pad ? ctx->filt_pad : "");
-
-    return sp_map_fifo_to_pad(ctx->filt_ref, ectx->src_frames, ctx->filt_pad, 1);
-}
-
-static void api_link_filt_enc_free(void *opaque, uint8_t *data)
-{
-    SPLinkFilterEncoderCtx *ctx = (SPLinkFilterEncoderCtx *)data;
-    av_buffer_unref(&ctx->filt_ref);
-    av_buffer_unref(&ctx->enc_ref);
-    av_free(data);
-}
-
-typedef struct SPLinkEncoderMuxerCtx {
-    AVBufferRef *enc_ref;
-    AVBufferRef *mux_ref;
-} SPLinkEncoderMuxerCtx;
-
-static int api_link_enc_mux_cb(AVBufferRef *opaque, void *src_ctx, void *data)
-{
-    SPLinkEncoderMuxerCtx *ctx = (SPLinkEncoderMuxerCtx *)opaque->data;
-    EncodingContext *ectx = (EncodingContext *)ctx->enc_ref->data;
-    MuxingContext *mctx = (MuxingContext *)ctx->mux_ref->data;
-
-    sp_log(src_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\" and %s \"%s\"\n",
-           sp_class_type_string(mctx), sp_class_get_name(mctx),
-           sp_class_type_string(ectx), sp_class_get_name(ectx));
-
-    int err = sp_muxer_add_stream(ctx->mux_ref, ctx->enc_ref);
-    if (err < 0)
-        return err;
-
-    return sp_packet_fifo_mirror(mctx->src_packets, ectx->dst_packets);
-}
-
-static void api_link_enc_mux_free(void *opaque, uint8_t *data)
-{
-    SPLinkEncoderMuxerCtx *ctx = (SPLinkEncoderMuxerCtx *)data;
-    av_buffer_unref(&ctx->enc_ref);
-    av_buffer_unref(&ctx->mux_ref);
-    av_free(data);
-}
-
-static int lua_generic_link(lua_State *L)
-{
-    int err = 0;
-    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    AVBufferRef *obj1 = lua_touserdata(L, lua_upvalueindex(2));
-
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj1->data), "link")
-
-    int nargs = lua_gettop(L);
-    if (nargs != 1 && nargs != 2)
-        LUA_ERROR("Invalid number of arguments, expected 1 or 2 got %i!", lua_gettop(L));
-
-    int autostart = 1;
-    const char *src_pad_name = NULL;
-    const char *dst_pad_name = NULL;
-    if (nargs == 2) {
-        if (lua_istable(L, -1)) {
-            GET_OPT_STR(src_pad_name, "src_pad");
-            GET_OPT_STR(dst_pad_name, "dst_pad");
-            GET_OPT_BOOL(autostart, "autostart");
-        } else if (lua_isstring(L, -1)) {
-            src_pad_name = dst_pad_name = lua_tostring(L, -1);
-        } else {
-            LUA_ERROR("Invalid argument, expected \"table\" (options) or \"string\" (pad name), got \"%s\"!",
-                      lua_typename(L, lua_type(L, -1)));
-        }
-        lua_pop(L, 1);
-    }
-
-    if (!lua_istable(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\" (source context), got \"%s\"!",
-                  lua_typename(L, lua_type(L, -1)));
-
-    lua_pushnil(L);
-    lua_next(L, -2);
-    if (!lua_isfunction(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\", got \"%s\"!",
-                  lua_typename(L, lua_type(L, -1)));
-
-    lua_getupvalue(L, 3, 2);
-    if (!lua_isuserdata(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\"[upvalue].\"userdata\", got \"%s\"!",
-                  lua_typename(L, lua_type(L, -1)));
-
-    AVBufferRef *obj2 = lua_touserdata(L, -1);
-
-#define EITHER(o1, o2, t1, t2)                                                 \
-    ((sp_class_get_type(o1->data) & t1 || sp_class_get_type(o1->data) & t2) && \
-     (sp_class_get_type(o2->data) & t1 || sp_class_get_type(o2->data) & t2))   \
-
-#define PICK_REF(o1, o2, type)                                   \
-    av_buffer_ref(sp_class_get_type(o1->data) == type ? o1 : o2)
-
-#define PICK_REF_INV(o1, o2, type)                               \
-    av_buffer_ref(sp_class_get_type(o1->data) != type ? o1 : o2)
-
-    if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_MUXER)) {
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkEncoderMuxerCtx, link_enc_mux, api_link_enc_mux_free, NULL)
-        link_enc_mux->enc_ref = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
-        link_enc_mux->mux_ref = PICK_REF(obj1, obj2, SP_TYPE_MUXER);
-
-        GENERIC_LINK(EncodingContext, link_enc_mux->enc_ref, sp_encoder_ctrl,
-                     MuxingContext, link_enc_mux->mux_ref, sp_muxer_ctrl,
-                     link_enc_mux);
-    } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_VIDEO_SOURCE) ||
-               EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_AUDIO_SOURCE)) {
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkSourceEncoderCtx, link_src_enc, api_link_src_enc_free, NULL)
-        link_src_enc->src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_ENCODER);
-        link_src_enc->enc_ref = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
-
-        ctrl_fn source_ctrl = ((IOSysEntry *)link_src_enc->src_ref->data)->ctrl;
-
-        GENERIC_LINK(IOSysEntry, link_src_enc->src_ref, source_ctrl,
-                     EncodingContext, link_src_enc->enc_ref, sp_encoder_ctrl,
-                     link_src_enc);
-    } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_FILTER)) {
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkFilterEncoderCtx, link_filt_enc, api_link_filt_enc_free, NULL)
-        link_filt_enc->filt_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
-        link_filt_enc->enc_ref  = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
-        link_filt_enc->filt_pad = av_strdup(src_pad_name);
-
-        GENERIC_LINK(FilterContext, link_filt_enc->filt_ref, sp_filter_ctrl,
-                     EncodingContext, link_filt_enc->enc_ref, sp_encoder_ctrl,
-                     link_filt_enc);
-    } else if (EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_VIDEO_SOURCE) ||
-               EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_AUDIO_SOURCE)) {
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkSourceFilterCtx, link_src_filt, api_link_src_filt_free, NULL)
-        link_src_filt->src_ref  = PICK_REF_INV(obj1, obj2, SP_TYPE_FILTER);
-        link_src_filt->filt_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
-        link_src_filt->filt_pad = av_strdup(dst_pad_name);
-
-        ctrl_fn source_ctrl = ((IOSysEntry *)link_src_filt->src_ref->data)->ctrl;
-
-        GENERIC_LINK(IOSysEntry, link_src_filt->src_ref, source_ctrl,
-                     FilterContext, link_src_filt->filt_ref, sp_filter_ctrl,
-                     link_src_filt);
-    } else if ((sp_class_get_type(obj1->data) == SP_TYPE_FILTER) &&
-               (sp_class_get_type(obj1->data) == sp_class_get_type(obj2->data))) {
-        SP_EVENT_BUFFER_CTX_ALLOC(SPLinkFilterFilterCtx, link_filt_filt, api_link_filt_filt_free, NULL)
-        link_filt_filt->src_ref = av_buffer_ref(obj2);
-        link_filt_filt->dst_ref = av_buffer_ref(obj1);
-
-        link_filt_filt->src_filt_pad = av_strdup(src_pad_name);
-        link_filt_filt->dst_filt_pad = av_strdup(dst_pad_name);
-
-        GENERIC_LINK(FilterContext, link_filt_filt->src_ref, sp_filter_ctrl,
-                     FilterContext, link_filt_filt->dst_ref, sp_filter_ctrl,
-                     link_filt_filt);
-    }
-
-    LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",
-              sp_class_get_name(obj1->data), sp_class_type_string(obj1->data),
-              sp_class_get_name(obj2->data), sp_class_type_string(obj2->data));
-
-    return 0;
 }
 
 static int lua_interface_create_selection(lua_State *L)
@@ -915,22 +414,20 @@ static int lua_interface_create_selection(lua_State *L)
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL)
         LUA_ERROR("Invalid function specified, got: %s!", "nil");
 
-    SP_EVENT_BUFFER_CTX_ALLOC(HookLuaEventCtx, hook_lua_ctx, hook_lua_event_free, ctx);
+    SPEventType type = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_UNIQUE;
 
-    uint64_t flags = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
+    /* Create hook event */
+    LUA_CREATE_HOOK_FN(hook_event, iface_ref->data, type)
 
-    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
-    hook_lua_ctx->flags = flags;
-    hook_lua_ctx->fn_ref = fn_ref;
-
-    AVBufferRef *hook_event = sp_event_create(hook_lua_event_cb, NULL, flags,
-                                              hook_lua_ctx_ref, 0x0);
-
-    hook_lua_ctx->ctx_ref = sp_interface_highlight_win(iface_ref,
+    hook_event_ctx->ctx_ref = sp_interface_highlight_win(iface_ref,
                                                        PROJECT_NAME " region selection",
                                                        hook_event);
 
-    sp_bufferlist_append_noref(ctx->ext_buf_refs, hook_event);
+    int err = sp_eventlist_add(ctx, ctx->ext_buf_refs, hook_event, 0);
+    if (err < 0) {
+        av_buffer_unref(&hook_event);
+        LUA_ERROR("Unable to add event: %s!", av_err2str(err));
+    }
 
     void *contexts[] = { ctx, hook_event };
     static const struct luaL_Reg lua_fns[] = {
@@ -1005,9 +502,9 @@ static int lua_create_muxer(lua_State *L)
 
     void *contexts[] = { ctx, mctx_ref };
     static const struct luaL_Reg lua_fns[] = {
-        { "ctrl", lua_generic_ctrl },
+        { "ctrl", sp_lua_generic_ctrl },
         { "hook", lua_generic_hook },
-        { "link", lua_generic_link },
+        { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
     };
@@ -1089,9 +586,9 @@ static int lua_create_encoder(lua_State *L)
 
     void *contexts[] = { ctx, ectx_ref };
     static const struct luaL_Reg lua_fns[] = {
-        { "ctrl", lua_generic_ctrl },
+        { "ctrl", sp_lua_generic_ctrl },
         { "hook", lua_generic_hook },
-        { "link", lua_generic_link },
+        { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
     };
@@ -1118,7 +615,7 @@ static int lua_create_io(lua_State *L)
 
     AVDictionary *opts = NULL;
     if (num_args == 2) {
-        lua_parse_table_to_avdict(L, &opts);
+        sp_lua_parse_table_to_avdict(L, &opts);
         lua_pop(L, 1);
     }
 
@@ -1146,9 +643,9 @@ static int lua_create_io(lua_State *L)
 
     void *contexts[] = { ctx, entry };
     static const struct luaL_Reg lua_fns[] = {
-        { "ctrl", lua_generic_ctrl },
+        { "ctrl", sp_lua_generic_ctrl },
         { "hook", lua_generic_hook },
-        { "link", lua_generic_link },
+        { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
     };
@@ -1184,9 +681,9 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
     uint64_t flags = 0x0;
     if (args == (is_graph + 2)) {
         if (lua_isstring(L, -1))
-            err = string_to_event_flags(ctx, &flags, lua_tostring(L, -1));
+            err = sp_event_string_to_flags(ctx, &flags, lua_tostring(L, -1));
         else
-            err = table_to_event_flags(L, ctx, &flags);
+            err = sp_lua_table_to_event_flags(ctx, L, &flags);
         if (err < 0)
             LUA_ERROR("Unable to parse given flags: %s", av_err2str(err));
         lua_pop(L, 1);
@@ -1195,7 +692,9 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
     flags |= SP_EVENT_CTRL_COMMAND;
 
     AVDictionary *cmdlist = NULL;
-    lua_parse_table_to_avdict(L, &cmdlist);
+    err = sp_lua_parse_table_to_avdict(L, &cmdlist);
+    if (err < 0)
+        LUA_ERROR("Unable to parse command list: %s", av_err2str(err));
 
     if (is_graph)
         av_dict_set(&cmdlist, "sp_filter_target", lua_tostring(L, -2), 0);
@@ -1280,9 +779,9 @@ static int lua_create_filter(lua_State *L)
 
     void *contexts[] = { ctx, fctx_ref };
     static const struct luaL_Reg lua_fns[] = {
-        { "ctrl", lua_generic_ctrl },
+        { "ctrl", sp_lua_generic_ctrl },
         { "hook", lua_generic_hook },
-        { "link", lua_generic_link },
+        { "link", sp_lua_generic_link },
         { "command", lua_filter_command },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
@@ -1353,9 +852,9 @@ static int lua_create_filtergraph(lua_State *L)
 
     void *contexts[] = { ctx, fctx_ref };
     static const struct luaL_Reg lua_fns[] = {
-        { "ctrl", lua_generic_ctrl },
+        { "ctrl", sp_lua_generic_ctrl },
         { "hook", lua_generic_hook },
-        { "link", lua_generic_link },
+        { "link", sp_lua_generic_link },
         { "command", lua_filtergraph_command },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
@@ -1366,11 +865,12 @@ static int lua_create_filtergraph(lua_State *L)
     return 1;
 }
 
-static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+static int epoch_event_cb(AVBufferRef *event, void *callback_ctx, void *_ctx,
+                          void *dep_ctx, void *data)
 {
     int err = 0;
-    TXMainContext *ctx = av_buffer_get_opaque(opaque);
-    EpochEventCtx *epoch_ctx = (EpochEventCtx *)opaque->data;
+    TXMainContext *ctx = _ctx;
+    EpochEventCtx *epoch_ctx = callback_ctx;
 
     int64_t val;
     switch(epoch_ctx->mode) {
@@ -1422,18 +922,16 @@ static int epoch_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     return err;
 }
 
-static void epoch_event_free(void *opaque, uint8_t *data)
+static void epoch_event_free(void *callback_ctx, void *_ctx, void *dep_ctx)
 {
-    TXMainContext *ctx = opaque;
-    EpochEventCtx *epoch_ctx = (EpochEventCtx *)data;
+    TXMainContext *ctx = _ctx;
+    EpochEventCtx *epoch_ctx = callback_ctx;
 
     av_buffer_unref(&epoch_ctx->src_ref);
 
     lua_State *L = sp_lua_lock_interface(ctx->lua);
     luaL_unref(L, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
     sp_lua_unlock_interface(ctx->lua, 0);
-
-    av_free(data);
 }
 
 static int lua_set_epoch(lua_State *L)
@@ -1446,7 +944,20 @@ static int lua_set_epoch(lua_State *L)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!",
                   lua_gettop(L));
 
-    SP_EVENT_BUFFER_CTX_ALLOC(EpochEventCtx, epoch_ctx, epoch_event_free, ctx)
+    const SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
+
+    AVBufferRef *epoch_event = sp_event_create(epoch_event_cb,
+                                               epoch_event_free,
+                                               sizeof(EpochEventCtx),
+                                               NULL,
+                                               flags,
+                                               ctx,
+                                               NULL);
+
+    LUA_SET_CLEANUP(epoch_event);
+
+    EpochEventCtx *epoch_ctx = av_buffer_get_opaque(epoch_event);
+
     epoch_ctx->fn_ref = LUA_NOREF;
 
     if (lua_istable(L, -1)) {
@@ -1481,7 +992,6 @@ static int lua_set_epoch(lua_State *L)
         } else if (!strcmp(str, "system")) {
             epoch_ctx->mode = EP_MODE_SYSTEM;
         } else {
-            av_buffer_unref(&epoch_ctx_ref);
             LUA_ERROR("Invalid epoch mode, expected \"zero\" or \"system\", got \"%s\"!", str);
         }
     } else if (lua_isfunction(L, -1)) {
@@ -1493,15 +1003,11 @@ static int lua_set_epoch(lua_State *L)
                   lua_typename(L, lua_type(L, -1)));
     }
 
-    enum SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT | SP_EVENT_FLAG_HIGH_PRIO;
-    AVBufferRef *epoch_event = sp_event_create(epoch_event_cb, NULL,
-                                               flags, epoch_ctx_ref,
-                                               sp_event_gen_identifier(ctx, NULL, flags));
+    int err = sp_eventlist_add(ctx, ctx->commit_list, epoch_event, 0);
+    if (err < 0)
+        av_buffer_unref(&epoch_event);
 
-    sp_eventlist_add(ctx, ctx->commit_list, epoch_event);
-    av_buffer_unref(&epoch_event);
-
-    return 0;
+    return err;
 }
 
 static int lua_commit(lua_State *L)
@@ -1529,11 +1035,13 @@ typedef struct SPSourceEventCbCtx {
     TXLuaContext *lua; /* Source events happen from a separate Lua thread */
 } SPSourceEventCbCtx;
 
-static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
+
+static int source_event_cb(AVBufferRef *event, void *callback_ctx, void *ctx,
+                           void *dep_ctx, void *data)
 {
     int err = 0;
-    SPSourceEventCbCtx *source_cb_ctx = (SPSourceEventCbCtx *)opaque->data;
-    IOSysEntry *entry = src_ctx;
+    SPSourceEventCbCtx *source_cb_ctx = callback_ctx;
+    IOSysEntry *entry = dep_ctx;
 
     lua_State *L = sp_lua_lock_interface(source_cb_ctx->lua);
 
@@ -1588,16 +1096,15 @@ static int source_event_cb(AVBufferRef *opaque, void *src_ctx, void *data)
     return sp_lua_unlock_interface(source_cb_ctx->lua, err);
 }
 
-static void source_event_free(void *opaque, uint8_t *data)
+static void source_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
 {
-    SPSourceEventCbCtx *source_cb_ctx = (SPSourceEventCbCtx *)data;
+    SPSourceEventCbCtx *source_cb_ctx = callback_ctx;
 
     lua_State *L = sp_lua_lock_interface(source_cb_ctx->lua);
     luaL_unref(L, LUA_REGISTRYINDEX, source_cb_ctx->fn_ref);
     sp_lua_unlock_interface(source_cb_ctx->lua, 0);
 
     sp_lua_close_ctx(&source_cb_ctx->lua);
-    av_free(data);
 }
 
 static int lua_register_io_cb(lua_State *L)
@@ -1686,16 +1193,23 @@ static int lua_register_io_cb(lua_State *L)
         return 0;
     }
 
-    SP_EVENT_BUFFER_CTX_ALLOC(SPSourceEventCbCtx, source_event_ctx, source_event_free, ctx)
-    source_event_ctx->fn_ref = fn_ref;
-    source_event_ctx->lua = sp_lua_create_thread(ctx->lua);
+    SPEventType type = SP_EVENT_TYPE_SOURCE    | SP_EVENT_ON_CHANGE |
+                       SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_UNIQUE;
 
-    enum SPEventType flags = SP_EVENT_TYPE_SOURCE | SP_EVENT_ON_CHANGE |
-                             SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
-    AVBufferRef *source_event = sp_event_create(source_event_cb, NULL, flags,
-                                                source_event_ctx_ref, 0x0);
+    AVBufferRef *source_event = sp_event_create(source_event_cb,
+                                                source_event_free,
+                                                sizeof(SPSourceEventCbCtx),
+                                                NULL,
+                                                type,
+                                                ctx,
+                                                NULL);
 
     LUA_SET_CLEANUP(source_event);
+
+    SPSourceEventCbCtx *source_event_ctx = av_buffer_get_opaque(source_event);
+
+    source_event_ctx->fn_ref = fn_ref;
+    source_event_ctx->lua = sp_lua_create_thread(ctx->lua);
 
     for (int i = 0; i < sp_compiled_apis_len; i++) {
         int found = 0;
@@ -1803,17 +1317,14 @@ static int lua_prompt(lua_State *L)
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL)
         LUA_ERROR("Invalid function specified, got: %s!", "nil");
 
-    SP_EVENT_BUFFER_CTX_ALLOC(HookLuaEventCtx, hook_lua_ctx, hook_lua_event_free, ctx);
+    const uint64_t flags = SP_EVENT_ON_DESTROY |
+                           SP_EVENT_FLAG_IMMEDIATE |
+                           SP_EVENT_FLAG_UNIQUE;
 
-    uint64_t flags = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_NO_DEDUP;
+    /* Create the event */
+    LUA_CREATE_HOOK_FN(hook_event, ctx->cli, flags)
 
-    hook_lua_ctx->lctx = sp_lua_create_thread(ctx->lua);
-    hook_lua_ctx->flags = flags;
-    hook_lua_ctx->fn_ref = fn_ref;
-
-    AVBufferRef *hook_event = sp_event_create(hook_lua_event_cb, NULL, flags,
-                                              hook_lua_ctx_ref, 0x0);
-
+    /* Give the event to the CLI subsystem */
     int ret = sp_cli_prompt_event(ctx->cli, hook_event, lua_tostring(L, -1));
     if (ret < 0) {
         sp_event_unref_expire(&hook_event);

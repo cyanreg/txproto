@@ -3,8 +3,10 @@ sources = [
     'txproto_main.c',
 
     # Lua
+    builtin_lua_scripts,
     'lua_common.c',
     'lua_api.c',
+    'lua_generic_api.c',
 
     # Sources
     'iosys_common.c',
@@ -28,8 +30,7 @@ sources = [
     'fifo_frame.c',
     'fifo_packet.c',
     'os_compat.c',
-
-    builtin_lua_scripts,
+    'ctrl_template.c',
 
     # Version
     vcs_tag(command: ['git', 'rev-parse', '--short', 'HEAD'],

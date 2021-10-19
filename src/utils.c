@@ -16,8 +16,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdatomic.h>
+
 #include <libavutil/crc.h>
 #include <libavutil/opt.h>
+#include <libavutil/time.h>
 #include <libavutil/bprint.h>
 #include <libavutil/random_seed.h>
 
@@ -135,13 +138,13 @@ struct SPBufferList {
     int entries_num;
     unsigned int entries_size;
 
-    enum SPEventType *priv_flags;
+    SPEventType *priv_flags;
     unsigned int priv_flags_size;
 
     int iter_idx;
 
-    enum SPEventType dispatched;
-    enum SPEventType queued;
+    SPEventType dispatched;
+    SPEventType queued;
 };
 
 SPBufferList *sp_bufferlist_new(void)
@@ -177,12 +180,12 @@ AVBufferRef *sp_bufferlist_find_fn_data(AVBufferRef *entry, void *opaque)
 }
 
 #define SP_BUF_PRIV_NEW      (1ULL << 48)
-#define SP_BUF_PRIV_DEP      (1ULL << 49)
+#define SP_BUF_PRIV_SIGNAL   (1ULL << 49)
 #define SP_BUF_PRIV_RUNNING  (1ULL << 50)
 #define SP_BUF_PRIV_ON_MASK  (SP_EVENT_ON_MASK)
 
 static int internal_bufferlist_append(SPBufferList *list, AVBufferRef *entry,
-                                      enum SPEventType pflags, int ref,
+                                      SPEventType pflags, int ref,
                                       int position)
 {
     int err = 0;
@@ -206,7 +209,7 @@ static int internal_bufferlist_append(SPBufferList *list, AVBufferRef *entry,
         goto end;
     }
 
-    enum SPEventType *priv_flags = av_fast_realloc(list->priv_flags, &list->priv_flags_size,
+    SPEventType *priv_flags = av_fast_realloc(list->priv_flags, &list->priv_flags_size,
                                                    sizeof(*priv_flags) * (list->entries_num + 1));
     if (!priv_flags) {
         err = AVERROR(ENOMEM);
@@ -373,6 +376,8 @@ int sp_bufferlist_copy(SPBufferList *dst, SPBufferList *src)
     int err = 0;
     pthread_mutex_lock(&src->lock);
 
+    /* TODO: check for duplicates on event lists */
+
     for (int i = 0; i < src->entries_num; i++) {
         AVBufferRef *cloned = av_buffer_ref(src->entries[i]);
         if (!cloned)
@@ -393,54 +398,65 @@ end:
 }
 
 struct SPEvent {
-    enum SPEventType type;
-    pthread_mutex_t *lock;
+    /* Event identification */
+    uint64_t id;
+    SPEventType type;
+    void *ctx;
+    void *dep_ctx;
+
+    /* Event dependency */
     pthread_cond_t cond;
-    uint32_t identifier;
+    int dep_done;
+
+    /* Event parameters */
+    event_fn cb;
+    event_free destroy_cb;
+    pthread_mutex_t *lock;
     int external_lock;
-    int (*fn)(AVBufferRef *opaque, void *src_ctx, void *data);
-
-    /* Just pointers to entries in the array, only used for sorting */
-    AVBufferRef **sources;
-    int sources_num;
-
-    AVBufferRef **destinations;
-    int destinations_num;
 };
 
 static void destroy_event(void *opaque, uint8_t *data)
 {
     SPEvent *event = (SPEvent *)data;
-    AVBufferRef *opaque_ref = opaque;
-    pthread_mutex_lock(event->lock);
-    int external_lock = event->external_lock;
-    pthread_mutex_unlock(event->lock);
 
-    if (!external_lock) {
+    if (event->destroy_cb)
+        event->destroy_cb(opaque, event->ctx, event->dep_ctx);
+
+    if (!event->external_lock) {
         pthread_mutex_destroy(event->lock);
         av_free(event->lock);
     }
 
-    av_free(event->sources);
-    av_free(event->destinations);
     av_free(event);
-    av_buffer_unref(&opaque_ref);
+    av_free(opaque);
 }
 
-AVBufferRef *sp_event_create(int (*fn)(AVBufferRef *opaque, void *src_ctx, void *data),
-                             pthread_mutex_t *lock, enum SPEventType type,
-                             AVBufferRef *opaque, uint32_t identifier)
+atomic_uint_fast64_t global_event_counter = ATOMIC_VAR_INIT(0);
+
+AVBufferRef *sp_event_create(event_fn cb,
+                             event_free destroy_cb,
+                             size_t callback_ctx_size,
+                             pthread_mutex_t *lock,
+                             SPEventType type,
+                             void *ctx,
+                             void *dep_ctx)
 {
+    /* TODO: Cache the allocations - as a starter, bypass all if the
+     * callback_ctx_size is below a threshold and use a preallocated event */
     SPEvent *event = av_mallocz(sizeof(SPEvent));
     if (!event)
         return NULL;
 
-    event->fn   = fn;
-    event->type = type;
-    event->lock = lock;
-    event->identifier = identifier;
+    event->cb            = cb;
+    event->destroy_cb    = destroy_cb;
+    event->type          = type;
+    event->dep_ctx       = dep_ctx;
+    event->ctx           = ctx;
+    event->lock          = lock;
     event->external_lock = !!lock;
+    event->id            = atomic_fetch_add(&global_event_counter, 1);
 
+    /* Initialize the cond which will be used if there's a dependency */
     pthread_cond_init(&event->cond, NULL);
 
     if (!event->external_lock) {
@@ -452,6 +468,8 @@ AVBufferRef *sp_event_create(int (*fn)(AVBufferRef *opaque, void *src_ctx, void 
         pthread_mutex_init(event->lock, NULL);
     }
 
+    void *opaque = av_mallocz(callback_ctx_size);
+
     AVBufferRef *entry = av_buffer_create((uint8_t *)event, sizeof(SPEvent),
                                           destroy_event, opaque, 0);
     if (!entry) {
@@ -460,6 +478,7 @@ AVBufferRef *sp_event_create(int (*fn)(AVBufferRef *opaque, void *src_ctx, void 
             av_free(event->lock);
         }
         av_free(event);
+        av_free(opaque);
         return NULL;
     }
 
@@ -485,114 +504,92 @@ void sp_event_unref_await(AVBufferRef **buf)
         return;
 
     SPEvent *event = (SPEvent *)(*buf)->data;
+    if (!(event->type & SP_EVENT_FLAG_DEPENDENCY))
+        return;
+
     pthread_mutex_lock(event->lock);
-    if (event->type & SP_EVENT_FLAG_EXPIRED)
-        goto end;
 
-    pthread_cond_wait(&event->cond, event->lock);
+    if (!event->dep_done && !(event->type & SP_EVENT_FLAG_EXPIRED))
+        pthread_cond_wait(&event->cond, event->lock);
 
-end:
     pthread_mutex_unlock(event->lock);
 
     av_buffer_unref(buf);
 }
 
-static inline AVBufferRef *find_event_identifier(AVBufferRef *entry, void *opaque)
+static inline AVBufferRef *find_event_duplicate(AVBufferRef *entry, void *opaque)
 {
-    SPEvent *event = (SPEvent *)entry->data;
-    if (event->identifier == *((uint32_t *)opaque))
+    SPEvent *ref_ctx = (SPEvent *)entry->data;
+    SPEvent *cmp_ctx = (SPEvent *)opaque;
+
+    SPEventType mask;
+    SPEventType event_ref_type = ref_ctx->type;
+    SPEventType event_cmp_type = cmp_ctx->type;
+
+    /* First, mark matching flags */
+    mask  = event_ref_type & event_cmp_type;
+
+    /* Filter out those we're not interested in */
+    mask &= SP_EVENT_CTRL_MASK | SP_EVENT_TYPE_LINK;
+
+    /* Then, exclude them if either has a UNIQUE flag. */
+    mask &= ~((event_ref_type | event_cmp_type) & SP_EVENT_FLAG_UNIQUE);
+
+    if (mask &&
+        (ref_ctx->ctx == cmp_ctx->ctx) &&
+        (ref_ctx->dep_ctx == cmp_ctx->dep_ctx))
         return entry;
 
     return NULL;
 }
 
-static int find_event_list(SPBufferList *list, AVBufferRef *entry)
-{
-    for (int i = 0; i < list->entries_num; i++)
-        if (list->entries[i] == entry)
-            return i;
-
-    return sp_assert(1); /* Should never happen */
-}
-
-static int order_events(SPBufferList *list)
-{
-    pthread_mutex_lock(&list->lock);
-
-    for (int i = 0; i < list->entries_num; i++) {
-        enum SPEventType priv_flags = list->priv_flags[i];
-        AVBufferRef *entry = list->entries[i];
-        SPEvent *event = (SPEvent *)entry->data;
-
-        int max_source = -1, min_destinations = list->entries_num;
-
-        for (int j = 0; j < event->sources_num; j++)
-            max_source = FFMAX(find_event_list(list, event->sources[i]), max_source);
-        for (int j = 0; j < event->sources_num; j++)
-            min_destinations = FFMIN(find_event_list(list, event->destinations[i]), min_destinations);
-
-        /* All good */
-        if ((i > max_source) && ((i != (list->entries_num - 1)) && (i < min_destinations)))
-            continue;
-
-        /* Set it in between in the middle */
-        int dst_i = (int)ceilf(max_source + min_destinations/2.0);
-
-        buflist_remove_idx(list, i);
-
-        internal_bufferlist_append(list, entry, priv_flags, 0, dst_i);
-    }
-
-    pthread_mutex_unlock(&list->lock);
-
-    return 0;
-}
-
-static int eventlist_add_internal(void *src_ctx, SPBufferList *list,
-                                  AVBufferRef *event, enum SPEventType when)
+static int eventlist_add_internal(void *ctx, SPBufferList *list,
+                                  AVBufferRef *event, int ref, SPEventType when)
 {
     SPEvent *event_ctx = (SPEvent *)event->data;
     if (!list)
         return 0;
 
-    AVBufferRef *dup = NULL;
-    if (!(event_ctx->type & SP_EVENT_FLAG_NO_DEDUP))
-        dup = sp_bufferlist_pop(list, find_event_identifier, &event_ctx->identifier);
+    AVBufferRef *dup = sp_bufferlist_pop(list, find_event_duplicate, event_ctx);
 
     if (dup) {
         char *fstr = sp_event_flags_to_str(when ? when : event_ctx->type);
-        sp_log(src_ctx, SP_LOG_DEBUG, "Deduplicating %s (%s id: 0x%x)!\n",
-               when ? "dependency" : "event", fstr, event_ctx->identifier);
+        const char *e_ctx_name = sp_class_get_name(event_ctx->ctx);
+        const char *e_dep_ctx_name = sp_class_get_name(event_ctx->dep_ctx);
+        sp_log(ctx, SP_LOG_DEBUG, "Deduplicating %s (id:%lu %s, contexts: %s%s%s)!\n",
+               when ? "dependency" : "event", event_ctx->id, fstr,
+               e_ctx_name,
+               e_ctx_name && e_dep_ctx_name ? "," : "",
+               e_dep_ctx_name);
         av_free(fstr);
         av_buffer_unref(&dup);
     }
 
-    int ret = internal_bufferlist_append(list, event, 0x0, 1, INT_MAX);
+    int ret = internal_bufferlist_append(list, event,
+                                         when ? (when | SP_BUF_PRIV_SIGNAL) : 0x0,
+                                         ref, INT_MAX);
     if (ret < 0)
         return ret;
-
-    /* TODO: call this when comitting only */
-    order_events(list);
 
     list->queued |= event_ctx->type;
 
     return 0;
 }
 
-int sp_eventlist_add(void *src_ctx, SPBufferList *list, AVBufferRef *event)
+int sp_eventlist_add(void *ctx, SPBufferList *list, AVBufferRef *event, int ref)
 {
-    return eventlist_add_internal(src_ctx, list, event, 0x0);
+    return eventlist_add_internal(ctx, list, event, ref, 0x0);
 }
 
-int sp_eventlist_add_with_dep(void *src_ctx, SPBufferList *list,
-                              AVBufferRef *event, enum SPEventType when)
+int sp_eventlist_add_signal(void *ctx, SPBufferList *list,
+                            AVBufferRef *event, SPEventType when, int ref)
 {
-    return eventlist_add_internal(src_ctx, list, event, when);
+    return eventlist_add_internal(ctx, list, event, ref, when & SP_EVENT_ON_MASK);
 }
 
 #define MASK_ERR_DESTROY (SP_EVENT_ON_DESTROY | SP_EVENT_ON_ERROR)
 
-int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void *data)
+int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void *data)
 {
     int ret = 0, dispatched = 0, num_events;
     if (!list && type & SP_EVENT_ON_DESTROY)
@@ -601,8 +598,23 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
         return AVERROR(EINVAL);
 
     pthread_mutex_lock(&list->lock);
-
     num_events = list->entries_num;
+
+#if 0
+    char *fstrs = sp_event_flags_to_str(type);
+
+    sp_log(ctx, SP_LOG_WARN, "Dispatching %i events (%s)\n", num_events, fstrs);
+    av_free(fstrs);
+    for (int i = 0; i < num_events; i++) {
+
+        SPEvent *event = (SPEvent *)list->entries[i]->data;
+        char *fstr = sp_event_flags_to_str(event->type);
+        sp_log(ctx, SP_LOG_WARN, "    %lu - %s!!!%s%s\n", event->id, fstr,
+               (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) ? " signalling" : "",
+               (list->priv_flags[i] & SP_BUF_PRIV_RUNNING) ? " running" : "");
+        av_free(fstr);
+    }
+#endif
 
     list->dispatched |= type;
     list->queued &= ~type;
@@ -610,52 +622,60 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
     for (int i = 0; i < list->entries_num; i++) {
         if (type & SP_EVENT_ON_COMMIT)
             list->priv_flags[i] &= ~SP_BUF_PRIV_NEW;
-        else if (list->priv_flags[i] & SP_BUF_PRIV_NEW)
-            continue;
 
-        if ((list->priv_flags[i] & SP_BUF_PRIV_DEP) &&
+        if ((list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) &&
             ((list->priv_flags[i] & SP_BUF_PRIV_ON_MASK) & type)) {
-            SPEvent *event = (SPEvent *)list->entries[i]->data;
-            pthread_mutex_lock(event->lock);
 
-            enum SPEventType expired = event->type & SP_EVENT_FLAG_EXPIRED;
+            SPEvent *event = (SPEvent *)list->entries[i]->data;
+
+            SPEventType expired = event->type & SP_EVENT_FLAG_EXPIRED;
+
             char *fstr = sp_event_flags_to_str(event->type);
-            sp_log(src_ctx, SP_LOG_DEBUG, "%s on event (%s)!\n",
-                   expired ? "Skipping waiting" : "Waiting", fstr);
+            sp_log(ctx, SP_LOG_DEBUG, "%s event (id:%lu %s)!\n",
+                   expired ? "Expired, not signalling" : "Signalling",
+                   event->id, fstr);
             av_free(fstr);
 
-            if (!expired)
-                pthread_cond_wait(&event->cond, event->lock);
+            if (!expired) {
+                pthread_cond_broadcast(&event->cond);
+                event->dep_done = 1;
+            }
 
-            pthread_mutex_unlock(event->lock);
             av_buffer_unref(&list->entries[i]);
             buflist_remove_idx(list, i);
             i -= 1;
         }
     }
 
-    int i;
-    for (i = 0; i < list->entries_num; i++) {
-        SPEvent *event = (SPEvent *)list->entries[i]->data;
+    for (int i = 0; i < list->entries_num; i++) {
+        AVBufferRef *event_ref = list->entries[i];
+        SPEvent *event = (SPEvent *)event_ref->data;
+
+        if (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL)
+            continue;
 
         /* To prevent recursion. The list is threadsafe, and its execution is
          * threadsafe as well, however the dispatching of commands may modify
          * the list, and even dispatch events. */
-        if (list->priv_flags[i] & SP_BUF_PRIV_RUNNING)
+        if (list->priv_flags[i] & (SP_BUF_PRIV_RUNNING | SP_BUF_PRIV_SIGNAL))
             continue;
         list->priv_flags[i] |= SP_BUF_PRIV_RUNNING;
 
         pthread_mutex_lock(event->lock);
 
-        enum SPEventType destroy_now = 0;
+        SPEventType destroy_now = 0;
         destroy_now |= event->type & SP_EVENT_FLAG_EXPIRED;
         destroy_now |= (type & MASK_ERR_DESTROY) && !(event->type & MASK_ERR_DESTROY);
 
         if (destroy_now) {
+            if (event->type & SP_EVENT_FLAG_DEPENDENCY)
+                sp_log(ctx, SP_LOG_DEBUG, "Event with dependency (id:%lu) "
+                       "already expired!\n", event->id);
+
             if (event->type & SP_EVENT_FLAG_ONESHOT)
                 event->type |= SP_EVENT_FLAG_EXPIRED;
             pthread_mutex_unlock(event->lock);
-            av_buffer_unref(&list->entries[i]);
+            av_buffer_unref(&event_ref);
             buflist_remove_idx(list, i); /* No need to remove IS_RUNNING */
             i -= 1;
             continue;
@@ -663,10 +683,10 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
             goto end;
         }
 
-        enum SPEventType filter_type = type & ~(SP_EVENT_FLAG_MASK | SP_EVENT_ON_MASK);
-        enum SPEventType filter_on = type & ~(SP_EVENT_FLAG_MASK | SP_EVENT_TYPE_MASK | SP_EVENT_CTRL_MASK);
+        SPEventType filter_type = type & ~(SP_EVENT_FLAG_MASK | SP_EVENT_ON_MASK);
+        SPEventType filter_on = type & ~(SP_EVENT_FLAG_MASK | SP_EVENT_TYPE_MASK | SP_EVENT_CTRL_MASK);
 
-        enum SPEventType run_now;
+        SPEventType run_now;
         if (event->type & SP_EVENT_FLAG_IMMEDIATE)
             run_now = 1;
         else if (filter_type && filter_on)
@@ -685,18 +705,38 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
         destroy_now = 0;
         destroy_now |= type & SP_EVENT_FLAG_ONESHOT;
         destroy_now |= type & MASK_ERR_DESTROY;
-
-        char *fstr = sp_event_flags_to_str(event->type);
-        sp_log(src_ctx, SP_LOG_DEBUG, "Dispatching event (%s)%s!\n", fstr, destroy_now ? ", destroying" : "");
-        av_free(fstr);
-
         destroy_now |= event->type & SP_EVENT_FLAG_ONESHOT;
 
-        ret = event->fn((AVBufferRef *)av_buffer_get_opaque(list->entries[i]), src_ctx, data);
+        char *fstr = sp_event_flags_to_str(event->type);
+        if (event->type & SP_EVENT_FLAG_DEPENDENCY) {
+            if (!event->dep_done) {
+                sp_log(ctx, SP_LOG_DEBUG, "Waiting on event (id:%lu %s)!\n",
+                       event->id, fstr);
+
+                int64_t event_wait_start = av_gettime_relative();
+                pthread_cond_wait(&event->cond, event->lock);
+                int64_t event_wait_done = av_gettime_relative();
+
+                sp_log(ctx, SP_LOG_DEBUG, "Done waiting after %.2f ms, dispatching "
+                       "event (id:%lu %s)%s!\n",
+                       (event_wait_done - event_wait_start)/1000.0f, event->id,
+                       fstr, destroy_now ? ", destroying" : "");
+            } else {
+                sp_log(ctx, SP_LOG_DEBUG, "Event dependency done, dispatching "
+                       "event (id:%lu %s)%s!\n",
+                       event->id, fstr, destroy_now ? ", destroying" : "");
+            }
+        } else {
+            sp_log(ctx, SP_LOG_DEBUG, "Dispatching event (id:%lu %s)%s!\n",
+                   event->id, fstr, destroy_now ? ", destroying" : "");
+        }
+        av_free(fstr);
+
+        ret = event->cb(event_ref, av_buffer_get_opaque(event_ref),
+                        event->ctx, event->dep_ctx ? event->dep_ctx : ctx, data);
+
         if (event->type & SP_EVENT_FLAG_ONESHOT)
             event->type |= SP_EVENT_FLAG_EXPIRED;
-
-        pthread_cond_broadcast(&event->cond);
 
         if (destroy_now) {
             pthread_mutex_unlock(event->lock);
@@ -704,7 +744,8 @@ int sp_eventlist_dispatch(void *src_ctx, SPBufferList *list, uint64_t type, void
             /* The list may have been modified when running events within.
              * TODO: this may not be entirely correct. */
             AVBufferRef *ev_old = bufferlist_pop_internal(list, sp_bufferlist_find_fn_data,
-                                                          list->entries[i], &i);
+                                                          event_ref, &i);
+            sp_log(ctx, SP_LOG_VERBOSE, "Removed event ID: %li\n", ((SPEvent *)ev_old->data)->id);
             av_buffer_unref(&ev_old);
             i -= 1;
 
@@ -719,7 +760,7 @@ end:
     pthread_mutex_unlock(&list->lock);
 
     char *fstr = sp_event_flags_to_str(type);
-    sp_log(src_ctx, !dispatched ? SP_LOG_TRACE : SP_LOG_DEBUG,
+    sp_log(ctx, !dispatched ? SP_LOG_TRACE : SP_LOG_DEBUG,
            "Dispatched %i/%i requested events (%s)!\n",
            dispatched, num_events, fstr);
     av_free(fstr);
@@ -727,20 +768,24 @@ end:
     return ret;
 }
 
-enum SPEventType sp_eventlist_has_dispatched(SPBufferList *list, enum SPEventType type)
+SPEventType sp_eventlist_has_dispatched(SPBufferList *list, SPEventType type)
 {
-    enum SPEventType ret;
+    if (!list)
+        return 0;
+
     pthread_mutex_lock(&list->lock);
-    ret = list->dispatched & type;
+    SPEventType ret = list->dispatched & type;
     pthread_mutex_unlock(&list->lock);
     return ret;
 }
 
-enum SPEventType sp_eventlist_has_queued(SPBufferList *list, enum SPEventType type)
+SPEventType sp_eventlist_has_queued(SPBufferList *list, SPEventType type)
 {
-    enum SPEventType ret;
+    if (!list)
+        return 0;
+
     pthread_mutex_lock(&list->lock);
-    ret = list->queued & type;
+    SPEventType ret = list->queued & type;
     pthread_mutex_unlock(&list->lock);
     return ret;
 }
@@ -758,38 +803,6 @@ void sp_eventlist_discard(SPBufferList *list)
     }
 
     pthread_mutex_unlock(&list->lock);
-}
-
-uint32_t sp_event_gen_identifier(void *src, void *dst, uint64_t type)
-{
-    uint64_t tmp;
-    uint32_t id = 0x0;
-    const AVCRC *tab = av_crc_get_table(AV_CRC_32_IEEE);
-
-    /* Never deduplicate any plain events */
-    uint64_t no_dedup = 0x0;
-    no_dedup |= type & SP_EVENT_FLAG_NO_DEDUP;
-    no_dedup |= (type & SP_EVENT_ON_MASK) && !(type & (SP_EVENT_CTRL_MASK | SP_EVENT_TYPE_MASK));
-
-    if (no_dedup) {
-        tmp = av_get_random_seed();
-        id = av_crc(tab, id, (uint8_t *)&tmp, sizeof(tmp));
-    } else {
-        type &= ~SP_EVENT_FLAG_MASK; /* Flags don't matter */
-        id = av_crc(tab, id, (uint8_t *)&type, sizeof(type));
-    }
-
-    if (src) {
-        tmp = sp_class_get_id(src);
-        id = av_crc(tab, id, (uint8_t *)&tmp, sizeof(tmp));
-    }
-
-    if (dst) {
-        tmp = sp_class_get_id(dst);
-        id = av_crc(tab, id, (uint8_t *)&tmp, sizeof(tmp));
-    }
-
-    return id;
 }
 
 char *sp_event_flags_to_str(uint64_t flags)
@@ -842,13 +855,11 @@ char *sp_event_flags_to_str(uint64_t flags)
     COND(SP_EVENT_CTRL_OPTS,       ctrl, "opts")
     COND(SP_EVENT_CTRL_COMMIT,     ctrl, "commit")
     COND(SP_EVENT_CTRL_DISCARD,    ctrl, "discard")
-    COND(SP_EVENT_CTRL_DEP,        ctrl, "dependency")
+    COND(SP_EVENT_CTRL_SIGNAL,     ctrl, "dependency")
     COND(SP_EVENT_CTRL_FLUSH,      ctrl, "flush")
 
-    COND(SP_EVENT_FLAG_NO_REORDER, flag, "no_reorder")
-    COND(SP_EVENT_FLAG_NO_DEDUP,   flag, "no_dedup")
-    COND(SP_EVENT_FLAG_HIGH_PRIO,  flag, "high_prio")
-    COND(SP_EVENT_FLAG_LOW_PRIO,   flag, "low_prio")
+    COND(SP_EVENT_FLAG_UNIQUE,     flag, "unique")
+    COND(SP_EVENT_FLAG_DEPENDENCY, flag, "dependency")
     COND(SP_EVENT_FLAG_IMMEDIATE,  flag, "immediate")
     COND(SP_EVENT_FLAG_EXPIRED,    flag, "expired")
     COND(SP_EVENT_FLAG_ONESHOT,    flag, "oneshot")
@@ -863,12 +874,100 @@ char *sp_event_flags_to_str(uint64_t flags)
     return buf;
 }
 
+int sp_event_string_to_flags(void *ctx, SPEventType *dst, const char *in_str)
+{
+    uint64_t flags  = 0x0;
+    int on_prefix   = 0;
+    int type_prefix = 0;
+    int ctrl_prefix = 0;
+    int flag_prefix = 0;
+
+    /* We have to modify it */
+    char *str = av_strdup(in_str);
+
+    *dst = 0x0;
+
+#define FLAG(flag, prf, name)                                    \
+    if (!strcmp(tok, #prf ":" name) || !strcmp(tok, name)) {     \
+        flags |= flag;                                           \
+        on_prefix = type_prefix = ctrl_prefix = flag_prefix = 0; \
+        prf## _prefix = 1;                                       \
+    } else if (!strcmp(tok, ":" name)) {                         \
+        if (prf## _prefix) {                                     \
+            flags |= flag;                                       \
+        } else {                                                 \
+            sp_log(ctx, SP_LOG_ERROR, "Error parsing flags, no " \
+                   "%s prefix specified for %s!\n", #prf, name); \
+            av_free(str);                                        \
+            return AVERROR(EINVAL);                              \
+        }                                                        \
+    } else
+
+    char *save, *tok = av_strtok(str, " ,+", &save);
+    while (tok) {
+        FLAG(SP_EVENT_ON_COMMIT,       on,   "commit")
+        FLAG(SP_EVENT_ON_CONFIG,       on,   "config")
+        FLAG(SP_EVENT_ON_INIT,         on,   "init")
+        FLAG(SP_EVENT_ON_CHANGE,       on,   "change")
+        FLAG(SP_EVENT_ON_STATS,        on,   "stats")
+        FLAG(SP_EVENT_ON_EOS,          on,   "eos")
+        FLAG(SP_EVENT_ON_ERROR,        on,   "error")
+        FLAG(SP_EVENT_ON_DESTROY,      on,   "destroy")
+        FLAG(SP_EVENT_ON_OUTPUT,       on,   "output")
+        FLAG(SP_EVENT_ON_MASK,         on,   "all")
+
+        FLAG(SP_EVENT_TYPE_SOURCE,     type, "source")
+        FLAG(SP_EVENT_TYPE_SINK,       type, "sink")
+        FLAG(SP_EVENT_TYPE_LINK,       type, "link")
+        FLAG(SP_EVENT_TYPE_MASK,       type, "all")
+
+        FLAG(SP_EVENT_CTRL_START,      ctrl, "start")
+        FLAG(SP_EVENT_CTRL_STOP,       ctrl, "stop")
+        FLAG(SP_EVENT_CTRL_OPTS,       ctrl, "opts")
+        FLAG(SP_EVENT_CTRL_COMMIT,     ctrl, "commit")
+        FLAG(SP_EVENT_CTRL_DISCARD,    ctrl, "discard")
+        FLAG(SP_EVENT_CTRL_FLUSH,      ctrl, "flush")
+
+        FLAG(SP_EVENT_FLAG_UNIQUE,     flag, "unique")
+        FLAG(SP_EVENT_FLAG_DEPENDENCY, flag, "dependency")
+        FLAG(SP_EVENT_FLAG_IMMEDIATE,  flag, "immediate")
+        FLAG(SP_EVENT_FLAG_EXPIRED,    flag, "expired")
+        FLAG(SP_EVENT_FLAG_ONESHOT,    flag, "oneshot")
+
+        /* else */ if (!strcmp(tok, "on:")) {
+            type_prefix = ctrl_prefix = flag_prefix = 0;
+            on_prefix = 1;
+        } else if (!strcmp(tok, "type:")) {
+            on_prefix = ctrl_prefix = flag_prefix = 0;
+            type_prefix = 1;
+        } else if (!strcmp(tok, "ctrl:")) {
+            on_prefix = type_prefix = flag_prefix = 0;
+            ctrl_prefix = 1;
+        } else if (!strcmp(tok, "type:")) {
+            on_prefix = type_prefix = ctrl_prefix = 0;
+            flag_prefix = 1;
+        } else {
+            sp_log(ctx, SP_LOG_ERROR, "Error parsing flags, \"%s\" not found!\n", tok);
+            av_free(str);
+            return AVERROR(EINVAL);
+        }
+
+        tok = av_strtok(NULL, " ,+", &save);
+    }
+
+    av_free(str);
+    *dst = flags;
+
+#undef FLAG
+    return 0;
+}
+
 char *sp_event_flags_to_str_buf(AVBufferRef *event)
 {
     return sp_event_flags_to_str(((SPEvent *)event->data)->type);
 }
 
-enum SPEventType sp_class_to_event_type(void *ctx)
+SPEventType sp_class_to_event_type(void *ctx)
 {
     switch (sp_class_get_type(ctx)) {
     case SP_TYPE_VIDEO_SOURCE:

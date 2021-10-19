@@ -319,7 +319,7 @@ static void *wayland_events_thread(void *arg)
     /* libwayland's buffer is 4k, plus the kernel's buffer */
     const int capacity = 4096 + fcntl(ctx->display_fd, F_GETPIPE_SZ);
     int64_t last_reported = av_gettime_relative();
-    const int64_t report_len = 1;
+    const int64_t report_period = 1000000;
 
     while (1) {
         while (wl_display_prepare_read(ctx->display))
@@ -358,11 +358,11 @@ static void *wayland_events_thread(void *arg)
 
             int64_t rate = sp_sliding_win(&ctx->sctx_fd, in_bytes, in_time,
                                           av_make_q(1, 1000000),
-                                          10000000*report_len, 1);
-            if ((in_time + 10000000*report_len) > last_reported) {
+                                          report_period, 1);
+            if ((in_time - last_reported) > report_period) {
                 sp_log(ctx, SP_LOG_VERBOSE, "Wayland FIFO capacity: %li/%i\n",
                        rate, capacity);
-                last_reported = in_time + 10000000*report_len;
+                last_reported = in_time;
             }
         } else {
             wl_display_cancel_read(ctx->display);

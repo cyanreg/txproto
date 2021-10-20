@@ -230,7 +230,7 @@ static int win_input_highlight(void *wctx, uint64_t val)
         SPGenericData rect[] = { D_TYPE("region", NULL, res), { 0 } };
         sp_eventlist_dispatch(win, win->events, SP_EVENT_ON_DESTROY,
                               has_sel ? &rect : NULL);
-        return 0;
+        /* Fallthrough */
     };
 
 end:

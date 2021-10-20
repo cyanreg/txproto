@@ -158,12 +158,12 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
                                             "%s \"%s\"%s%s%s\n",
            sp_class_type_string(src_ctx), sp_class_get_name(src_ctx),
            s_type != SP_TYPE_FILTER ? "" : " (pad: ",
-           s_type != SP_TYPE_FILTER ? "" : cb_ctx->src_filt_pad,
+           s_type != SP_TYPE_FILTER ? "" : (cb_ctx->src_filt_pad ? cb_ctx->src_filt_pad : "default"),
            s_type != SP_TYPE_FILTER ? "" : ")",
 
            sp_class_type_string(dst_ctx), sp_class_get_name(dst_ctx),
            d_type != SP_TYPE_FILTER ? "" : " (pad: ",
-           d_type != SP_TYPE_FILTER ? "" : cb_ctx->dst_filt_pad,
+           d_type != SP_TYPE_FILTER ? "" : (cb_ctx->dst_filt_pad ? cb_ctx->dst_filt_pad : "default"),
            d_type != SP_TYPE_FILTER ? "" : ")");
 
     if ((s_type == SP_TYPE_FILTER) && (d_type == SP_TYPE_FILTER)) {

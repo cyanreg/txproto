@@ -322,7 +322,7 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
 int sp_muxer_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     MuxingContext *ctx = (MuxingContext *)ctx_ref->data;
-    return sp_ctrl_template(ctx, ctx->events, muxer_ioctx_ctrl_cb, ctrl, arg);
+    return sp_ctrl_template(ctx, ctx->events, 0x0, muxer_ioctx_ctrl_cb, ctrl, arg);
 }
 
 int sp_muxer_init(AVBufferRef *ctx_ref)

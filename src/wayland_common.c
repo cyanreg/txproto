@@ -203,6 +203,7 @@ static void registry_handle_add(void *opaque, struct wl_registry *reg,
         entry->api_id = id;
         entry->api_priv = output;
         entry->type = SP_IO_TYPE_VIDEO_DISPLAY;
+        entry->frames = sp_frame_fifo_create(entry, 0, 0);
 
         sp_class_alloc(entry, NULL, SP_TYPE_VIDEO_BIDIR, ctx);
 

@@ -798,11 +798,11 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
     } else if (event->ctrl & SP_EVENT_CTRL_COMMAND) {
         char result[4096];
         const AVDictionaryEntry *e = NULL;
-        const char *target = dict_get(event->opts, "sp_filter_target");
+        const char *target = dict_get(event->cmd, "sp_filter_target");
 
         target = target ? target : "all";
 
-        while ((e = av_dict_get(event->opts, "", e, AV_DICT_IGNORE_SUFFIX))) {
+        while ((e = av_dict_get(event->cmd, "", e, AV_DICT_IGNORE_SUFFIX))) {
             if (!strcmp(e->key, "sp_filter_target"))
                 continue;
 
@@ -823,7 +823,8 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
 int sp_filter_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     FilterContext *ctx = (FilterContext *)ctx_ref->data;
-    return sp_ctrl_template(ctx, ctx->events, filter_ioctx_ctrl_cb, ctrl, arg);
+    return sp_ctrl_template(ctx, ctx->events, SP_EVENT_CTRL_COMMAND,
+                            filter_ioctx_ctrl_cb, ctrl, arg);
 }
 
 static void filter_free(void *opaque, uint8_t *data)

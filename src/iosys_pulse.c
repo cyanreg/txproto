@@ -507,8 +507,8 @@ static int pulse_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, void 
 static int pulse_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 {
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
-    return sp_ctrl_template(iosys_entry, iosys_entry->events, pulse_ioctx_ctrl_cb,
-                            ctrl, arg);
+    return sp_ctrl_template(iosys_entry, iosys_entry->events, 0x0,
+                            pulse_ioctx_ctrl_cb, ctrl, arg);
 }
 
 static void destroy_entry(void *opaque, uint8_t *data)

@@ -582,7 +582,8 @@ int sp_eventlist_add(void *ctx, SPBufferList *list, AVBufferRef *event, int ref)
 int sp_eventlist_add_signal(void *ctx, SPBufferList *list,
                             AVBufferRef *event, SPEventType when, int ref)
 {
-    return eventlist_add_internal(ctx, list, event, ref, when & SP_EVENT_ON_MASK);
+    return eventlist_add_internal(ctx, list, event, ref,
+                                  when & (SP_EVENT_ON_MASK | SP_EVENT_FLAG_DEPENDENCY));
 }
 
 #define MASK_ERR_DESTROY (SP_EVENT_ON_DESTROY | SP_EVENT_ON_ERROR)
@@ -651,14 +652,16 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
         AVBufferRef *event_ref = list->entries[i];
         SPEvent *event = (SPEvent *)event_ref->data;
 
-        if (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL)
+        if ((list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) &&
+            (event->type & SP_EVENT_FLAG_DEPENDENCY))
             continue;
 
         /* To prevent recursion. The list is threadsafe, and its execution is
          * threadsafe as well, however the dispatching of commands may modify
          * the list, and even dispatch events. */
-        if (list->priv_flags[i] & (SP_BUF_PRIV_RUNNING | SP_BUF_PRIV_SIGNAL))
+        if (list->priv_flags[i] & SP_BUF_PRIV_RUNNING)
             continue;
+
         list->priv_flags[i] |= SP_BUF_PRIV_RUNNING;
 
         pthread_mutex_lock(event->lock);
@@ -730,7 +733,6 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
             sp_log(ctx, SP_LOG_DEBUG, "Dispatching event (id:%lu %s)%s!\n",
                    event->id, fstr, destroy_now ? ", destroying" : "");
         }
-        av_free(fstr);
 
         ret = event->cb(event_ref, av_buffer_get_opaque(event_ref),
                         event->ctx, event->dep_ctx ? event->dep_ctx : ctx, data);
@@ -738,9 +740,13 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
         /* Signal any events with no dependencies right after completing them */
         if (!(event->type & SP_EVENT_FLAG_DEPENDENCY) &&
             (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL)) {
+            sp_log(ctx, SP_LOG_DEBUG, "Signalling non-dependant event (id:%lu %s)!\n",
+                   event->id, fstr);
             pthread_cond_broadcast(&event->cond);
             event->dep_done = 1;
         }
+
+        av_free(fstr);
 
         if (event->type & SP_EVENT_FLAG_ONESHOT)
             event->type |= SP_EVENT_FLAG_EXPIRED;

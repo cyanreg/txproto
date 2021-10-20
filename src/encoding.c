@@ -615,7 +615,8 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
 int sp_encoder_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
-    return sp_ctrl_template(ctx, ctx->events, encoder_ioctx_ctrl_cb, ctrl, arg);
+    return sp_ctrl_template(ctx, ctx->events, 0x0,
+                            encoder_ioctx_ctrl_cb, ctrl, arg);
 }
 
 int sp_encoder_init(AVBufferRef *ctx_ref)

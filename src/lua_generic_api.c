@@ -106,13 +106,21 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
     case SP_TYPE_AUDIO_SINK:
     case SP_TYPE_VIDEO_SOURCE:
     case SP_TYPE_VIDEO_SINK:
-        sp_assert(out);
+    case SP_TYPE_SUB_SOURCE:
+    case SP_TYPE_SUB_SINK:
+    case SP_TYPE_VIDEO_BIDIR:
+    case SP_TYPE_AUDIO_BIDIR:
+    case SP_TYPE_SUB_BIDIR:
+    case SP_TYPE_SOURCE:
+    case SP_TYPE_SINK:
+    case SP_TYPE_INOUT:
         return ((IOSysEntry *)ctx)->frames;
     case SP_TYPE_MUXER:
         sp_assert(!out);
         return ((MuxingContext *)ctx)->src_packets;
     case SP_TYPE_FILTER:
         sp_assert(0);
+        return NULL;
     case SP_TYPE_ENCODER:
         if (out)
             return ((EncodingContext *)ctx)->dst_packets;
@@ -120,6 +128,7 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
             return ((EncodingContext *)ctx)->src_frames;
     default:
         sp_assert(0); /* Should never happen */
+        return NULL;
     }
     sp_assert(0);
     return NULL;
@@ -142,6 +151,9 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
     EncodingContext *src_enc_ctx  = src_ctx;
     MuxingContext   *dst_mux_ctx  = dst_ctx;
 
+    AVBufferRef         *src_fifo = sp_ctx_get_fifo(src_ctx, 1);
+    AVBufferRef         *dst_fifo = sp_ctx_get_fifo(dst_ctx, 0);
+
     sp_log(dst_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\"%s%s%s to "
                                             "%s \"%s\"%s%s%s\n",
            sp_class_type_string(src_ctx), sp_class_get_name(src_ctx),
@@ -154,16 +166,13 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
            d_type != SP_TYPE_FILTER ? "" : cb_ctx->dst_filt_pad,
            d_type != SP_TYPE_FILTER ? "" : ")");
 
-    AVBufferRef *src_fifo = sp_ctx_get_fifo(src_ctx, 1);
-    AVBufferRef *dst_fifo = sp_ctx_get_fifo(dst_ctx, 0);
-
     if ((s_type == SP_TYPE_FILTER) && (d_type == SP_TYPE_FILTER)) {
         return sp_map_pad_to_pad(dst_filt_ctx, cb_ctx->dst_filt_pad,
                                  src_filt_ctx, cb_ctx->src_filt_pad);
-    } else if (s_type == SP_TYPE_FILTER) {
+    } else if (s_type == SP_TYPE_FILTER && (d_type == SP_TYPE_ENCODER)) {
         return sp_map_fifo_to_pad(src_filt_ctx, dst_fifo,
                                   cb_ctx->src_filt_pad, 1);
-    } else if (d_type == SP_TYPE_FILTER) {
+    } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_FILTER)) {
         return sp_map_fifo_to_pad(dst_filt_ctx, src_fifo,
                                   cb_ctx->dst_filt_pad, 0);
     } else if ((s_type == SP_TYPE_ENCODER) && (d_type == SP_TYPE_MUXER)) {

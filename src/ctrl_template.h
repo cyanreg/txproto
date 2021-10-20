@@ -24,8 +24,9 @@
 typedef struct SPCtrlTemplateCbCtx {
     SPEventType ctrl;
     AVDictionary *opts;
+    AVDictionary *cmd;
     atomic_int_fast64_t *epoch;
 } SPCtrlTemplateCbCtx;
 
-int sp_ctrl_template(void *ctx, SPBufferList *events,
+int sp_ctrl_template(void *ctx, SPBufferList *events, SPEventType extra_ctrl,
                      event_fn callback, SPEventType ctrl, void *arg);

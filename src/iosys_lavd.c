@@ -156,8 +156,8 @@ static int lavd_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, void *
 static int lavd_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 {
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
-    return sp_ctrl_template(iosys_entry, iosys_entry->events, lavd_ioctx_ctrl_cb,
-                            ctrl, arg);
+    return sp_ctrl_template(iosys_entry, iosys_entry->events, 0x0,
+                            lavd_ioctx_ctrl_cb, ctrl, arg);
 }
 
 static int lavd_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,

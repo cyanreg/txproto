@@ -21,19 +21,14 @@
 #include "logging.h"
 #include "ctrl_template.h"
 
-typedef struct CtrlTemplateCbCtx {
-    SPEventType ctrl;
-    AVDictionary *opts;
-    atomic_int_fast64_t *epoch;
-} CtrlTemplateCbCtx;
-
 static void ctrl_template_ctx_free(void *callback_ctx, void *ctx, void *dep_ctx)
 {
-    CtrlTemplateCbCtx *event = callback_ctx;
+    SPCtrlTemplateCbCtx *event = callback_ctx;
     av_dict_free(&event->opts);
+    av_dict_free(&event->cmd);
 }
 
-int sp_ctrl_template(void *ctx, SPBufferList *events,
+int sp_ctrl_template(void *ctx, SPBufferList *events, SPEventType extra_ctrl,
                      event_fn callback, SPEventType ctrl, void *arg)
 {
     if (ctrl & SP_EVENT_CTRL_COMMIT) {
@@ -58,29 +53,36 @@ int sp_ctrl_template(void *ctx, SPBufferList *events,
             return AVERROR(EINVAL);
 
         /* TODO: change options to use generic data instead of dictionaries */
-    } else if (ctrl & ~(SP_EVENT_CTRL_START | /* Always supported */
-                        SP_EVENT_CTRL_STOP  |
-                        SP_EVENT_CTRL_FLUSH)) {
+    } else if (ctrl & ~(SP_EVENT_CTRL_START  | /* Always supported */
+                        SP_EVENT_CTRL_STOP   |
+                        SP_EVENT_CTRL_FLUSH  |
+                        extra_ctrl)) {
         return AVERROR(ENOTSUP);
     }
 
     SPEventType type = ctrl | SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
 
+    if (ctrl & SP_EVENT_CTRL_COMMAND)
+        type |= SP_EVENT_ON_INIT;
+
     AVBufferRef *ctrl_event = sp_event_create(callback,
                                               ctrl_template_ctx_free,
-                                              sizeof(CtrlTemplateCbCtx),
+                                              sizeof(SPCtrlTemplateCbCtx),
                                               NULL,
                                               type,
                                               ctx,
                                               NULL);
 
-    CtrlTemplateCbCtx *ctrl_ctx = av_buffer_get_opaque(ctrl_event);
+    SPCtrlTemplateCbCtx *ctrl_ctx = av_buffer_get_opaque(ctrl_event);
 
     ctrl_ctx->ctrl = ctrl;
-    if (ctrl & SP_EVENT_CTRL_OPTS)
+    if (ctrl & SP_EVENT_CTRL_OPTS) {
         av_dict_copy(&ctrl_ctx->opts, arg, 0);
-    if (ctrl & SP_EVENT_CTRL_START)
+    } else if (ctrl & SP_EVENT_CTRL_COMMAND) {
+        av_dict_copy(&ctrl_ctx->cmd, arg, 0);
+    } else if (ctrl & SP_EVENT_CTRL_START) {
         ctrl_ctx->epoch = arg;
+    }
 
     if (ctrl & SP_EVENT_FLAG_IMMEDIATE) {
         int ret = callback(ctrl_event, ctrl_ctx, ctx, NULL, arg);

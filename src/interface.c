@@ -320,7 +320,7 @@ AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
 
     common_windows_init(ctx, win, title ? title : NULL);
 
-    sp_eventlist_add(win, win->events, event, 1);
+    sp_eventlist_add_signal(win, win->events, event, SP_EVENT_FLAG_DEPENDENCY, 1);
 
     /* Signal to the window system we're ready to render */
     ctx->sys->surf_done(win->wctx);

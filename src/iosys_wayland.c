@@ -983,8 +983,8 @@ static int wlcapture_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, v
 static int wlcapture_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 {
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
-    return sp_ctrl_template(iosys_entry, iosys_entry->events, wlcapture_ioctx_ctrl_cb,
-                            ctrl, arg);
+    return sp_ctrl_template(iosys_entry, iosys_entry->events, 0x0,
+                            wlcapture_ioctx_ctrl_cb, ctrl, arg);
 }
 
 static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
@@ -1063,7 +1063,6 @@ static int wlcapture_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
     }
 
     iosys_entry->io_priv = priv;
-    iosys_entry->frames = sp_frame_fifo_create(iosys_entry, 0, 0);
     iosys_entry->ctrl = wlcapture_ioctx_ctrl;
     iosys_entry->events = sp_bufferlist_new();
     priv->main_ref = av_buffer_ref(ctx_ref);

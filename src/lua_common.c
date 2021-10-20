@@ -888,6 +888,8 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
 
     lua_State *L = ctx_is_locked ? lctx->L : sp_lua_lock_interface(lctx);
 
+    sp_log(lctx, SP_LOG_DEBUG, "Lua thread started.\n");
+
     do {
         AVBufferRef *event_await = NULL;
 
@@ -899,6 +901,9 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             ret = AVERROR_EXTERNAL;
             goto end;
         }
+
+        sp_log(lctx, SP_LOG_DEBUG, "Lua thread: %s!\n",
+               ret == LUA_OK ? "exited" : "yielded");
 
         if (nresults && lua_islightuserdata(L, -1))
             event_await = lua_touserdata(L, -1);
@@ -915,8 +920,13 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             /* Unlock */
             sp_lua_unlock_interface(lctx, 0);
 
+            sp_log(lctx, SP_LOG_DEBUG, "Waiting on an event signal...\n");
+
             /* Await event, if any */
             sp_event_unref_await(&event_await);
+
+            sp_log(lctx, SP_LOG_DEBUG, "Event signalled, %s\n",
+                   ret == LUA_YIELD ? "resuming!" : "exiting.");
 
             /* Lock again */
             sp_lua_lock_interface(lctx);
@@ -925,6 +935,8 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
     ret = 0;
 
 end:
+    sp_log(lctx, SP_LOG_DEBUG, "Lua thread ended: %s!\n", av_err2str(ret));
+
     if (clean_stack) {
         lua_pop(L, nresults);
         nresults = 0;

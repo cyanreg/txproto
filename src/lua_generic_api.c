@@ -151,8 +151,8 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
     EncodingContext *src_enc_ctx  = src_ctx;
     MuxingContext   *dst_mux_ctx  = dst_ctx;
 
-    AVBufferRef         *src_fifo = sp_ctx_get_fifo(src_ctx, 1);
-    AVBufferRef         *dst_fifo = sp_ctx_get_fifo(dst_ctx, 0);
+    AVBufferRef *src_fifo = sp_ctx_get_fifo(src_ctx, 1);
+    AVBufferRef *dst_fifo = sp_ctx_get_fifo(dst_ctx, 0);
 
     sp_log(dst_ctx, SP_LOG_VERBOSE, "Linking %s \"%s\"%s%s%s to "
                                             "%s \"%s\"%s%s%s\n",
@@ -313,7 +313,8 @@ int sp_lua_generic_link(lua_State *L)
                         sp_class_to_event_type(dctx);
 
     SPBufferList *src_events = sp_ctx_get_events_list(sctx);
-//    SPBufferList *dst_events = sp_ctx_get_events_list(dctx);
+
+    int source_init = sp_eventlist_has_dispatched(src_events, SP_EVENT_ON_INIT);
 
     uint64_t post_init = sp_eventlist_has_dispatched(src_events,
                                                      SP_EVENT_ON_INIT);
@@ -322,25 +323,22 @@ int sp_lua_generic_link(lua_State *L)
     else
         flags |= SP_EVENT_ON_CONFIG;
 
-    /* Should this get called on !init !?! */
-    if (1)
+    if (!source_init)
         flags |= SP_EVENT_FLAG_DEPENDENCY;
 
-    AVBufferRef *link_event = sp_event_create(link_fn,
-                                              link_free,
-                                              sizeof(SPLinkCtx),
-                                              NULL,
-                                              flags,
-                                              dctx,
-                                              sctx);
+    AVBufferRef *link_event = sp_event_create(link_fn, link_free,
+                                              sizeof(SPLinkCtx), NULL, flags,
+                                              dctx, sctx);
 
     SPLinkCtx *link_event_ctx = av_buffer_get_opaque(link_event);
     link_event_ctx->src_filt_pad = src_filt_pad;
     link_event_ctx->dst_filt_pad = dst_filt_pad;
 
+    /* Add event to destination context */
     dst_ctrl_fn(dst_ref, SP_EVENT_CTRL_NEW_EVENT, link_event);
 
-    if (!sp_eventlist_has_dispatched(src_events, SP_EVENT_ON_INIT)) {
+    /* Add dependency to source context, if needed */
+    if (!source_init) {
         err = src_ctrl_fn(src_ref, SP_EVENT_CTRL_SIGNAL | SP_EVENT_ON_INIT, link_event);
         if (err < 0) {
             av_buffer_unref(&link_event);

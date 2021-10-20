@@ -504,8 +504,6 @@ void sp_event_unref_await(AVBufferRef **buf)
         return;
 
     SPEvent *event = (SPEvent *)(*buf)->data;
-    if (!(event->type & SP_EVENT_FLAG_DEPENDENCY))
-        return;
 
     pthread_mutex_lock(event->lock);
 
@@ -623,10 +621,12 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
         if (type & SP_EVENT_ON_COMMIT)
             list->priv_flags[i] &= ~SP_BUF_PRIV_NEW;
 
-        if ((list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) &&
-            ((list->priv_flags[i] & SP_BUF_PRIV_ON_MASK) & type)) {
+        /* TODO: fix potential race */
+        SPEvent *event = (SPEvent *)list->entries[i]->data;
 
-            SPEvent *event = (SPEvent *)list->entries[i]->data;
+        if ((event->type & SP_EVENT_FLAG_DEPENDENCY) &&
+            (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) &&
+            ((list->priv_flags[i] & SP_BUF_PRIV_ON_MASK) & type)) {
 
             SPEventType expired = event->type & SP_EVENT_FLAG_EXPIRED;
 
@@ -734,6 +734,13 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
 
         ret = event->cb(event_ref, av_buffer_get_opaque(event_ref),
                         event->ctx, event->dep_ctx ? event->dep_ctx : ctx, data);
+
+        /* Signal any events with no dependencies right after completing them */
+        if (!(event->type & SP_EVENT_FLAG_DEPENDENCY) &&
+            (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL)) {
+            pthread_cond_broadcast(&event->cond);
+            event->dep_done = 1;
+        }
 
         if (event->type & SP_EVENT_FLAG_ONESHOT)
             event->type |= SP_EVENT_FLAG_EXPIRED;

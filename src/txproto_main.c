@@ -311,7 +311,7 @@ int main(int argc, char *argv[])
         for(; optind < argc; optind++)
             lua_pushstring(L, argv[optind]);
 
-        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1, 0)) < 0)
+        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1, 1)) < 0)
             goto end;
 
         sp_lua_unlock_interface(ctx->lua, 0);

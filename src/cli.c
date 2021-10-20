@@ -519,7 +519,7 @@ int sp_cli_init(TXCLIContext **s, TXMainContext *ctx)
     if (err < 0)
         return err;
 
-    cli_ctx->lua = sp_lua_create_thread(ctx->lua);
+    cli_ctx->lua = sp_lua_create_thread(ctx->lua, cli_ctx);
     if (!cli_ctx->lua) {
         sp_class_free(&cli_ctx);
         return AVERROR(ENOMEM);
@@ -552,7 +552,7 @@ int sp_cli_prompt_event(TXCLIContext *cli_ctx, AVBufferRef *event, const char *m
     if (!cli_ctx->class || atomic_load(&cli_ctx->has_event))
         return AVERROR(EINVAL);
 
-    sp_eventlist_add(cli_ctx, cli_ctx->events, event, 1);
+    sp_eventlist_add_signal(cli_ctx, cli_ctx->events, event, SP_EVENT_FLAG_DEPENDENCY, 1);
     sp_log(cli_ctx, SP_LOG_INFO, "%s\n", msg);
     atomic_store(&cli_ctx->has_event, 1);
 

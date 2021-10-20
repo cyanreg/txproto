@@ -245,7 +245,7 @@ static void hook_lua_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
                                                                                \
     HookLuaEventCtx *ev_name ## _ctx = av_buffer_get_opaque(ev_name);          \
                                                                                \
-    ev_name ## _ctx->lctx = sp_lua_create_thread(ctx->lua);                    \
+    ev_name ## _ctx->lctx = sp_lua_create_thread(ctx->lua, (target_ctx));      \
     ev_name ## _ctx->flags = (type_flags);                                     \
     ev_name ## _ctx->fn_ref = fn_ref;
 
@@ -423,7 +423,8 @@ static int lua_interface_create_selection(lua_State *L)
                                                        PROJECT_NAME " region selection",
                                                        hook_event);
 
-    int err = sp_eventlist_add(ctx, ctx->ext_buf_refs, hook_event, 0);
+    int err = sp_eventlist_add_signal(ctx, ctx->ext_buf_refs, hook_event,
+                                      SP_EVENT_FLAG_DEPENDENCY, 0);
     if (err < 0) {
         av_buffer_unref(&hook_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(err));
@@ -1209,7 +1210,7 @@ static int lua_register_io_cb(lua_State *L)
     SPSourceEventCbCtx *source_event_ctx = av_buffer_get_opaque(source_event);
 
     source_event_ctx->fn_ref = fn_ref;
-    source_event_ctx->lua = sp_lua_create_thread(ctx->lua);
+    source_event_ctx->lua = sp_lua_create_thread(ctx->lua, ctx);
 
     for (int i = 0; i < sp_compiled_apis_len; i++) {
         int found = 0;

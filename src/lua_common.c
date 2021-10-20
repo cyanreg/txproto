@@ -66,6 +66,7 @@ void sp_lua_close_ctx(TXLuaContext **s)
         TXLuaContext *mctx = lctx->master_thread;
         lua_resetthread(L);
         luaL_unref(L, LUA_REGISTRYINDEX, lctx->thread_ref);
+        sp_class_free(lctx);
         av_freep(s);
         *mctx->nb_threads -= 1;
         sp_lua_unlock_interface(mctx, 0);
@@ -635,7 +636,7 @@ fail:
     return err;
 }
 
-TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx)
+TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx)
 {
     if (!lctx)
         return NULL;
@@ -643,14 +644,23 @@ TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx)
     lua_State *L = sp_lua_lock_interface(lctx);
 
     TXLuaContext *new = av_mallocz(sizeof(*new));
+    if (!new)
+        return NULL;
+
     memcpy(new, lctx, sizeof(*new));
     new->master_thread = lctx->master_thread ? lctx->master_thread : lctx;
+
+    int err = sp_class_alloc(new, "lua", SP_TYPE_SCRIPT, parent_ctx);
+    if (err < 0) {
+        av_free(new);
+        return NULL;
+    }
 
     new->L = lua_newthread(L);
     new->thread_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     *new->nb_threads += 1;
 
-    pthread_mutex_unlock(lctx->lock);
+    sp_lua_unlock_interface(lctx, 0);
 
     return new;
 }

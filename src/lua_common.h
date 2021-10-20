@@ -60,7 +60,7 @@ typedef struct TXLuaContext {
 int sp_lua_create_ctx(TXLuaContext **s, void *ctx, const char *lua_libs_list);
 
 /* Create a new Lua thread from a context */
-TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx);
+TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx);
 
 /* Lock Lua interface and get a handle */
 lua_State *sp_lua_lock_interface(TXLuaContext *lctx);

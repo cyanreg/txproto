@@ -1466,6 +1466,9 @@ int sp_lua_quit(lua_State *L)
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "quit")
 
+    /* TODO: make this yield and handle the quit in
+     * sp_lua_run_generic_yieldable() to avoid C->Lua->C->Lua->C */
+
     if (lua_gettop(L) != 0 && lua_gettop(L) != 1)
         LUA_ERROR("Invalid number of arguments, expected 0 or 1, got %i!",
                   lua_gettop(L));

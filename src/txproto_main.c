@@ -140,7 +140,7 @@ int main(int argc, char *argv[])
     ctx->source_update_cb_ref = LUA_NOREF;
 
     /* Options */
-    int disable_cli = 0;
+    int enable_cli = 0;
     const char *script_name = NULL;
     const char *script_entrypoint = DEFAULT_ENTRYPOINT;
 
@@ -155,7 +155,7 @@ int main(int argc, char *argv[])
 
     /* Options parsing */
     int opt;
-    while ((opt = getopt(argc, argv, "Nvhs:e:r:V:L:")) != -1) {
+    while ((opt = getopt(argc, argv, "Cvhs:e:r:V:L:")) != -1) {
         switch (opt) {
         case 's':
             script_name = optarg;
@@ -166,8 +166,8 @@ int main(int argc, char *argv[])
         case 'v':
             print_version_features(ctx);
             goto end;
-        case 'N':
-            disable_cli = 1;
+        case 'C':
+            enable_cli = 1;
             break;
         case 'r':
             {
@@ -228,8 +228,8 @@ int main(int argc, char *argv[])
                             "Per-component log level, set \"global\" or leave component out for global\n"
                    "    -L <filename>                 "
                             "Logfile destination (warning: produces huge files)\n"
-                   "    -N                            "
-                            "Disable command line interface\n"
+                   "    -C                            "
+                            "Enable the command line interface\n"
                    "    -v                            "
                             "Print program version\n"
                    "    -h                            "
@@ -287,7 +287,7 @@ int main(int argc, char *argv[])
     }
 
 #ifdef HAVE_LIBEDIT
-    if (!disable_cli && (err = sp_cli_init(&ctx->cli, ctx) < 0))
+    if (enable_cli && (err = sp_cli_init(&ctx->cli, ctx) < 0))
         goto end;
 #endif
 

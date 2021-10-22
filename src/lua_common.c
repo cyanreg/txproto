@@ -645,7 +645,7 @@ TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx)
 
     lua_State *L = sp_lua_lock_interface(lctx);
 
-    TXLuaContext *new = av_mallocz(sizeof(*new));
+    new = av_mallocz(sizeof(*new));
     if (!new)
         goto end;
 

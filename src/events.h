@@ -219,6 +219,11 @@ char *sp_event_flags_to_str(SPEventType flags);
 int sp_event_string_to_flags(void *ctx, SPEventType *dst, const char *in_str);
 
 /**
+ * Get the event's unique ID.
+ */
+uint64_t sp_event_get_id(AVBufferRef *event);
+
+/**
  * Control function type. All interfaces with a control function must use
  * this template.
  */

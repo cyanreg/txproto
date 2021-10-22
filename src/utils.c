@@ -482,6 +482,10 @@ AVBufferRef *sp_event_create(event_fn cb,
         return NULL;
     }
 
+    char *fstr = sp_event_flags_to_str(event->type);
+    sp_log(ctx, SP_LOG_VERBOSE, "Created event ID: %li (%s)\n", event->id, fstr);
+    av_free(fstr);
+
     return entry;
 }
 
@@ -947,7 +951,7 @@ int sp_event_string_to_flags(void *ctx, SPEventType *dst, const char *in_str)
         FLAG(SP_EVENT_FLAG_EXPIRED,    flag, "expired")
         FLAG(SP_EVENT_FLAG_ONESHOT,    flag, "oneshot")
 
-        /* else */ if (!strcmp(tok, "on:")) {
+        /* else comes from the macro */ if (!strcmp(tok, "on:")) {
             type_prefix = ctrl_prefix = flag_prefix = 0;
             on_prefix = 1;
         } else if (!strcmp(tok, "type:")) {
@@ -973,6 +977,11 @@ int sp_event_string_to_flags(void *ctx, SPEventType *dst, const char *in_str)
 
 #undef FLAG
     return 0;
+}
+
+uint64_t sp_event_get_id(AVBufferRef *event)
+{
+    return ((SPEvent *)event->data)->id;
 }
 
 char *sp_event_flags_to_str_buf(AVBufferRef *event)

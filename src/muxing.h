@@ -24,11 +24,6 @@
 #include "encoding.h"
 #include "logging.h"
 
-typedef struct MuxEncoderMap {
-    int encoder_id;
-    int stream_id;
-} MuxEncoderMap;
-
 typedef struct MuxingContext {
     SPClass *class;
 
@@ -50,7 +45,7 @@ typedef struct MuxingContext {
     AVBufferRef *src_packets;
 
     /* State */
-    MuxEncoderMap *enc_map;
+    struct MuxEncoderMap *enc_map;
     int enc_map_size;
 
     int *stream_has_link;

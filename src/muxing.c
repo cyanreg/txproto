@@ -23,6 +23,11 @@
 #include "utils.h"
 #include "ctrl_template.h"
 
+typedef struct MuxEncoderMap {
+    int encoder_id;
+    int stream_id;
+} MuxEncoderMap;
+
 static MuxEncoderMap *enc_id_lookup(MuxingContext *ctx, int enc_id)
 {
     for (int i = 0; i < ctx->enc_map_size; i++)

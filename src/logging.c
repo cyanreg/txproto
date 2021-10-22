@@ -22,6 +22,7 @@
 #include <libavutil/bprint.h>
 #include <libavutil/crc.h>
 #include <libavutil/dict.h>
+#include <libavutil/time.h>
 #include <libavutil/random_seed.h>
 
 #include "logging.h"
@@ -52,6 +53,8 @@ struct SPLogState {
     } status;
 
     int last_was_newline;
+
+    int64_t time_offset;
 
     pthread_mutex_t term_lock;
     pthread_mutex_t file_lock;
@@ -115,9 +118,10 @@ static inline const char *get_class_color(SPClass *class)
         return "";
 }
 
-static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
-                        const char *format, va_list args, int *ends_in_nl,
-                        int last_was_nl)
+static inline char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
+                               char *time_offset_str, unsigned time_offset_str_len,
+                               const char *format, va_list args,
+                               int *ends_in_nl, int last_was_nl)
 {
     AVBPrint bpc;
     av_bprint_init(&bpc, 256, AV_BPRINT_SIZE_AUTOMATIC);
@@ -137,10 +141,12 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
             av_bprintf(&bpc, "(trace)");
     }
 
+    av_bprint_append_data(&bpc, time_offset_str, time_offset_str_len);
+
     if (class && last_was_nl) {
         SPClass *parent = get_class(class->parent);
         if (parent && strlen(class->name))
-            av_bprintf(&bpc, "[%s%s%s->%s%s%s]",
+            av_bprintf(&bpc, "%s%s%s->%s%s%s]",
                        with_color ? get_class_color(parent) : "",
                        parent->name,
                        with_color ? "\033[0m" : "",
@@ -148,7 +154,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
                        class->name,
                        with_color ? "\033[0m" : "");
         else
-            av_bprintf(&bpc, "[%s%s%s]",
+            av_bprintf(&bpc, "%s%s%s]",
                        with_color ? get_class_color(class) : "",
                        strlen(class->name) ? class->name :
                        parent ? parent->name : "misc",
@@ -197,7 +203,7 @@ static char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
     return ret;
 }
 
-static int decide_print_line(SPClass *class, enum SPLogLevel lvl)
+static inline int decide_print_line(SPClass *class, enum SPLogLevel lvl)
 {
     pthread_mutex_lock(&log_ctx.levels_lock);
 
@@ -220,7 +226,7 @@ static int decide_print_line(SPClass *class, enum SPLogLevel lvl)
         int parent_lvl = strtol(parent_lvl_entry->value, NULL, 10);
         return parent_lvl >= lvl;
     } else {
-        int global_lvl = global_lvl_entry ? strtol(global_lvl_entry->value, NULL, 10) : SP_LOG_INFO;
+        int global_lvl = strtol(global_lvl_entry->value, NULL, 10);
         return global_lvl >= lvl;
     }
 
@@ -235,13 +241,21 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     int nl_end, last_nl_end;
     char *pline = NULL, *lline = NULL;
 
+    int64_t time_offset = av_gettime_relative() - log_ctx.time_offset;
+    char time_offset_str[16];
+
+    int time_offset_str_len = snprintf(time_offset_str, sizeof(time_offset_str),
+                                       "[%.3f|", time_offset/(1000000.0f));
+
     /* Lock needed for log_ctx.last_was_newline */
     pthread_mutex_lock(&log_ctx.term_lock);
 
     last_nl_end = lvl <= SP_LOG_ERROR ? 1 : log_ctx.last_was_newline;
 
     if (print_line) {
-        pline = build_line(class, lvl, with_color, format, args, &nl_end, last_nl_end);
+        pline = build_line(class, lvl, with_color,
+                           time_offset_str, time_offset_str_len,
+                           format, args, &nl_end, last_nl_end);
 
         if (pline) {
             /* Tell CLI to erase its line */
@@ -274,7 +288,9 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
         if (pline && !with_color)
             SPSWAP(char *, lline, pline);
         else
-            lline = build_line(class, lvl, 0, format, args, &nl_end, last_nl_end);
+            lline = build_line(class, lvl, 0,
+                               time_offset_str, time_offset_str_len,
+                               format, args, &nl_end, last_nl_end);
 
         if (lline) {
             pthread_mutex_lock(&log_ctx.file_lock);
@@ -395,11 +411,6 @@ static void log_ff_cb(void *ctx, int lvl, const char *format, va_list args)
     main_log(&top, splvl, format, args);
 
     pthread_mutex_unlock(&ffmpeg_class->lock);
-}
-
-void sp_log_set_ff_cb(void)
-{
-    av_log_set_callback(log_ff_cb);
 }
 
 int sp_class_alloc(void *ctx, const char *name, enum SPType type, void *parent)
@@ -702,7 +713,22 @@ print:
     return 0;
 }
 
-void sp_log_end(void)
+void sp_log_init(enum SPLogLevel global_log_level)
+{
+    pthread_mutex_lock(&log_ctx.levels_lock);
+    pthread_mutex_lock(&log_ctx.file_lock);
+    pthread_mutex_lock(&log_ctx.term_lock);
+
+    log_ctx.time_offset = av_gettime_relative();
+    av_dict_set_int(&log_ctx.log_levels, "global", global_log_level, 0);
+    av_log_set_callback(log_ff_cb);
+
+    pthread_mutex_unlock(&log_ctx.term_lock);
+    pthread_mutex_unlock(&log_ctx.file_lock);
+    pthread_mutex_unlock(&log_ctx.levels_lock);
+}
+
+void sp_log_uninit(void)
 {
     av_log_set_callback(av_log_default_callback);
 

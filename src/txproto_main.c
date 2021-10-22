@@ -110,7 +110,7 @@ static void cleanup_fn(TXMainContext *ctx)
     sp_lua_close_ctx(&ctx->lua);
 
     /* Stop logging */
-    sp_log_end();
+    sp_log_uninit();
 
     /* Free any auxiliary data */
     sp_class_free(ctx);
@@ -124,8 +124,7 @@ int main(int argc, char *argv[])
     if (!ctx)
         return AVERROR(ENOMEM);
 
-    sp_log_set_ctx_lvl("global", SP_LOG_INFO);
-    sp_log_set_ff_cb();
+    sp_log_init(SP_LOG_INFO);
 
     av_max_alloc(SIZE_MAX);
 

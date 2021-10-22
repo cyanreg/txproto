@@ -78,8 +78,9 @@ typedef struct SPClass SPClass;
 #define sp_printf_format(fmtpos, attrpos)
 #endif
 
-/* ffmpeg log callback */
-void sp_log_set_ff_cb(void);
+/* Init/uninit functions */
+void sp_log_init(enum SPLogLevel global_log_level);
+void sp_log_uninit(void);
 
 enum SPStatusFlags {
     SP_STATUS_UNLOCK   = 1 << 0,
@@ -105,9 +106,6 @@ void sp_log_sync(const char *fmt, ...) sp_printf_format(1, 2);
 
 /* Set log file */
 int sp_log_set_file(const char *path);
-
-/* Stop logging and free all */
-void sp_log_end(void);
 
 /* Class allocation */
 int sp_class_alloc(void *ctx, const char *name, enum SPType type, void *parent);

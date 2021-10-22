@@ -37,6 +37,7 @@ int sp_ctrl_template(void *ctx, SPBufferList *events, SPEventType extra_ctrl,
     } else if (ctrl & SP_EVENT_CTRL_DISCARD) {
         sp_log(ctx, SP_LOG_DEBUG, "Discarding!\n");
         sp_eventlist_discard(events);
+        return 0;
     } else if (ctrl & SP_EVENT_CTRL_NEW_EVENT) {
         char *fstr = sp_event_flags_to_str_buf(arg);
         sp_log(ctx, SP_LOG_DEBUG, "Registering new event (%s)!\n", fstr);

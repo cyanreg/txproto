@@ -1297,6 +1297,7 @@ static int lua_log_err(lua_State *L)
 
 static int lua_prompt(lua_State *L)
 {
+    int ret;
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "prompt")
@@ -1311,6 +1312,14 @@ static int lua_prompt(lua_State *L)
                   lua_typename(L, lua_type(L, -2)));
 
 #ifdef HAVE_LIBEDIT
+    if (!ctx->cli) {
+        ret = sp_cli_init(&ctx->cli, ctx);
+        if (ret < 0) {
+            LUA_ERROR("Unable to init CLI: %s!", av_err2str(ret));
+            goto end;
+        }
+    }
+
     /* ref pops the item off the stack! */
     int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL)
@@ -1324,7 +1333,7 @@ static int lua_prompt(lua_State *L)
     LUA_CREATE_HOOK_FN(hook_event, ctx->cli, flags)
 
     /* Give the event to the CLI subsystem */
-    int ret = sp_cli_prompt_event(ctx->cli, hook_event, lua_tostring(L, -1));
+    ret = sp_cli_prompt_event(ctx->cli, hook_event, lua_tostring(L, -1));
     if (ret < 0) {
         sp_event_unref_expire(&hook_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(ret));

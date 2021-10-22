@@ -638,6 +638,8 @@ fail:
 
 TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx)
 {
+    TXLuaContext *new = NULL;
+
     if (!lctx)
         return NULL;
 
@@ -645,7 +647,7 @@ TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx)
 
     TXLuaContext *new = av_mallocz(sizeof(*new));
     if (!new)
-        return NULL;
+        goto end;
 
     memcpy(new, lctx, sizeof(*new));
     new->master_thread = lctx->master_thread ? lctx->master_thread : lctx;
@@ -653,15 +655,15 @@ TXLuaContext *sp_lua_create_thread(TXLuaContext *lctx, void *parent_ctx)
     int err = sp_class_alloc(new, "lua", SP_TYPE_SCRIPT, parent_ctx);
     if (err < 0) {
         av_free(new);
-        return NULL;
+        goto end;
     }
 
     new->L = lua_newthread(L);
     new->thread_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     *new->nb_threads += 1;
 
+end:
     sp_lua_unlock_interface(lctx, 0);
-
     return new;
 }
 

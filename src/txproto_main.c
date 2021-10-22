@@ -91,6 +91,10 @@ static void print_ff_libs(TXMainContext *ctx)
 
 static void cleanup_fn(TXMainContext *ctx)
 {
+    /* Discard queued events */
+    sp_eventlist_dispatch(ctx, ctx->discard_list, SP_EVENT_ON_COMMIT, NULL);
+    sp_eventlist_discard(ctx->commit_list);
+
     /* Free lists that may carry contexts around */
     sp_bufferlist_free(&ctx->commit_list);
     sp_bufferlist_free(&ctx->discard_list);

@@ -79,7 +79,7 @@ typedef struct SPClass SPClass;
 #endif
 
 /* Init/uninit functions */
-void sp_log_init(enum SPLogLevel global_log_level);
+int sp_log_init(enum SPLogLevel global_log_level);
 void sp_log_uninit(void);
 
 enum SPStatusFlags {
@@ -95,7 +95,7 @@ int sp_log_set_status(const char *status, enum SPStatusFlags flags);
 void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started));
 
 /* Context level */
-void sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl);
+int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl);
 int sp_log_set_ctx_lvl_str(const char *component, const char *lvl);
 
 /* Main logging */

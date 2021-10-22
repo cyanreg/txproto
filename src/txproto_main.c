@@ -124,13 +124,14 @@ int main(int argc, char *argv[])
     if (!ctx)
         return AVERROR(ENOMEM);
 
-    sp_log_init(SP_LOG_INFO);
-
-    av_max_alloc(SIZE_MAX);
-
-    err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL);
-    if (err < 0)
+    if ((err = sp_log_init(SP_LOG_INFO)) < 0)
         return err;
+
+    if ((err = sp_class_alloc(ctx, "tx", SP_TYPE_NONE, NULL)) < 0) {
+        sp_log_uninit();
+        av_free(ctx);
+        return err;
+    }
 
     ctx->commit_list = sp_bufferlist_new();
     ctx->discard_list = sp_bufferlist_new();

@@ -40,6 +40,11 @@ struct SPClass {
     pthread_mutex_t lock;
 };
 
+typedef struct SPComponentLogLevel {
+    char *component;
+    enum SPLogLevel lvl;
+} SPComponentLogLevel;
+
 struct SPLogState {
     struct {
         void *ctx;
@@ -63,7 +68,8 @@ struct SPLogState {
     SPClass ffclass;
 
     FILE *log_file;
-    AVDictionary *log_levels;
+    SPComponentLogLevel *log_levels;
+    int num_log_levels;
 } static log_ctx = {
     .last_was_newline = 1,
     .term_lock = PTHREAD_MUTEX_INITIALIZER,
@@ -203,34 +209,33 @@ static inline char *build_line(SPClass *class, enum SPLogLevel lvl, int with_col
     return ret;
 }
 
+static inline enum SPLogLevel get_component_level_locked(const char *component)
+{
+    for (int i = 0; i < log_ctx.num_log_levels; i++)
+        if (!strcmp(log_ctx.log_levels[i].component, component))
+            return log_ctx.log_levels[i].lvl;
+
+    return INT_MAX;
+}
+
 static inline int decide_print_line(SPClass *class, enum SPLogLevel lvl)
 {
     pthread_mutex_lock(&log_ctx.levels_lock);
 
-    AVDictionaryEntry *global_lvl_entry = av_dict_get(log_ctx.log_levels, "global", NULL, 0);
-    AVDictionaryEntry *local_lvl_entry = NULL;
-    AVDictionaryEntry *parent_lvl_entry = NULL;
+    enum SPLogLevel global_lvl = log_ctx.log_levels[0].lvl;
+    enum SPLogLevel local_lvl = INT_MAX;
+    enum SPLogLevel parent_lvl = INT_MAX;
 
     if (class) {
-        local_lvl_entry = av_dict_get(log_ctx.log_levels, class->name, NULL, 0);
-        if (class->parent)
-            parent_lvl_entry = av_dict_get(log_ctx.log_levels, sp_class_get_name(class->parent), NULL, 0);
+        local_lvl = get_component_level_locked(class->name);
+        if ((local_lvl == INT_MAX) && class->parent)
+            parent_lvl = get_component_level_locked(sp_class_get_name(class->parent));
     }
 
     pthread_mutex_unlock(&log_ctx.levels_lock);
 
-    if (local_lvl_entry) {
-        int local_lvl = strtol(local_lvl_entry->value, NULL, 10);
-        return local_lvl >= lvl;
-    } else if (parent_lvl_entry) {
-        int parent_lvl = strtol(parent_lvl_entry->value, NULL, 10);
-        return parent_lvl >= lvl;
-    } else {
-        int global_lvl = strtol(global_lvl_entry->value, NULL, 10);
-        return global_lvl >= lvl;
-    }
-
-    return 1;
+    return local_lvl != INT_MAX ? local_lvl >= lvl :
+           (parent_lvl != INT_MAX ? parent_lvl >= lvl : (global_lvl >= lvl));
 }
 
 static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va_list args)
@@ -591,18 +596,49 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl)
     else
         return AVERROR(EINVAL);
 
+    return sp_log_set_ctx_lvl(component, res);
+}
+
+int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
+{
     pthread_mutex_lock(&log_ctx.levels_lock);
-    av_dict_set_int(&log_ctx.log_levels, component, res, 0);
+
+    SPComponentLogLevel *level = NULL;
+    for (int i = 0; i < log_ctx.num_log_levels; i++) {
+        if (!strcmp(log_ctx.log_levels[i].component, component)) {
+            component = log_ctx.log_levels[i].component;
+            level = &log_ctx.log_levels[i];
+            break;
+        }
+    }
+
+    if (!level) {
+        component = av_strdup(component);
+        if (!component) {
+            pthread_mutex_unlock(&log_ctx.levels_lock);
+            return AVERROR(ENOMEM);
+        }
+
+        SPComponentLogLevel *new_levels;
+        size_t new_levels_size = sizeof(*new_levels)*(log_ctx.num_log_levels + 1);
+        new_levels = av_realloc(log_ctx.log_levels, new_levels_size);
+        if (!new_levels) {
+            av_free((char *)component);
+            pthread_mutex_unlock(&log_ctx.levels_lock);
+            return AVERROR(ENOMEM);
+        }
+
+        log_ctx.log_levels = new_levels;
+        level = &new_levels[log_ctx.num_log_levels];
+        log_ctx.num_log_levels++;
+    }
+
+    level->component = (char *)component;
+    level->lvl = lvl;
+
     pthread_mutex_unlock(&log_ctx.levels_lock);
 
     return 0;
-}
-
-void sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
-{
-    pthread_mutex_lock(&log_ctx.levels_lock);
-    av_dict_set_int(&log_ctx.log_levels, component, lvl, 0);
-    pthread_mutex_unlock(&log_ctx.levels_lock);
 }
 
 int sp_log_set_file(const char *path)
@@ -713,19 +749,39 @@ print:
     return 0;
 }
 
-void sp_log_init(enum SPLogLevel global_log_level)
+int sp_log_init(enum SPLogLevel global_log_level)
 {
+    int ret = 0;
+    sp_log_uninit();
+
     pthread_mutex_lock(&log_ctx.levels_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
 
+    log_ctx.log_levels = av_malloc(sizeof(*log_ctx.log_levels));
+    if (!log_ctx.log_levels) {
+        ret = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    log_ctx.log_levels[0].component = av_strdup("global");
+    if (!log_ctx.log_levels[0].component) {
+        av_freep(&log_ctx.log_levels);
+        ret = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    log_ctx.log_levels[0].lvl = global_log_level;
+    log_ctx.num_log_levels = 1;
+
     log_ctx.time_offset = av_gettime_relative();
-    av_dict_set_int(&log_ctx.log_levels, "global", global_log_level, 0);
     av_log_set_callback(log_ff_cb);
 
+end:
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
     pthread_mutex_unlock(&log_ctx.levels_lock);
+    return ret;
 }
 
 void sp_log_uninit(void)
@@ -742,7 +798,11 @@ void sp_log_uninit(void)
         log_ctx.log_file = NULL;
     }
 
-    av_dict_free(&log_ctx.log_levels);
+    for (int i = 0; i < log_ctx.num_log_levels; i++)
+        av_free(log_ctx.log_levels[i].component);
+    av_freep(&log_ctx.log_levels);
+    log_ctx.num_log_levels = 0;
+
     av_freep(&log_ctx.status.str);
     log_ctx.status.lines = 0;
     log_ctx.status.lock = 0;

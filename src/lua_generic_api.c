@@ -137,6 +137,8 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
 typedef struct SPLinkCtx {
     char *src_filt_pad;
     char *dst_filt_pad;
+    AVBufferRef *src_ref;
+    AVBufferRef *dst_ref;
 } SPLinkCtx;
 
 static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
@@ -201,6 +203,8 @@ static void link_free(void *callback_ctx, void *dst_ctx, void *src_ctx)
     SPLinkCtx *cb_ctx = callback_ctx;
     av_free(cb_ctx->src_filt_pad);
     av_free(cb_ctx->dst_filt_pad);
+    av_buffer_unref(&cb_ctx->src_ref);
+    av_buffer_unref(&cb_ctx->dst_ref);
 }
 
 int sp_lua_generic_link(lua_State *L)
@@ -333,6 +337,8 @@ int sp_lua_generic_link(lua_State *L)
     SPLinkCtx *link_event_ctx = av_buffer_get_opaque(link_event);
     link_event_ctx->src_filt_pad = src_filt_pad;
     link_event_ctx->dst_filt_pad = dst_filt_pad;
+    link_event_ctx->src_ref = src_ref;
+    link_event_ctx->dst_ref = dst_ref;
 
     /* Add event to destination context */
     dst_ctrl_fn(dst_ref, SP_EVENT_CTRL_NEW_EVENT, link_event);

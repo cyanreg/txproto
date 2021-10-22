@@ -1004,7 +1004,7 @@ static int lua_set_epoch(lua_State *L)
                   lua_typename(L, lua_type(L, -1)));
     }
 
-    int err = sp_eventlist_add(ctx, ctx->commit_list, epoch_event, 0);
+    int err = sp_eventlist_add(ctx, ctx->events, epoch_event, 0);
     if (err < 0)
         av_buffer_unref(&epoch_event);
 
@@ -1016,8 +1016,7 @@ static int lua_commit(lua_State *L)
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     /* No need to lock here, if anything needs locking the commit functions
      * will take care of it */
-    sp_eventlist_dispatch(ctx, ctx->commit_list, SP_EVENT_ON_COMMIT, NULL);
-    sp_eventlist_discard(ctx->discard_list);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
 
     return 0;
 }
@@ -1025,8 +1024,7 @@ static int lua_commit(lua_State *L)
 static int lua_discard(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
-    sp_eventlist_dispatch(ctx, ctx->discard_list, SP_EVENT_ON_COMMIT, NULL);
-    sp_eventlist_discard(ctx->commit_list);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DISCARD, NULL);
 
     return 0;
 }

@@ -374,8 +374,8 @@ static void *cli_thread_fn(void *arg)
                    sp_bufferlist_len(cli_ctx->main_ctx->ext_buf_refs));
             sp_log(cli_ctx, SP_LOG_INFO, "Lua coroutines: %i\n",
                    sp_lua_get_nb_threads(cli_ctx->lua));
-            sp_log(cli_ctx, SP_LOG_INFO, "Pending commands: %i\n",
-                   sp_bufferlist_len(ctx->commit_list));
+            sp_log(cli_ctx, SP_LOG_INFO, "Main context events: %i\n",
+                   sp_bufferlist_len(ctx->events));
 
             goto line_end;
         } else if (!strncmp(line, "require", strlen("require"))) {

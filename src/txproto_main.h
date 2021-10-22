@@ -55,8 +55,7 @@ typedef struct TXMainContext {
 
     AVBufferRef **io_api_ctx;
 
-    SPBufferList *commit_list;
-    SPBufferList *discard_list;
+    SPBufferList *events;
     SPBufferList *ext_buf_refs;
 } TXMainContext;
 

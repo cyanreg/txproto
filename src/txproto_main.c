@@ -92,12 +92,10 @@ static void print_ff_libs(TXMainContext *ctx)
 static void cleanup_fn(TXMainContext *ctx)
 {
     /* Discard queued events */
-    sp_eventlist_dispatch(ctx, ctx->discard_list, SP_EVENT_ON_COMMIT, NULL);
-    sp_eventlist_discard(ctx->commit_list);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DISCARD, NULL);
 
     /* Free lists that may carry contexts around */
-    sp_bufferlist_free(&ctx->commit_list);
-    sp_bufferlist_free(&ctx->discard_list);
+    sp_bufferlist_free(&ctx->events);
 
     /* Free all contexts */
     sp_bufferlist_free(&ctx->ext_buf_refs);
@@ -137,8 +135,7 @@ int main(int argc, char *argv[])
         return err;
     }
 
-    ctx->commit_list = sp_bufferlist_new();
-    ctx->discard_list = sp_bufferlist_new();
+    ctx->events = sp_bufferlist_new();
     ctx->ext_buf_refs = sp_bufferlist_new();
     ctx->epoch_value = ATOMIC_VAR_INIT(0);
     ctx->source_update_cb_ref = LUA_NOREF;

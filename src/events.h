@@ -39,15 +39,16 @@
  */
 typedef enum SPEventType {
     /* [0:15] - Triggers */
-    SP_EVENT_ON_COMMIT       = (1ULL <<  0), /* NULL data */
-    SP_EVENT_ON_CONFIG       = (1ULL <<  1), /* NULL data, emitted before configuring */
-    SP_EVENT_ON_INIT         = (1ULL <<  2), /* NULL data, emitted after initialization */
-    SP_EVENT_ON_CHANGE       = (1ULL <<  3), /* NULL data */
-    SP_EVENT_ON_STATS        = (1ULL <<  4), /* 0-terminated SPGenericData array */
-    SP_EVENT_ON_EOS          = (1ULL <<  5), /* NULL data */
-    SP_EVENT_ON_ERROR        = (1ULL <<  6), /* 32-bit integer */
-    SP_EVENT_ON_DESTROY      = (1ULL <<  7), /* NULL data, or a 0-terminated SPGenericData array */
-    SP_EVENT_ON_OUTPUT       = (1ULL <<  8), /* SPRationalValue */
+    SP_EVENT_ON_COMMIT       = (1ULL <<  0), /* NULL data, removes all events marked with ON_DISCARD */
+    SP_EVENT_ON_DISCARD      = (1ULL <<  1), /* NULL data, runs all ON_DISCARD events, removes all new events */
+    SP_EVENT_ON_CONFIG       = (1ULL <<  2), /* NULL data, emitted before configuring */
+    SP_EVENT_ON_INIT         = (1ULL <<  3), /* NULL data, emitted after initialization */
+    SP_EVENT_ON_CHANGE       = (1ULL <<  4), /* NULL data */
+    SP_EVENT_ON_STATS        = (1ULL <<  5), /* 0-terminated SPGenericData array */
+    SP_EVENT_ON_EOS          = (1ULL <<  6), /* NULL data */
+    SP_EVENT_ON_ERROR        = (1ULL <<  7), /* 32-bit integer */
+    SP_EVENT_ON_DESTROY      = (1ULL <<  8), /* NULL data, or a 0-terminated SPGenericData array */
+    SP_EVENT_ON_OUTPUT       = (1ULL <<  9), /* SPRationalValue */
     SP_EVENT_ON_MASK         = (((1ULL << 16) - 1) <<  0), /* 16 bits reserved for event triggers */
 
     /* [16:31] - Types, if ORd when comitting, will only run events with that type */
@@ -197,11 +198,6 @@ SPEventType sp_eventlist_has_dispatched(SPBufferList *list, SPEventType type);
  * Same as above, but if there's an outstanding one
  */
 SPEventType sp_eventlist_has_queued(SPBufferList *list, SPEventType type);
-
-/**
- * Unrefs any events added since the last dispatch.
- */
-void sp_eventlist_discard(SPBufferList *list);
 
 /**
  * Returns a string of all flags, must be freed.

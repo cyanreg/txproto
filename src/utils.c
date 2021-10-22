@@ -567,9 +567,11 @@ static int eventlist_add_internal(void *ctx, SPBufferList *list,
         av_buffer_unref(&dup);
     }
 
-    int ret = internal_bufferlist_append(list, event,
-                                         when ? (when | SP_BUF_PRIV_SIGNAL) : 0x0,
-                                         ref, INT_MAX);
+    SPEventType flags = when ? (when | SP_BUF_PRIV_SIGNAL) : 0x0;
+    if (!(event_ctx->type & SP_EVENT_FLAG_IMMEDIATE))
+        flags |= SP_BUF_PRIV_NEW;
+
+    int ret = internal_bufferlist_append(list, event, flags, ref, INT_MAX);
     if (ret < 0)
         return ret;
 
@@ -623,11 +625,30 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
     list->queued &= ~type;
 
     for (int i = 0; i < list->entries_num; i++) {
-        if (type & SP_EVENT_ON_COMMIT)
-            list->priv_flags[i] &= ~SP_BUF_PRIV_NEW;
-
         /* TODO: fix potential race */
         SPEvent *event = (SPEvent *)list->entries[i]->data;
+
+        if (type & SP_EVENT_ON_COMMIT) {
+            if ((list->priv_flags[i] & SP_BUF_PRIV_NEW) &&
+                (event->type & SP_EVENT_ON_DISCARD)) {
+                av_buffer_unref(&list->entries[i]);
+                buflist_remove_idx(list, i);
+                i -= 1;
+                continue;
+            } else {
+                list->priv_flags[i] &= ~SP_BUF_PRIV_NEW;
+            }
+        } else if (type & SP_EVENT_ON_DISCARD) {
+            if ((list->priv_flags[i] & SP_BUF_PRIV_NEW) &&
+                !(event->type & SP_EVENT_ON_DISCARD)) {
+                av_buffer_unref(&list->entries[i]);
+                buflist_remove_idx(list, i);
+                i -= 1;
+                continue;
+            } else {
+                list->priv_flags[i] &= ~SP_BUF_PRIV_NEW;
+            }
+        }
 
         if ((event->type & SP_EVENT_FLAG_DEPENDENCY) &&
             (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) &&
@@ -807,21 +828,6 @@ SPEventType sp_eventlist_has_queued(SPBufferList *list, SPEventType type)
     return ret;
 }
 
-void sp_eventlist_discard(SPBufferList *list)
-{
-    pthread_mutex_lock(&list->lock);
-
-    for (int i = 0; i < list->entries_num; i++) {
-        if (list->priv_flags[i] & SP_BUF_PRIV_NEW) {
-            av_buffer_unref(&list->entries[i]);
-            buflist_remove_idx(list, i);
-            i -= 1;
-        }
-    }
-
-    pthread_mutex_unlock(&list->lock);
-}
-
 char *sp_event_flags_to_str(uint64_t flags)
 {
     AVBPrint bp;
@@ -845,6 +851,7 @@ char *sp_event_flags_to_str(uint64_t flags)
     }
 
     COND(SP_EVENT_ON_COMMIT,         on, "commit")
+    COND(SP_EVENT_ON_DISCARD,        on, "discard")
     COND(SP_EVENT_ON_CONFIG,         on, "config")
     COND(SP_EVENT_ON_INIT,           on, "init")
     COND(SP_EVENT_ON_CHANGE,         on, "change")
@@ -923,6 +930,7 @@ int sp_event_string_to_flags(void *ctx, SPEventType *dst, const char *in_str)
     char *save, *tok = av_strtok(str, " ,+", &save);
     while (tok) {
         FLAG(SP_EVENT_ON_COMMIT,       on,   "commit")
+        FLAG(SP_EVENT_ON_DISCARD,      on,   "discard")
         FLAG(SP_EVENT_ON_CONFIG,       on,   "config")
         FLAG(SP_EVENT_ON_INIT,         on,   "init")
         FLAG(SP_EVENT_ON_CHANGE,       on,   "change")

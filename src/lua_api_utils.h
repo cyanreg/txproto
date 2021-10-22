@@ -181,24 +181,12 @@ static void api_commit_free(void *callback_ctx, void *ctx, void *dep_ctx)
     av_buffer_unref(&cb_ctx->fn_ctx);
 }
 
-/**
- * This queues up control functions of other components to commit/discard when
- * the main context gets a commit or discard event.
- */
-static int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn,
-                                 AVBufferRef *fn_ctx)
+static inline int add_discard_fn_to_list(TXMainContext *ctx, ctrl_fn fn,
+                                         AVBufferRef *fn_ctx)
 {
     int err;
     SPEventType type = sp_class_to_event_type(fn_ctx->data);
-    type |= SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
-
-    AVBufferRef *commit_event = sp_event_create(api_commit_cb,
-                                                api_commit_free,
-                                                sizeof(SPCommitCbCtx),
-                                                NULL,
-                                                type,
-                                                fn_ctx->data,
-                                                NULL);
+    type |= SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_DISCARD;
 
     AVBufferRef *discard_event = sp_event_create(api_discard_cb,
                                                  api_commit_free,
@@ -208,22 +196,47 @@ static int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn,
                                                  fn_ctx->data,
                                                  NULL);
 
-    SPCommitCbCtx *api_commit_ctx = av_buffer_get_opaque(commit_event);
     SPCommitCbCtx *api_discard_ctx = av_buffer_get_opaque(discard_event);
-    api_commit_ctx->fn = api_discard_ctx->fn = fn;
-    api_commit_ctx->fn_ctx = av_buffer_ref(fn_ctx);
+    api_discard_ctx->fn = fn;
     api_discard_ctx->fn_ctx = av_buffer_ref(fn_ctx);
 
-    if ((err = sp_eventlist_add(ctx, ctx->commit_list, commit_event, 1)) < 0) {
-        av_buffer_unref(&commit_event);
+    if ((err = sp_eventlist_add(ctx, ctx->events, discard_event, 0)) < 0) {
         av_buffer_unref(&discard_event);
         return err;
     }
 
-    if ((err = sp_eventlist_add(ctx, ctx->discard_list, discard_event, 0)) < 0) {
-        av_buffer_unref(&discard_event);
+    return 0;
+}
+
+/**
+ * This queues up control functions of other components to commit/discard when
+ * the main context gets a commit or discard event.
+ */
+static inline int add_commit_fn_to_list(TXMainContext *ctx, ctrl_fn fn,
+                                        AVBufferRef *fn_ctx)
+{
+    int err;
+    SPEventType type = sp_class_to_event_type(fn_ctx->data);
+    type |= SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
+
+    AVBufferRef *commit_event = sp_event_create(api_commit_cb,
+                                                 api_commit_free,
+                                                 sizeof(SPCommitCbCtx),
+                                                 NULL,
+                                                 type,
+                                                 fn_ctx->data,
+                                                 NULL);
+
+    SPCommitCbCtx *api_commit_ctx = av_buffer_get_opaque(commit_event);
+    api_commit_ctx->fn = fn;
+    api_commit_ctx->fn_ctx = av_buffer_ref(fn_ctx);
+
+    if ((err = sp_eventlist_add(ctx, ctx->events, commit_event, 0)) < 0) {
+        av_buffer_unref(&commit_event);
         return err;
     }
+
+    add_discard_fn_to_list(ctx, fn, fn_ctx);
 
     return 0;
 }

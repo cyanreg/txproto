@@ -26,33 +26,10 @@
 
 #define GENERIC_CTRL(ref, flags, arg)                                             \
     do {                                                                          \
-        ctrl_fn fn = NULL;                                                        \
-        enum SPType type = sp_class_get_type(ref->data);                          \
-        switch (type) {                                                           \
-        case SP_TYPE_ENCODER:                                                     \
-            fn = sp_encoder_ctrl;                                                 \
-            break;                                                                \
-        case SP_TYPE_MUXER:                                                       \
-            fn = sp_muxer_ctrl;                                                   \
-            break;                                                                \
-        case SP_TYPE_FILTER:                                                      \
-            fn = sp_filter_ctrl;                                                  \
-            break;                                                                \
-        case SP_TYPE_AUDIO_SOURCE:                                                \
-        case SP_TYPE_AUDIO_SINK:                                                  \
-        case SP_TYPE_AUDIO_BIDIR:                                                 \
-        case SP_TYPE_VIDEO_SOURCE:                                                \
-        case SP_TYPE_VIDEO_SINK:                                                  \
-        case SP_TYPE_VIDEO_BIDIR:                                                 \
-        case SP_TYPE_SUB_SOURCE:                                                  \
-        case SP_TYPE_SUB_SINK:                                                    \
-        case SP_TYPE_SUB_BIDIR:                                                   \
-            fn = ((IOSysEntry *)ref->data)->ctrl;                                 \
-            break;                                                                \
-        default:                                                                  \
+        ctrl_fn fn = get_ctrl_fn(ref->data);                                      \
+        if (!fn)                                                                  \
             LUA_ERROR("Unsupported CTRL type: %s!",                               \
                       sp_class_type_string(ref->data));                           \
-        }                                                                         \
                                                                                   \
         if (!(flags & SP_EVENT_CTRL_MASK)) {                                      \
             LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL))); \
@@ -75,6 +52,32 @@
             add_commit_fn_to_list(ctx, fn, ref);                                  \
                                                                                   \
     } while (0)
+
+static ctrl_fn get_ctrl_fn(void *ctx)
+{
+    enum SPType type = sp_class_get_type(ctx);
+    switch (type) {
+    case SP_TYPE_ENCODER:
+        return sp_encoder_ctrl;
+    case SP_TYPE_MUXER:
+        return sp_muxer_ctrl;
+    case SP_TYPE_FILTER:
+        return sp_filter_ctrl;
+    case SP_TYPE_AUDIO_SOURCE:
+    case SP_TYPE_AUDIO_SINK:
+    case SP_TYPE_AUDIO_BIDIR:
+    case SP_TYPE_VIDEO_SOURCE:
+    case SP_TYPE_VIDEO_SINK:
+    case SP_TYPE_VIDEO_BIDIR:
+    case SP_TYPE_SUB_SOURCE:
+    case SP_TYPE_SUB_SINK:
+    case SP_TYPE_SUB_BIDIR:
+        return ((IOSysEntry *)ctx)->ctrl;
+    default:
+        break;
+    }
+    return NULL;
+}
 
 static SPBufferList *sp_ctx_get_events_list(void *ctx)
 {
@@ -352,9 +355,15 @@ int sp_lua_generic_link(lua_State *L)
         }
     }
 
-    if (autostart) {
+    /* We don't need our reference any more */
+    av_buffer_unref(&link_event);
+
+    if (autostart) { /* These add a discard event, so we don't need to */
         GENERIC_CTRL(src_ref, SP_EVENT_CTRL_START, NULL);
         GENERIC_CTRL(dst_ref, SP_EVENT_CTRL_START, NULL);
+    } else { /* But if we're not auto-starting them, we need to. */
+        add_discard_fn_to_list(ctx, get_ctrl_fn(src_ref->data), src_ref);
+        add_discard_fn_to_list(ctx, get_ctrl_fn(dst_ref->data), dst_ref);
     }
 
     return 0;

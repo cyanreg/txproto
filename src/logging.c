@@ -147,7 +147,8 @@ static inline char *build_line(SPClass *class, enum SPLogLevel lvl, int with_col
             av_bprintf(&bpc, "(trace)");
     }
 
-    av_bprint_append_data(&bpc, time_offset_str, time_offset_str_len);
+    if (last_was_nl)
+        av_bprint_append_data(&bpc, time_offset_str, time_offset_str_len);
 
     if (class && last_was_nl) {
         SPClass *parent = get_class(class->parent);
@@ -250,7 +251,8 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va
     char time_offset_str[16];
 
     int time_offset_str_len = snprintf(time_offset_str, sizeof(time_offset_str),
-                                       "[%.3f|", time_offset/(1000000.0f));
+                                       "[%.3f%s", time_offset/(1000000.0f),
+                                       class ? "|" : "] ");
 
     /* Lock needed for log_ctx.last_was_newline */
     pthread_mutex_lock(&log_ctx.term_lock);

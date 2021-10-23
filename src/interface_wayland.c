@@ -535,8 +535,10 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
 
     uint64_t sym_val = lookupkey(sym);
     if (sym_val) {
-        ctx->cursor.cur_surface->cb->input(ctx->cursor.cur_surface->cb_ctx,
-                                           sym_val | mod_val);
+        if (ctx->cursor.cur_surface) {
+            ctx->cursor.cur_surface->cb->input(ctx->cursor.cur_surface->cb_ctx,
+                                               sym_val | mod_val);
+        }
     } else {
         // TODO UTF8
     }
@@ -720,6 +722,8 @@ static void surface_destroy(void **wctx)
 
     wl_surface_destroy(surf->surface);
     surf->cb->destroy(surf->cb_ctx);
+    if (surf->main->cursor.cur_surface == surf)
+        surf->main->cursor.cur_surface = NULL;
     remove_surface(surf->main, surf);
 }
 

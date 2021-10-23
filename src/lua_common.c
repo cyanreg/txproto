@@ -904,7 +904,7 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             goto end;
         }
 
-        sp_log(lctx, SP_LOG_DEBUG, "Lua thread: %s!\n",
+        sp_log(lctx, SP_LOG_DEBUG, "Lua thread %s!\n",
                ret == LUA_OK ? "exited" : "yielded");
 
         if (nresults && lua_islightuserdata(L, -1))
@@ -922,7 +922,10 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             /* Unlock */
             sp_lua_unlock_interface(lctx, 0);
 
-            sp_log(lctx, SP_LOG_DEBUG, "Waiting on an event signal...\n");
+            char *fstr = sp_event_flags_to_str_buf(event_await);
+            sp_log(lctx, SP_LOG_DEBUG, "Thread waiting on an event signal (id:%lu %s)...\n",
+                   sp_event_get_id(event_await), fstr);
+            av_free(fstr);
 
             /* Await event, if any */
             sp_event_unref_await(&event_await);

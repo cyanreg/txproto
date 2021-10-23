@@ -224,8 +224,10 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
             goto end;
         }
 
+        st->id = ctx->avf->nb_streams - 1;
         st->time_base = enc->avctx->time_base;
-        enc_map_entry->stream_id = st->id = ctx->avf->nb_streams - 1;
+
+        enc_map_entry->stream_id = st->id;
         enc_map_entry->name = av_strdup(enc->name);
         enc_map_entry->time_base = enc->avctx->time_base;
 
@@ -245,7 +247,8 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
             st->sample_aspect_ratio = enc->avctx->sample_aspect_ratio;
         }
 
-        sp_log(ctx, SP_LOG_VERBOSE, "Encoder \"%s\" registered!\n", enc_map_entry->name);
+        sp_log(ctx, SP_LOG_VERBOSE, "Encoder \"%s\" registered, stream index %i!\n",
+               enc_map_entry->name, st->id);
     }
 
 end:

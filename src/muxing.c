@@ -24,11 +24,13 @@
 #include "ctrl_template.h"
 
 typedef struct MuxEncoderMap {
-    int encoder_id;
+    intptr_t encoder_id;
     int stream_id;
+    AVRational time_base;
+    char *name;
 } MuxEncoderMap;
 
-static MuxEncoderMap *enc_id_lookup(MuxingContext *ctx, int enc_id)
+static MuxEncoderMap *enc_id_lookup(MuxingContext *ctx, intptr_t enc_id)
 {
     for (int i = 0; i < ctx->enc_map_size; i++)
         if (ctx->enc_map[i].encoder_id == enc_id)
@@ -86,9 +88,9 @@ static void *muxing_thread(void *arg)
         if (flush)
             goto send;
 
-        EncodingContext *enc = in_pkt->opaque;
-        AVRational src_tb = enc->avctx->time_base;
-        int sid = enc_id_lookup(ctx, sp_class_get_id(enc))->stream_id;
+        MuxEncoderMap *src_enc = enc_id_lookup(ctx, (intptr_t)in_pkt->opaque);
+        AVRational src_tb = src_enc->time_base;
+        int sid = src_enc->stream_id;
 
         in_pkt->stream_index = sid;
 
@@ -108,7 +110,7 @@ static void *muxing_thread(void *arg)
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
 
         sp_log(ctx, SP_LOG_TRACE, "Got packet from \"%s\", sid = %i, out pts = %f, out_dts = %f\n",
-               enc->name,
+               src_enc->name,
                sid,
                av_q2d(dst_tb) * in_pkt->pts,
                av_q2d(dst_tb) * in_pkt->dts);
@@ -151,8 +153,8 @@ send:
         stat_entries[1] = D_TYPE("cached", NULL, buf_bytes);
 
         for (int i = 0; i < ctx->avf->nb_streams; i++) {
-            stat_entries[2 + 2*i + 0] = D_TYPE("bitrate", enc->name, rate[i]);
-            stat_entries[2 + 2*i + 1] = D_TYPE("latency", enc->name, latency[i]);
+            stat_entries[2 + 2*i + 0] = D_TYPE("bitrate", src_enc->name, rate[i]);
+            stat_entries[2 + 2*i + 1] = D_TYPE("latency", src_enc->name, latency[i]);
         }
 
         stat_entries[2 + 2*ctx->avf->nb_streams] = (SPGenericData){ 0 };
@@ -201,7 +203,7 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
         ctx->enc_map_size++;
     }
 
-    enc_map_entry->encoder_id = sp_class_get_id(enc);
+    enc_map_entry->encoder_id = (intptr_t)sp_class_get_id(enc);
 
     if (0) {
 
@@ -224,6 +226,8 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
 
         st->time_base = enc->avctx->time_base;
         enc_map_entry->stream_id = st->id = ctx->avf->nb_streams - 1;
+        enc_map_entry->name = av_strdup(enc->name);
+        enc_map_entry->time_base = enc->avctx->time_base;
 
         ctx->stream_has_link[st->id] = 1;
         ctx->stream_codec_id[st->id] = enc->avctx->codec_id;
@@ -402,10 +406,13 @@ static void muxer_free(void *opaque, uint8_t *data)
         pthread_join(ctx->muxing_thread, NULL);
     }
 
+    for (int i = 0; i < ctx->enc_map_size; i++)
+        av_free(ctx->enc_map[i].name);
+    av_free(ctx->enc_map);
+
     av_buffer_unref(&ctx->src_packets);
     av_free(ctx->stream_has_link);
     av_free(ctx->stream_codec_id);
-    av_free(ctx->enc_map);
 
     if (sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_INIT)) {
         int err = av_write_trailer(ctx->avf);

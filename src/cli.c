@@ -27,6 +27,9 @@
 struct TXCLIContext {
     SPClass *class;
 
+    int custom_prompt;
+    char prompt[256];
+
     TXMainContext *main_ctx;
     TXLuaContext *lua;
 
@@ -38,6 +41,8 @@ struct TXCLIContext {
 
     pthread_t thread;
 };
+
+#define DEFAULT_PROMPT (LUA_PUB_PREFIX " > ")
 
 _Thread_local TXCLIContext *cli_ctx_tls_ptr = NULL;
 
@@ -171,7 +176,6 @@ static void *cli_thread_fn(void *arg)
 
     const char *name;
     char *line = NULL, *line_mod = NULL;
-    char *prompt = LUA_PUB_PREFIX " > ";
 
     sp_log_set_prompt_callback(cli_ctx, prompt_newline_cb);
 
@@ -182,14 +186,15 @@ static void *cli_thread_fn(void *arg)
 
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
-    while ((line = readline(prompt))) {
+    while ((line = readline(cli_ctx->prompt))) {
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
         atomic_store(&cli_ctx->move_newline, 0);
 
         if (atomic_load(&cli_ctx->has_event)) {
             SPGenericData inp[] = { D_TYPE("input", NULL, line), { 0 } };
             sp_eventlist_dispatch(cli_ctx, cli_ctx->events, SP_EVENT_ON_DESTROY, &inp);
-            atomic_store(&cli_ctx->has_event, 0);
+            if (cli_ctx->custom_prompt)
+                memcpy(cli_ctx->prompt, DEFAULT_PROMPT, sizeof(DEFAULT_PROMPT));
             goto line_end_nolock;
         } else if (!strlen(line)) {
             atomic_store(&cli_ctx->move_newline, 1);
@@ -537,6 +542,8 @@ int sp_cli_init(TXCLIContext **s, TXMainContext *ctx)
     cli_ctx->move_newline = ATOMIC_VAR_INIT(1);
     cli_ctx->selfquit = ATOMIC_VAR_INIT(0);
 
+    memcpy(cli_ctx->prompt, DEFAULT_PROMPT, sizeof(DEFAULT_PROMPT));
+
     pthread_create(&cli_ctx->thread, NULL, cli_thread_fn, cli_ctx);
 
     *s = cli_ctx;
@@ -549,12 +556,21 @@ int sp_cli_prompt_event(TXCLIContext *cli_ctx, AVBufferRef *event, const char *m
     if (!cli_ctx)
         return 0;
 
+    int len = strlen(msg);
+    if (len < 1 || len > (sizeof(cli_ctx->prompt) - 2))
+        return AVERROR(EINVAL);
+
     if (!cli_ctx->class || atomic_load(&cli_ctx->has_event))
         return AVERROR(EINVAL);
 
     sp_eventlist_add_signal(cli_ctx, cli_ctx->events, event, SP_EVENT_FLAG_DEPENDENCY, 1);
-    sp_log(cli_ctx, SP_LOG_INFO, "%s\n", msg);
+
+    memcpy(cli_ctx->prompt, msg, len);
+    cli_ctx->prompt[len + 0] = ' ';
+    cli_ctx->prompt[len + 1] = '\0';
+    cli_ctx->custom_prompt = 1;
     atomic_store(&cli_ctx->has_event, 1);
+    rl_forced_update_display();
 
     return 0;
 }

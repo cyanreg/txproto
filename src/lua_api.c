@@ -1314,10 +1314,8 @@ static int lua_prompt(lua_State *L)
 #ifdef HAVE_LIBEDIT
     if (!ctx->cli) {
         ret = sp_cli_init(&ctx->cli, ctx);
-        if (ret < 0) {
+        if (ret < 0)
             LUA_ERROR("Unable to init CLI: %s!", av_err2str(ret));
-            goto end;
-        }
     }
 
     /* ref pops the item off the stack! */
@@ -1337,7 +1335,6 @@ static int lua_prompt(lua_State *L)
     if (ret < 0) {
         sp_event_unref_expire(&hook_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(ret));
-        goto end;
     }
 
     sp_bufferlist_append_noref(ctx->ext_buf_refs, hook_event);
@@ -1351,7 +1348,6 @@ static int lua_prompt(lua_State *L)
 
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
-end:
 #else
     LUA_ERROR("Unable to add event: %s!", "txproto was not compiled with libedit enabled");
 #endif

@@ -281,26 +281,23 @@ static int render_highlight(void *wctx)
         .blit_dst      = true,
         .host_writable = false,
         .host_readable = false,
-        .sample_mode   = PL_TEX_SAMPLE_LINEAR,
-        .address_mode  = PL_TEX_ADDRESS_CLAMP,
     };
 
     pl_tex_recreate(win->pl_gpu, &win->highlight.region, &pltex_params);
     float foreground_rgba[4] = { 0.0, 0.0, 0.0, 0.0 };
     pl_tex_clear(win->pl_gpu, win->highlight.region, foreground_rgba);
 
-    struct pl_image plimg = {
-        .signature = av_gettime_relative(),
+    struct pl_frame src_frame = {
         .num_planes = 1,
         .planes[0].texture = win->highlight.region,
         .planes[0].components = 4,
         .planes[0].component_mapping = { 0, 1, 2, 3 },
         .repr = { 0 },
         .color = { 0 },
-        .src_rect.x0 = 0,
-        .src_rect.y0 = 0,
-        .src_rect.x1 = pltex_params.w,
-        .src_rect.y1 = pltex_params.h,
+        .crop.x0 = 0,
+        .crop.y0 = 0,
+        .crop.x1 = pltex_params.w,
+        .crop.y1 = pltex_params.h,
     };
 
     /* Set rendering parameters */
@@ -325,7 +322,7 @@ static int render_highlight(void *wctx)
     target.crop.y0 = y0;
     target.crop.y1 = y1;
 
-    pl_render_image(win->pl_renderer, &plimg, &target, &render_params);
+    pl_render_image(win->pl_renderer, &src_frame, &target, &render_params);
 
 finish:
     pl_swapchain_submit_frame(win->pl_swap);

@@ -244,6 +244,8 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
             st->avg_frame_rate      = enc->avctx->framerate;
             st->sample_aspect_ratio = enc->avctx->sample_aspect_ratio;
         }
+
+        sp_log(ctx, SP_LOG_VERBOSE, "Encoder \"%s\" registered!\n", enc_map_entry->name);
     }
 
 end:

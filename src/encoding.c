@@ -81,7 +81,7 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
         ctx->avctx->color_trc       = conf->color_trc;
         ctx->avctx->color_primaries = conf->color_primaries;
 
-//        ctx->avctx->gop_size        = ctx->keyframe_interval;
+        ctx->avctx->gop_size        = ctx->keyframe_interval;
         ctx->avctx->global_quality  = ctx->crf;
 
         ctx->avctx->sample_aspect_ratio = conf->sample_aspect_ratio;
@@ -544,7 +544,7 @@ static void *encoding_thread(void *arg)
                 goto fail;
             }
 
-            out_pkt->opaque = (intptr_t)sp_class_get_id(ctx);
+            out_pkt->opaque = (void *)(intptr_t)sp_class_get_id(ctx);
 
             sp_log(ctx, SP_LOG_TRACE, "Pushing packet to FIFO, pts = %f\n",
                    av_q2d(ctx->avctx->time_base) * out_pkt->pts);

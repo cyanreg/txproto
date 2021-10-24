@@ -152,10 +152,6 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
     enum SPType s_type = sp_class_get_type(src_ctx);
     enum SPType d_type = sp_class_get_type(dst_ctx);
 
-    FilterContext   *dst_filt_ctx = dst_ctx, *src_filt_ctx = src_ctx;
-    EncodingContext *src_enc_ctx  = src_ctx;
-    MuxingContext   *dst_mux_ctx  = dst_ctx;
-
     AVBufferRef *src_fifo = sp_ctx_get_fifo(src_ctx, 1);
     AVBufferRef *dst_fifo = sp_ctx_get_fifo(dst_ctx, 0);
 
@@ -172,15 +168,18 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
            d_type != SP_TYPE_FILTER ? "" : ")");
 
     if ((s_type == SP_TYPE_FILTER) && (d_type == SP_TYPE_FILTER)) {
-        return sp_map_pad_to_pad(dst_filt_ctx, cb_ctx->dst_filt_pad,
-                                 src_filt_ctx, cb_ctx->src_filt_pad);
+        return sp_map_pad_to_pad((FilterContext *)dst_ctx, cb_ctx->dst_filt_pad,
+                                 (FilterContext *)src_ctx, cb_ctx->src_filt_pad);
     } else if (s_type == SP_TYPE_FILTER && (d_type == SP_TYPE_ENCODER)) {
-        return sp_map_fifo_to_pad(src_filt_ctx, dst_fifo,
+        return sp_map_fifo_to_pad((FilterContext *)src_ctx, dst_fifo,
                                   cb_ctx->src_filt_pad, 1);
     } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_FILTER)) {
-        return sp_map_fifo_to_pad(dst_filt_ctx, src_fifo,
+        return sp_map_fifo_to_pad((FilterContext *)dst_ctx, src_fifo,
                                   cb_ctx->dst_filt_pad, 0);
     } else if ((s_type == SP_TYPE_ENCODER) && (d_type == SP_TYPE_MUXER)) {
+        EncodingContext *src_enc_ctx  = src_ctx;
+        MuxingContext   *dst_mux_ctx  = dst_ctx;
+
         sp_assert(dst_fifo && src_fifo);
 
         int err = sp_muxer_add_stream(dst_mux_ctx, src_enc_ctx);
@@ -321,16 +320,14 @@ int sp_lua_generic_link(lua_State *L)
 
     SPBufferList *src_events = sp_ctx_get_events_list(sctx);
 
-    int source_init = sp_eventlist_has_dispatched(src_events, SP_EVENT_ON_INIT);
-
-    uint64_t post_init = sp_eventlist_has_dispatched(src_events,
-                                                     SP_EVENT_ON_INIT);
-    if (post_init)
+    SPEventType src_post_init = sp_eventlist_has_dispatched(src_events,
+                                                            SP_EVENT_ON_INIT);
+    if (src_post_init)
         flags |= SP_EVENT_ON_COMMIT;
     else
         flags |= SP_EVENT_ON_CONFIG;
 
-    if (!source_init)
+    if (!src_post_init)
         flags |= SP_EVENT_FLAG_DEPENDENCY;
 
     AVBufferRef *link_event = sp_event_create(link_fn, link_free,
@@ -347,7 +344,7 @@ int sp_lua_generic_link(lua_State *L)
     dst_ctrl_fn(dst_ref, SP_EVENT_CTRL_NEW_EVENT, link_event);
 
     /* Add dependency to source context, if needed */
-    if (!source_init) {
+    if (!src_post_init) {
         err = src_ctrl_fn(src_ref, SP_EVENT_CTRL_SIGNAL | SP_EVENT_ON_INIT, link_event);
         if (err < 0) {
             av_buffer_unref(&link_event);

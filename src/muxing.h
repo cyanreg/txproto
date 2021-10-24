@@ -58,4 +58,4 @@ typedef struct MuxingContext {
 AVBufferRef *sp_muxer_alloc(void);
 int  sp_muxer_init(AVBufferRef *ctx_ref);
 int  sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc);
-int  sp_muxer_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg);
+int  sp_muxer_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg);

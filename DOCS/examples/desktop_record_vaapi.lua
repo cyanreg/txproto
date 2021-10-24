@@ -80,7 +80,7 @@ function main(...)
         })
     muxer.link(encoder_v)
     muxer.link(encoder_a)
-    muxer.hook("stats", muxer_stats)
+    muxer.schedule("stats", muxer_stats)
 
     tx.commit()
 end

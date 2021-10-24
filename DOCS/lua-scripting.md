@@ -58,12 +58,12 @@ and is equivalent to an `ctrl("opts")` command sent before a `tx.commit()`.
 
 Returns a handle, with the following methods available:
 
-| Method                   | Action                                                                           |
-|--------------------------|----------------------------------------------------------------------------------|
-| `ctrl(string)`           | Control the device. Read [below](#events-and-control).                           |
-| `hook(string, callback)` | Hook a callback to be called every time an [event](#events-and-control) happens. |
-| `link(handle)`           | Link two components together. Will start both on `tx.commit()`                   |
-| `destroy()`              | Destroy the handle and stop capturing.                                           |
+| Method                       | Action                                                                               |
+|------------------------------|--------------------------------------------------------------------------------------|
+| `ctrl(string)`               | Control the device. Read [below](#events-and-control).                               |
+| `schedule(string, callback)` | Schedule a callback to be called every time an [event](#events-and-control) happens. |
+| `link(handle)`               | Link two components together. Will start both on `tx.commit()`                       |
+| `destroy()`                  | Destroy the handle and stop capturing.                                               |
 
 A `ctrl("opts")` will return all available options along with their current value and description.
 
@@ -73,12 +73,12 @@ Initializes an encoder context.
 
 Returns a handle, with the following methods available:
 
-| Method                   | Action                                                                           |
-|--------------------------|----------------------------------------------------------------------------------|
-| `ctrl(string)`           | Control the device. Read [below](#events-and-control).                           |
-| `hook(string, callback)` | Hook a callback to be called every time an [event](#events-and-control) happens. |
-| `link(handle)`           | Link two components together. Will start both on `tx.commit()`                   |
-| `destroy()`              | Destroy the handle and stop capturing.                                           |
+| Method                       | Action                                                                               |
+|------------------------------|--------------------------------------------------------------------------------------|
+| `ctrl(string)`               | Control the device. Read [below](#events-and-control).                               |
+| `schedule(string, callback)` | Schedule a callback to be called every time an [event](#events-and-control) happens. |
+| `link(handle)`               | Link two components together. Will start both on `tx.commit()`                       |
+| `destroy()`                  | Destroy the handle and stop capturing.                                               |
 
 A `ctrl("opts")` will return all available options along with their current value and description. They're
 the equivalent to the options `ffmpeg -help=encoder` will provide. The common options like `b` for bitrate

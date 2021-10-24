@@ -655,7 +655,7 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
     pa_subscription_event_type_t facility = type & PA_SUBSCRIPTION_EVENT_FACILITY_MASK;
     pa_subscription_event_type_t event = type & PA_SUBSCRIPTION_EVENT_TYPE_MASK;
 
-#define MONITOR_TEMPL(event_type, hook_fn, callback, stype, type)                           \
+#define MONITOR_TEMPL(event_type, schedule_fn, callback, stype, type)                       \
     case PA_SUBSCRIPTION_EVENT_ ## event_type:                                              \
         if (event & PA_SUBSCRIPTION_EVENT_REMOVE) {                                         \
             uint32_t nidx = sp_iosys_gen_identifier(ctx, index, type);                      \
@@ -668,8 +668,8 @@ static void subscribe_cb(pa_context *context, pa_subscription_event_type_t type,
             }                                                                               \
             av_buffer_unref(&ref);                                                          \
         } else {                                                                            \
-            if (!(o = pa_context_get_ ## hook_fn(context, index, callback, ctx))) {         \
-                sp_log(ctx, SP_LOG_ERROR, "pa_context_get_" #hook_fn "() failed "           \
+            if (!(o = pa_context_get_ ## schedule_fn(context, index, callback, ctx))) {     \
+                sp_log(ctx, SP_LOG_ERROR, "pa_context_get_" #schedule_fn "() failed "       \
                        "for id %u\n", index);                                               \
                 return;                                                                     \
             }                                                                               \
@@ -729,12 +729,12 @@ static void pulse_state_cb(pa_context *context, void *data)
         }
         pa_operation_unref(o);
 
-#define LOAD_INITIAL(hook_fn, callback)                        \
-    if (!(o = hook_fn(context, callback, ctx))) {              \
-        sp_log(ctx, SP_LOG_ERROR, #hook_fn "() failed: %s!\n", \
-               pa_strerror(pa_context_errno(context)));        \
-        return;                                                \
-    }                                                          \
+#define LOAD_INITIAL(schedule_fn, callback)                        \
+    if (!(o = schedule_fn(context, callback, ctx))) {              \
+        sp_log(ctx, SP_LOG_ERROR, #schedule_fn "() failed: %s!\n", \
+               pa_strerror(pa_context_errno(context)));            \
+        return;                                                    \
+    }                                                              \
     pa_operation_unref(o);
 
         LOAD_INITIAL(pa_context_get_sink_info_list, sink_cb)

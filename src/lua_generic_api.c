@@ -24,33 +24,33 @@
 #include "lua_generic_api.h"
 #include "lua_api_utils.h"
 
-#define GENERIC_CTRL(ref, flags, arg)                                             \
-    do {                                                                          \
-        ctrl_fn fn = get_ctrl_fn(ref->data);                                      \
-        if (!fn)                                                                  \
-            LUA_ERROR("Unsupported CTRL type: %s!",                               \
-                      sp_class_type_string(ref->data));                           \
-                                                                                  \
-        if (!(flags & SP_EVENT_CTRL_MASK)) {                                      \
-            LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL))); \
-        } else if (flags & SP_EVENT_ON_MASK) {                                    \
-            LUA_ERROR("Event specified but given to a ctrl, use %s.hook: %s!",    \
-                      sp_class_get_name(ref->data), av_err2str(AVERROR(EINVAL))); \
-        } else if ((flags & SP_EVENT_CTRL_OPTS) && (!arg)) {                      \
-            LUA_ERROR("No options specified for ctrl:opts: %s!",                  \
-                      av_err2str(AVERROR(EINVAL)));                               \
-        }                                                                         \
-                                                                                  \
-        if (flags & SP_EVENT_CTRL_START)                                          \
-            err = fn(ref, flags, &ctx->epoch_value);                              \
-        else                                                                      \
-            err = fn(ref, flags, arg);                                            \
-        if (err < 0)                                                              \
-             LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));            \
-                                                                                  \
-        if (!(flags & SP_EVENT_FLAG_IMMEDIATE))                                   \
-            add_commit_fn_to_list(ctx, fn, ref);                                  \
-                                                                                  \
+#define GENERIC_CTRL(ref, flags, arg)                                               \
+    do {                                                                            \
+        ctrl_fn fn = get_ctrl_fn(ref->data);                                        \
+        if (!fn)                                                                    \
+            LUA_ERROR("Unsupported CTRL type: %s!",                                 \
+                      sp_class_type_string(ref->data));                             \
+                                                                                    \
+        if (!(flags & SP_EVENT_CTRL_MASK)) {                                        \
+            LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL)));   \
+        } else if (flags & SP_EVENT_ON_MASK) {                                      \
+            LUA_ERROR("Event specified but given to a ctrl, use %s.schedule: %s!",  \
+                      sp_class_get_name(ref->data), av_err2str(AVERROR(EINVAL)));   \
+        } else if ((flags & SP_EVENT_CTRL_OPTS) && (!arg)) {                        \
+            LUA_ERROR("No options specified for ctrl:opts: %s!",                    \
+                      av_err2str(AVERROR(EINVAL)));                                 \
+        }                                                                           \
+                                                                                    \
+        if (flags & SP_EVENT_CTRL_START)                                            \
+            err = fn(ref, flags, &ctx->epoch_value);                                \
+        else                                                                        \
+            err = fn(ref, flags, arg);                                              \
+        if (err < 0)                                                                \
+             LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));              \
+                                                                                    \
+        if (!(flags & SP_EVENT_FLAG_IMMEDIATE))                                     \
+            add_commit_fn_to_list(ctx, fn, ref);                                    \
+                                                                                    \
     } while (0)
 
 static ctrl_fn get_ctrl_fn(void *ctx)

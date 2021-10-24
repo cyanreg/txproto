@@ -133,18 +133,18 @@ int sp_lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict)
     return 0;
 }
 
-typedef struct HookLuaEventCtx {
+typedef struct ScheduleLuaEventCtx {
     SPEventType flags;
     int fn_ref;
     AVBufferRef *ctx_ref;
     TXLuaContext *lctx;
-} HookLuaEventCtx;
+} ScheduleLuaEventCtx;
 
-static int hook_lua_event_cb(AVBufferRef *event_ref, void *callback_ctx,
-                             void *ctx, void *dep_ctx, void *data)
+static int schedule_lua_event_cb(AVBufferRef *event_ref, void *callback_ctx,
+                                 void *ctx, void *dep_ctx, void *data)
 {
     int err = 0;
-    HookLuaEventCtx *event_ctx = callback_ctx;
+    ScheduleLuaEventCtx *event_ctx = callback_ctx;
 
     lua_State *L = sp_lua_lock_interface(event_ctx->lctx);
 
@@ -218,22 +218,22 @@ call:
     return sp_lua_unlock_interface(event_ctx->lctx, err);
 }
 
-static void hook_lua_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
+static void schedule_lua_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
 {
-    HookLuaEventCtx *hook_lua_ctx = callback_ctx;
+    ScheduleLuaEventCtx *schedule_lua_ctx = callback_ctx;
 
-    lua_State *L = sp_lua_lock_interface(hook_lua_ctx->lctx);
-    luaL_unref(L, LUA_REGISTRYINDEX, hook_lua_ctx->fn_ref);
-    sp_lua_unlock_interface(hook_lua_ctx->lctx, 0);
-    sp_lua_close_ctx(&hook_lua_ctx->lctx);
+    lua_State *L = sp_lua_lock_interface(schedule_lua_ctx->lctx);
+    luaL_unref(L, LUA_REGISTRYINDEX, schedule_lua_ctx->fn_ref);
+    sp_lua_unlock_interface(schedule_lua_ctx->lctx, 0);
+    sp_lua_close_ctx(&schedule_lua_ctx->lctx);
 
-    av_buffer_unref(&hook_lua_ctx->ctx_ref);
+    av_buffer_unref(&schedule_lua_ctx->ctx_ref);
 }
 
-#define LUA_CREATE_HOOK_FN(ev_name, target_ctx, type_flags)                    \
-    AVBufferRef *ev_name = sp_event_create(hook_lua_event_cb,                  \
-                                           hook_lua_event_free,                \
-                                           sizeof(HookLuaEventCtx),            \
+#define LUA_CREATE_SCHEDULE_EVENT(ev_name, target_ctx, type_flags)             \
+    AVBufferRef *ev_name = sp_event_create(schedule_lua_event_cb,              \
+                                           schedule_lua_event_free,            \
+                                           sizeof(ScheduleLuaEventCtx),        \
                                            NULL,                               \
                                            type_flags,                         \
                                            (target_ctx),                       \
@@ -243,7 +243,7 @@ static void hook_lua_event_free(void *callback_ctx, void *ctx, void *dep_ctx)
                                                                                \
     LUA_SET_CLEANUP(ev_name);                                                  \
                                                                                \
-    HookLuaEventCtx *ev_name ## _ctx = av_buffer_get_opaque(ev_name);          \
+    ScheduleLuaEventCtx *ev_name ## _ctx = av_buffer_get_opaque(ev_name);      \
                                                                                \
     ev_name ## _ctx->lctx = sp_lua_create_thread(ctx->lua, (target_ctx));      \
     ev_name ## _ctx->flags = (type_flags);                                     \
@@ -300,13 +300,13 @@ int sp_lua_table_to_event_flags(void *ctx, lua_State *L, SPEventType *dst)
     return 0;
 }
 
-static int lua_generic_hook(lua_State *L)
+static int lua_generic_schedule(lua_State *L)
 {
     int err = 0;
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
     AVBufferRef *obj_ref = lua_touserdata(L, lua_upvalueindex(2));
 
-    LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "hook")
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(obj_ref->data), "schedule")
 
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
@@ -362,26 +362,28 @@ static int lua_generic_hook(lua_State *L)
 
     if (flags & SP_EVENT_CTRL_MASK) {
         luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
-        LUA_ERROR("ctrl: specified on a hook function: %s!", av_err2str(AVERROR(EINVAL)));
+        LUA_ERROR("ctrl: specified on a scheduled function: %s!",
+                  av_err2str(AVERROR(EINVAL)));
     } else if (!(flags & SP_EVENT_ON_MASK)) {
         luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
-        LUA_ERROR("No event specified to hook function on: %s!", av_err2str(AVERROR(EINVAL)));
+        LUA_ERROR("No event specified to a schedule function on: %s!",
+                  av_err2str(AVERROR(EINVAL)));
     }
 
     /* Its a user event, we do not want to deduplicate */
     flags |= SP_EVENT_FLAG_UNIQUE;
 
     /* Create the event */
-    LUA_CREATE_HOOK_FN(hook_event, obj_ref->data, flags)
+    LUA_CREATE_SCHEDULE_EVENT(schedule_event, obj_ref->data, flags)
 
     /* Give the event to the corresponding ctrl function */
-    err = fn(obj_ref, flags | SP_EVENT_CTRL_NEW_EVENT, hook_event);
+    err = fn(obj_ref, flags | SP_EVENT_CTRL_NEW_EVENT, schedule_event);
     if (err < 0)
         LUA_ERROR("Unable to add event: %s", av_err2str(err));
 
-    sp_bufferlist_append_noref(ctx->ext_buf_refs, hook_event);
+    sp_bufferlist_append_noref(ctx->ext_buf_refs, schedule_event);
 
-    void *contexts[] = { ctx, hook_event };
+    void *contexts[] = { ctx, schedule_event };
     static const struct luaL_Reg lua_fns[] = {
         { "destroy", lua_event_destroy },
         { "await", lua_event_await },
@@ -416,21 +418,21 @@ static int lua_interface_create_selection(lua_State *L)
 
     SPEventType type = SP_EVENT_ON_DESTROY | SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_UNIQUE;
 
-    /* Create hook event */
-    LUA_CREATE_HOOK_FN(hook_event, iface_ref->data, type)
+    /* Create schedule event */
+    LUA_CREATE_SCHEDULE_EVENT(schedule_event, iface_ref->data, type)
 
-    hook_event_ctx->ctx_ref = sp_interface_highlight_win(iface_ref,
-                                                       PROJECT_NAME " region selection",
-                                                       hook_event);
+    schedule_event_ctx->ctx_ref = sp_interface_highlight_win(iface_ref,
+                                                             PROJECT_NAME " region selection",
+                                                             schedule_event);
 
-    int err = sp_eventlist_add_signal(ctx, ctx->ext_buf_refs, hook_event,
+    int err = sp_eventlist_add_signal(ctx, ctx->ext_buf_refs, schedule_event,
                                       SP_EVENT_FLAG_DEPENDENCY, 0);
     if (err < 0) {
-        av_buffer_unref(&hook_event);
+        av_buffer_unref(&schedule_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(err));
     }
 
-    void *contexts[] = { ctx, hook_event };
+    void *contexts[] = { ctx, schedule_event };
     static const struct luaL_Reg lua_fns[] = {
         { "destroy", lua_event_destroy },
         { "await", lua_event_await },
@@ -504,7 +506,7 @@ static int lua_create_muxer(lua_State *L)
     void *contexts[] = { ctx, mctx_ref };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
-        { "hook", lua_generic_hook },
+        { "schedule", lua_generic_schedule },
         { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
@@ -588,7 +590,7 @@ static int lua_create_encoder(lua_State *L)
     void *contexts[] = { ctx, ectx_ref };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
-        { "hook", lua_generic_hook },
+        { "schedule", lua_generic_schedule },
         { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
@@ -645,7 +647,7 @@ static int lua_create_io(lua_State *L)
     void *contexts[] = { ctx, entry };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
-        { "hook", lua_generic_hook },
+        { "schedule", lua_generic_schedule },
         { "link", sp_lua_generic_link },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },
@@ -781,7 +783,7 @@ static int lua_create_filter(lua_State *L)
     void *contexts[] = { ctx, fctx_ref };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
-        { "hook", lua_generic_hook },
+        { "schedule", lua_generic_schedule },
         { "link", sp_lua_generic_link },
         { "command", lua_filter_command },
         { "destroy", lua_generic_destroy },
@@ -854,7 +856,7 @@ static int lua_create_filtergraph(lua_State *L)
     void *contexts[] = { ctx, fctx_ref };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
-        { "hook", lua_generic_hook },
+        { "schedule", lua_generic_schedule },
         { "link", sp_lua_generic_link },
         { "command", lua_filtergraph_command },
         { "destroy", lua_generic_destroy },
@@ -1328,18 +1330,18 @@ static int lua_prompt(lua_State *L)
                            SP_EVENT_FLAG_UNIQUE;
 
     /* Create the event */
-    LUA_CREATE_HOOK_FN(hook_event, ctx->cli, flags)
+    LUA_CREATE_SCHEDULE_EVENT(schedule_event, ctx->cli, flags)
 
     /* Give the event to the CLI subsystem */
-    ret = sp_cli_prompt_event(ctx->cli, hook_event, lua_tostring(L, -1));
+    ret = sp_cli_prompt_event(ctx->cli, schedule_event, lua_tostring(L, -1));
     if (ret < 0) {
-        sp_event_unref_expire(&hook_event);
+        sp_event_unref_expire(&schedule_event);
         LUA_ERROR("Unable to add event: %s!", av_err2str(ret));
     }
 
-    sp_bufferlist_append_noref(ctx->ext_buf_refs, hook_event);
+    sp_bufferlist_append_noref(ctx->ext_buf_refs, schedule_event);
 
-    void *contexts[] = { ctx, hook_event };
+    void *contexts[] = { ctx, schedule_event };
     static const struct luaL_Reg lua_fns[] = {
         { "destroy", lua_event_destroy },
         { "await", lua_event_await },

@@ -37,7 +37,7 @@ function main(...)
             priv_options = { dump_info = true, low_latency = false },
         })
     muxer_a.link(encoder_a)
-    muxer_a.hook("stats", muxer_stats)
+    muxer_a.schedule("stats", muxer_stats)
 
     tx.commit()
 

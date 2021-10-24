@@ -95,6 +95,7 @@ int sp_log_set_status(const char *status, enum SPStatusFlags flags);
 void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started));
 
 /* Context level */
+enum SPLogLevel sp_log_get_ctx_lvl(const char *component);
 int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl);
 int sp_log_set_ctx_lvl_str(const char *component, const char *lvl);
 

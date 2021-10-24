@@ -605,21 +605,21 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
     pthread_mutex_lock(&list->lock);
     num_events = list->entries_num;
 
-#if 0
-    char *fstrs = sp_event_flags_to_str(type);
+    if (sp_log_get_ctx_lvl(sp_class_get_name(ctx)) >= SP_LOG_TRACE) {
+        char *fstrs = sp_event_flags_to_str(type);
+        sp_log(ctx, SP_LOG_DEBUG, "Dispatching (%s), list contains %i events", fstrs, num_events);
+        av_free(fstrs);
+        for (int i = 0; i < num_events; i++) {
 
-    sp_log(ctx, SP_LOG_WARN, "Dispatching %i events (%s)\n", num_events, fstrs);
-    av_free(fstrs);
-    for (int i = 0; i < num_events; i++) {
-
-        SPEvent *event = (SPEvent *)list->entries[i]->data;
-        char *fstr = sp_event_flags_to_str(event->type);
-        sp_log(ctx, SP_LOG_WARN, "    %lu - %s!!!%s%s\n", event->id, fstr,
-               (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) ? " signalling" : "",
-               (list->priv_flags[i] & SP_BUF_PRIV_RUNNING) ? " running" : "");
-        av_free(fstr);
+            SPEvent *event = (SPEvent *)list->entries[i]->data;
+            char *fstr = sp_event_flags_to_str(event->type);
+            sp_log(ctx, SP_LOG_DEBUG, "\n    id:%lu %s%s%s", event->id, fstr,
+                   (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) ? " | signalling" : "",
+                   (list->priv_flags[i] & SP_BUF_PRIV_RUNNING) ? " | running" : "");
+            av_free(fstr);
+        }
+        sp_log(ctx, SP_LOG_DEBUG, "\n");
     }
-#endif
 
     list->dispatched |= type;
     list->queued &= ~type;

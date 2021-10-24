@@ -601,6 +601,23 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl)
     return sp_log_set_ctx_lvl(component, res);
 }
 
+enum SPLogLevel sp_log_get_ctx_lvl(const char *component)
+{
+    pthread_mutex_lock(&log_ctx.levels_lock);
+
+    enum SPLogLevel lvl = log_ctx.log_levels[0].lvl;
+
+    for (int i = 1; i < log_ctx.num_log_levels; i++) {
+        if (!strcmp(log_ctx.log_levels[i].component, component)) {
+            lvl = log_ctx.log_levels[i].lvl;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&log_ctx.levels_lock);
+    return lvl;
+}
+
 int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
 {
     pthread_mutex_lock(&log_ctx.levels_lock);

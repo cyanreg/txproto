@@ -41,6 +41,7 @@ typedef struct MuxingContext {
     const char *out_format;
     int low_latency;
     int dump_info;
+    char *dump_sdp_file;
 
     AVBufferRef *src_packets;
 

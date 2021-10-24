@@ -25,7 +25,7 @@
 
 typedef struct MuxEncoderMap {
     intptr_t encoder_id;
-    int stream_id;
+    int stream_index;
     AVRational time_base;
     char *name;
 } MuxEncoderMap;
@@ -54,6 +54,26 @@ static void *muxing_thread(void *arg)
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
+
+    if (ctx->dump_sdp_file) {
+        char sdp_data[16384];
+        err = av_sdp_create(&ctx->avf, 1, sdp_data, sizeof(sdp_data));
+        if (err < 0) {
+            sp_log(ctx, SP_LOG_WARN, "Unable to create an SDP: %s!\n", av_err2str(err));
+        } else {
+            FILE *sdp_file = av_fopen_utf8(ctx->dump_sdp_file, "w");
+            if (!sdp_file) {
+                sp_log(ctx, SP_LOG_WARN, "Unable to open SDP file for writing: %s!\n",
+                av_err2str(AVERROR(errno)));
+            } else {
+                size_t sdp_len = strlen(sdp_data) + 1;
+                fwrite(sdp_data, sdp_len, 1, sdp_file);
+                fclose(sdp_file);
+                sp_log(ctx, SP_LOG_INFO, "SDP file written to %s (%lu bytes)\n",
+                       ctx->dump_sdp_file, sdp_len);
+            }
+        }
+    }
 
     if (ctx->dump_info)
         av_dump_format(ctx->avf, 0, ctx->out_url, 1);
@@ -90,28 +110,28 @@ static void *muxing_thread(void *arg)
 
         MuxEncoderMap *src_enc = enc_id_lookup(ctx, (intptr_t)in_pkt->opaque);
         AVRational src_tb = src_enc->time_base;
-        int sid = src_enc->stream_id;
+        int sidx = src_enc->stream_index;
 
-        in_pkt->stream_index = sid;
+        in_pkt->stream_index = sidx;
 
-        AVRational dst_tb = ctx->avf->streams[sid]->time_base;
-        SlidingWinCtx *rate_c = &sctx_rate[sid];
-        SlidingWinCtx *latency_c = &sctx_latency[sid];
+        AVRational dst_tb = ctx->avf->streams[sidx]->time_base;
+        SlidingWinCtx *rate_c = &sctx_rate[sidx];
+        SlidingWinCtx *latency_c = &sctx_latency[sidx];
 
-        rate[sid] = sp_sliding_win(rate_c, in_pkt->size, in_pkt->pts, src_tb, src_tb.den, 0) << 3;
+        rate[sidx] = sp_sliding_win(rate_c, in_pkt->size, in_pkt->pts, src_tb, src_tb.den, 0) << 3;
 
-        latency[sid]  = av_gettime_relative() - ctx->epoch;
-        latency[sid] -= av_rescale_q(in_pkt->pts, src_tb, av_make_q(1, 1000000));
-        latency[sid]  = sp_sliding_win(latency_c, latency[sid], in_pkt->pts, src_tb, src_tb.den, 1);
+        latency[sidx]  = av_gettime_relative() - ctx->epoch;
+        latency[sidx] -= av_rescale_q(in_pkt->pts, src_tb, av_make_q(1, 1000000));
+        latency[sidx]  = sp_sliding_win(latency_c, latency[sidx], in_pkt->pts, src_tb, src_tb.den, 1);
 
         /* Rescale timestamps */
         in_pkt->pts = av_rescale_q(in_pkt->pts, src_tb, dst_tb);
         in_pkt->dts = av_rescale_q(in_pkt->dts, src_tb, dst_tb);
         in_pkt->duration = av_rescale_q(in_pkt->duration, src_tb, dst_tb);
 
-        sp_log(ctx, SP_LOG_TRACE, "Got packet from \"%s\", sid = %i, out pts = %f, out_dts = %f\n",
+        sp_log(ctx, SP_LOG_TRACE, "Got packet from \"%s\", sidx = %i, out pts = %f, out_dts = %f\n",
                src_enc->name,
-               sid,
+               sidx,
                av_q2d(dst_tb) * in_pkt->pts,
                av_q2d(dst_tb) * in_pkt->dts);
 
@@ -188,7 +208,7 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
 
     MuxEncoderMap *enc_map_entry = NULL;
     for (int i = 0; i < ctx->enc_map_size; i++) {
-        if (ctx->enc_map[i].encoder_id == sp_class_get_id(enc) && (ctx->enc_map[i].stream_id == INT_MAX)) {
+        if (ctx->enc_map[i].encoder_id == sp_class_get_id(enc)) {
             enc_map_entry = &ctx->enc_map[i];
             break;
         }
@@ -211,7 +231,7 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
         ctx->stream_has_link = av_realloc(ctx->stream_has_link, sizeof(*ctx->stream_has_link) * (ctx->avf->nb_streams + 1));
         ctx->stream_codec_id = av_realloc(ctx->stream_codec_id, sizeof(*ctx->stream_codec_id) * (ctx->avf->nb_streams + 1));
  
-        AVStream *st = avformat_new_stream(ctx->avf, NULL);
+        AVStream *st = avformat_new_stream(ctx->avf, enc->codec);
         if (!st) {
             sp_log(ctx, SP_LOG_ERROR, "Unable to allocate stream!\n");
             err = AVERROR(ENOMEM);
@@ -224,10 +244,9 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
             goto end;
         }
 
-        st->id = ctx->avf->nb_streams - 1;
         st->time_base = enc->avctx->time_base;
 
-        enc_map_entry->stream_id = st->id;
+        enc_map_entry->stream_index = ctx->avf->nb_streams - 1;
         enc_map_entry->name = av_strdup(enc->name);
         enc_map_entry->time_base = enc->avctx->time_base;
 
@@ -313,6 +332,8 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
         if ((tmp_val = dict_get(event->opts, "dump_info")))
             if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
                 ctx->dump_info = 1;
+        if ((tmp_val = dict_get(event->opts, "sdp_file")))
+            ctx->dump_sdp_file = av_strdup(tmp_val);
         if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
             long int len = strtol(tmp_val, NULL, 10);
             if (len < 0)
@@ -418,6 +439,7 @@ static void muxer_free(void *opaque, uint8_t *data)
     av_buffer_unref(&ctx->src_packets);
     av_free(ctx->stream_has_link);
     av_free(ctx->stream_codec_id);
+    av_free(ctx->dump_sdp_file);
 
     if (sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_INIT)) {
         int err = av_write_trailer(ctx->avf);

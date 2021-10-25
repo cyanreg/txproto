@@ -24,6 +24,53 @@
 #include "lua_generic_api.h"
 #include "lua_api_utils.h"
 
+typedef struct EncoderModeNegotiate {
+    int need_global;
+} EncoderModeNegotiate;
+
+static int encoder_mode_event_cb(AVBufferRef *event_ref, void *callback_ctx,
+                                 void *ctx, void *dep_ctx, void *data)
+{
+    EncoderModeNegotiate *mode_ctx = callback_ctx;
+    EncodingContext *enc = ctx;
+
+    if (mode_ctx->need_global)
+        enc->need_global_header = 1;
+
+    return 0;
+}
+
+static int encoder_mode_negotiate(AVBufferRef *enc_ref, int want_global)
+{
+    EncodingContext *enc = (EncodingContext *)enc_ref->data;
+
+    if (sp_eventlist_has_dispatched(enc->events, SP_EVENT_ON_CONFIG))
+        return AVERROR(EINVAL);
+
+    if (!enc->mode_negotiate_event) {
+        AVBufferRef *event = sp_event_create(encoder_mode_event_cb, NULL,
+                                             sizeof(EncoderModeNegotiate),
+                                             NULL, SP_EVENT_FLAG_ONESHOT |
+                                                   SP_EVENT_ON_CONFIG,
+                                             enc, NULL);
+        if (!event)
+            return AVERROR(ENOMEM);
+
+        int ret = sp_encoder_ctrl(enc_ref, SP_EVENT_CTRL_NEW_EVENT, event);
+        if (ret < 0) {
+            av_buffer_unref(&event);
+            return ret;
+        }
+
+        enc->mode_negotiate_event = event;
+    }
+
+    EncoderModeNegotiate *neg_ctx = av_buffer_get_opaque(enc->mode_negotiate_event);
+    neg_ctx->need_global |= !!want_global;
+
+    return 0;
+}
+
 #define GENERIC_CTRL(ref, flags, arg)                                               \
     do {                                                                            \
         ctrl_fn fn = get_ctrl_fn(ref->data);                                        \
@@ -277,6 +324,13 @@ int sp_lua_generic_link(lua_State *L)
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_MUXER);
         src_ctrl_fn = sp_encoder_ctrl;
         dst_ctrl_fn = sp_muxer_ctrl;
+
+        MuxingContext *dst_mux_ctx = (MuxingContext *)dst_ref->data;
+        int mux_needs_global = dst_mux_ctx->avf->oformat->flags & AVFMT_GLOBALHEADER;
+
+        err = encoder_mode_negotiate(src_ref, mux_needs_global);
+        if (err != AVERROR(EINVAL) && err < 0)
+            return err;
     } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_VIDEO_SOURCE) ||
                EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_AUDIO_SOURCE)) {
         src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_ENCODER);

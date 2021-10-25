@@ -41,7 +41,8 @@ typedef struct EncodingContext {
     AVBufferRef *src_frames;
     AVBufferRef *dst_packets;
     const AVCodec *codec;
-    int need_global_header; /* Will be forced 0 on config reinit */
+    int need_global_header;
+    AVBufferRef *mode_negotiate_event; /* To negotiate need_global_header */
 
     /* Events */
     SPBufferList *events;

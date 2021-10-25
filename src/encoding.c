@@ -229,6 +229,8 @@ static int context_full_config(EncodingContext *ctx)
     if (err < 0)
         return err;
 
+    av_buffer_unref(&ctx->mode_negotiate_event);
+
     sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
     AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
     if (!conf) {

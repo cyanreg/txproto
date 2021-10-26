@@ -1118,50 +1118,57 @@ static int lua_register_io_cb(lua_State *L)
     int nb_args = lua_gettop(L);
     if (nb_args != 1 && nb_args != 2)
         LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", nb_args);
-    if (nb_args == 2 && !lua_istable(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\" (API names), got \"%s\"!",
+    if (nb_args == 2 && !(lua_istable(L, -1) || lua_isstring(L, -1)))
+        LUA_ERROR("Invalid argument, expected \"string\" (API name) or \"table\" (API name list), got \"%s\"!",
                   lua_typename(L, lua_type(L, -1)));
     if (!lua_isfunction(L, -nb_args))
         LUA_ERROR("Invalid argument, expected \"function\" (callback), got \"%s\"!",
                   lua_typename(L, lua_type(L, -nb_args)));
 
     char **api_list = NULL;
-    if (nb_args == 2) {
+    if (nb_args == 2 && lua_isstring(L, -1)) {
+        api_list = av_malloc(sizeof(*api_list)*20);
+        api_list[0] = av_strdup(lua_tostring(L, -1));
+        api_list[1] = NULL;
+        lua_pop(L, 1);
+    } else if (nb_args == 2) {
         err = lua_parse_table_to_list(L, &api_list);
         if (err < 0)
             LUA_ERROR("Unable to load API list: %s!", av_err2str(err));
         lua_pop(L, 1);
+    }
 
-        for (int i = 0; (api_list && api_list[i]); i++) {
-            int j;
-            for (j = 0; j < sp_compiled_apis_len; j++)
-                if (!strcmp(api_list[i], sp_compiled_apis[j]->name))
-                    break;
-            if (j == sp_compiled_apis_len) {
-                char temp[99] = { 0 };
-                snprintf(temp, sizeof(temp), "%s", api_list[i]);
-                FREE_STR_LIST(api_list);
-                LUA_ERROR("API \"%s\" not found!", temp);
-            }
+    for (int i = 0; (api_list && api_list[i]); i++) {
+        int j;
+        for (j = 0; j < sp_compiled_apis_len; j++)
+            if (!strcmp(api_list[i], sp_compiled_apis[j]->name))
+                break;
+        if (j == sp_compiled_apis_len) {
+            char temp[99] = { 0 };
+            snprintf(temp, sizeof(temp), "%s", api_list[i]);
+            FREE_STR_LIST(api_list);
+            LUA_ERROR("API \"%s\" not found!", temp);
         }
     }
 
     int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL) {
         FREE_STR_LIST(api_list);
-        return 0;
+        LUA_ERROR("Unable to reference %s!", "function");
     }
 
     if (!ctx->io_api_ctx)
-        ctx->io_api_ctx = av_mallocz(sp_compiled_apis_len * sizeof(*ctx->io_api_ctx));
+        ctx->io_api_ctx = av_mallocz(sizeof(*ctx->io_api_ctx)*sp_compiled_apis_len);
 
     /* Initialize I/O APIs */
     int initialized_apis = 0;
     for (int i = 0; i < sp_compiled_apis_len; i++) {
-        if (ctx->io_api_ctx[i])
+        if (ctx->io_api_ctx[i]) {
+            initialized_apis++;
             continue;
+        }
         int found = 0;
-        for (int j = 0; (api_list && !!api_list[j]); j++) {
+        for (int j = 0; (api_list && api_list[j]); j++) {
             if (!strcmp(api_list[j], sp_compiled_apis[i]->name)) {
                 found = 1;
                 break;
@@ -1186,7 +1193,7 @@ static int lua_register_io_cb(lua_State *L)
         FREE_STR_LIST(api_list);
 
         if (api_list)
-            LUA_ERROR("No requested I/O API(s) available of the %i enabled at build time.\n",
+            LUA_ERROR("No requested I/O API(s) available of the %d enabled at build time.\n",
                       sp_compiled_apis_len);
         else
             sp_log(ctx, SP_LOG_WARN, "No I/O APIs available.\n");
@@ -1213,14 +1220,16 @@ static int lua_register_io_cb(lua_State *L)
     source_event_ctx->lua = sp_lua_create_thread(ctx->lua, ctx);
 
     for (int i = 0; i < sp_compiled_apis_len; i++) {
+        if (!ctx->io_api_ctx[i])
+            continue;
         int found = 0;
-        for (int j = 0; (api_list && !!api_list[j]); j++) {
+        for (int j = 0; (api_list && api_list[j]); j++) {
             if (!strcmp(api_list[j], sp_compiled_apis[i]->name)) {
                 found = 1;
                 break;
             }
         }
-        if ((api_list && !found) || !ctx->io_api_ctx[i])
+        if (api_list && !found)
             continue;
 
         /* Add and immediately run the event to signal all devices */

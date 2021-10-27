@@ -51,10 +51,6 @@ typedef struct EncodingContext {
     atomic_int initialized;
     atomic_int running;
 
-    /* Options */
-    int crf;
-    int keyframe_interval;
-
     /* Video options only */
     int width, height;
     enum AVPixelFormat pix_fmt;

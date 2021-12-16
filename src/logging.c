@@ -45,6 +45,14 @@ typedef struct SPComponentLogLevel {
     enum SPLogLevel lvl;
 } SPComponentLogLevel;
 
+typedef struct SPIncompleteLineCache {
+    AVBPrint bpo;
+    AVBPrint bpf;
+    uint32_t id;
+    pthread_t thread;
+    int used;
+} SPIncompleteLineCache;
+
 struct SPLogState {
     struct {
         void *ctx;
@@ -57,24 +65,39 @@ struct SPLogState {
         enum SPStatusFlags lock;
     } status;
 
-    int last_was_newline;
+    int json_file;
+    int json_out;
+    int color_out;
+
+    SPIncompleteLineCache classless_ic;
+    SPIncompleteLineCache *ic;
+    int ic_len;
+    unsigned int ic_alloc;
 
     int64_t time_offset;
 
+    pthread_mutex_t ctx_lock;
     pthread_mutex_t term_lock;
     pthread_mutex_t file_lock;
-    pthread_mutex_t levels_lock;
 
+    SPClass null_class;
     SPClass ffclass;
 
     FILE *log_file;
     SPComponentLogLevel *log_levels;
     int num_log_levels;
 } static log_ctx = {
-    .last_was_newline = 1,
     .term_lock = PTHREAD_MUTEX_INITIALIZER,
     .file_lock = PTHREAD_MUTEX_INITIALIZER,
-    .levels_lock = PTHREAD_MUTEX_INITIALIZER,
+    .ctx_lock = PTHREAD_MUTEX_INITIALIZER,
+
+    .color_out = 1,
+
+    .null_class = (SPClass){
+        .name = "noname",
+        .type = SP_TYPE_NONE,
+        .lock = PTHREAD_MUTEX_INITIALIZER,
+    },
 
     .ffclass = (SPClass){
         .name = "ffmpeg",
@@ -96,6 +119,31 @@ static inline SPClass *get_class(void *ctx)
     sp_assert(s->class->canary != CANARY_PATTERN);
 
     return s->class;
+}
+
+static inline enum SPLogLevel get_component_level_locked(const char *component)
+{
+    for (int i = 0; i < log_ctx.num_log_levels; i++)
+        if (!strcmp(log_ctx.log_levels[i].component, component))
+            return log_ctx.log_levels[i].lvl;
+
+    return INT_MAX;
+}
+
+static inline int decide_print_line(SPClass *class, enum SPLogLevel lvl)
+{
+    enum SPLogLevel global_lvl = log_ctx.log_levels[0].lvl;
+    enum SPLogLevel local_lvl = INT_MAX;
+    enum SPLogLevel parent_lvl = INT_MAX;
+
+    if (class) {
+        local_lvl = get_component_level_locked(class->name);
+        if ((local_lvl == INT_MAX) && class->parent)
+            parent_lvl = get_component_level_locked(sp_class_get_name(class->parent));
+    }
+
+    return local_lvl != INT_MAX ? local_lvl >= lvl :
+           (parent_lvl != INT_MAX ? parent_lvl >= lvl : (global_lvl >= lvl));
 }
 
 static inline const char *get_class_color(SPClass *class)
@@ -124,192 +172,253 @@ static inline const char *get_class_color(SPClass *class)
         return "";
 }
 
-static inline char *build_line(SPClass *class, enum SPLogLevel lvl, int with_color,
-                               char *time_offset_str, unsigned time_offset_str_len,
-                               const char *format, va_list args,
-                               int *ends_in_nl, int last_was_nl)
+static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
+                           int with_color, int cont, int nolog, int64_t time_o,
+                           const char *format, va_list args)
 {
-    AVBPrint bpc;
-    av_bprint_init(&bpc, 256, AV_BPRINT_SIZE_AUTOMATIC);
+    if (!cont) {
+        if (!with_color && !nolog) {
+            if (lvl == SP_LOG_FATAL)
+                av_bprintf(bpc, "(fatal)");
+            else if (lvl == SP_LOG_ERROR)
+                av_bprintf(bpc, "(error)");
+            else if (lvl == SP_LOG_WARN)
+                av_bprintf(bpc, "(warn)");
+            else if (lvl == SP_LOG_VERBOSE)
+                av_bprintf(bpc, "(info)");
+            else if (lvl == SP_LOG_DEBUG)
+                av_bprintf(bpc, "(debug)");
+            else if (lvl == SP_LOG_TRACE)
+                av_bprintf(bpc, "(trace)");
+        }
 
-    if (!with_color) {
-        if (lvl == SP_LOG_FATAL)
-            av_bprintf(&bpc, "(fatal)");
-        else if (lvl == SP_LOG_ERROR)
-            av_bprintf(&bpc, "(error)");
-        else if (lvl == SP_LOG_WARN)
-            av_bprintf(&bpc, "(warn)");
-        else if (lvl == SP_LOG_VERBOSE)
-            av_bprintf(&bpc, "(info)");
-        else if (lvl == SP_LOG_DEBUG)
-            av_bprintf(&bpc, "(debug)");
-        else if (lvl == SP_LOG_TRACE)
-            av_bprintf(&bpc, "(trace)");
-    }
+        if (!nolog)
+            av_bprintf(bpc, "[%.3f%s", time_o/(1000000.0f), class ? "|" : "] ");
 
-    if (last_was_nl)
-        av_bprint_append_data(&bpc, time_offset_str, time_offset_str_len);
-
-    if (class && last_was_nl) {
-        SPClass *parent = get_class(class->parent);
-        if (parent && strlen(class->name))
-            av_bprintf(&bpc, "%s%s%s->%s%s%s]",
-                       with_color ? get_class_color(parent) : "",
-                       parent->name,
-                       with_color ? "\033[0m" : "",
-                       with_color ? get_class_color(class) : "",
-                       class->name,
-                       with_color ? "\033[0m" : "");
-        else
-            av_bprintf(&bpc, "%s%s%s]",
-                       with_color ? get_class_color(class) : "",
-                       strlen(class->name) ? class->name :
-                       parent ? parent->name : "misc",
-                       with_color ? "\033[0m" : "");
-        av_bprint_chars(&bpc, ' ', 1);
-    }
-
-    int colord = ~with_color;
-    if (lvl == SP_LOG_FATAL && ++colord)
-        av_bprintf(&bpc, "\033[1;031m");
-    else if (lvl == SP_LOG_ERROR && ++colord)
-        av_bprintf(&bpc, "\033[1;031m");
-    else if (lvl == SP_LOG_WARN && ++colord)
-        av_bprintf(&bpc, "\033[1;033m");
-    else if (lvl == SP_LOG_VERBOSE && ++colord)
-        av_bprintf(&bpc, "\033[38;5;46m");
-    else if (lvl == SP_LOG_DEBUG && ++colord)
-        av_bprintf(&bpc, "\033[38;5;34m");
-    else if (lvl == SP_LOG_TRACE && ++colord)
-        av_bprintf(&bpc, "\033[38;5;28m");
-
-    int format_ends_with_newline = format[strlen(format) - 1] == '\n';
-    *ends_in_nl = format_ends_with_newline;
-
-    if (with_color && colord) {
-        if (format_ends_with_newline) {
-            char *fmt_copy = av_strdup(format);
-            fmt_copy[strlen(fmt_copy) - 1] = '\0';
-            format = fmt_copy;
+        if (class && !nolog) {
+            SPClass *parent = get_class(class->parent);
+            if (parent && strlen(class->name))
+                av_bprintf(bpc, "%s%s%s->%s%s%s]",
+                           with_color ? get_class_color(parent) : "",
+                           parent->name,
+                           with_color ? "\033[0m" : "",
+                           with_color ? get_class_color(class) : "",
+                           class->name,
+                           with_color ? "\033[0m" : "");
+            else
+                av_bprintf(bpc, "%s%s%s]",
+                           with_color ? get_class_color(class) : "",
+                           strlen(class->name) ? class->name :
+                           parent ? parent->name : "misc",
+                           with_color ? "\033[0m" : "");
+            av_bprint_chars(bpc, ' ', 1);
         }
     }
 
-    av_vbprintf(&bpc, format, args);
-
-    if (with_color && colord) {
-        av_bprintf(&bpc, "\033[0m");
-        if (format_ends_with_newline) {
-            av_bprint_chars(&bpc, '\n', 1);
-            av_free((void *)format);
+    int colored_message = 0;
+    if (with_color) {
+        switch (lvl) {
+        case SP_LOG_FATAL:
+            av_bprintf(bpc, "\033[1;031m");   colored_message = 1; break;
+        case SP_LOG_ERROR:
+            av_bprintf(bpc, "\033[1;031m");   colored_message = 1; break;
+        case SP_LOG_WARN:
+            av_bprintf(bpc, "\033[1;033m");   colored_message = 1; break;
+        case SP_LOG_VERBOSE:
+            av_bprintf(bpc, "\033[38;5;46m"); colored_message = 1; break;
+        case SP_LOG_DEBUG:
+            av_bprintf(bpc, "\033[38;5;34m"); colored_message = 1; break;
+        case SP_LOG_TRACE:
+            av_bprintf(bpc, "\033[38;5;28m"); colored_message = 1; break;
+        default:
+            break;
         }
     }
 
-    char *ret;
-    av_bprint_finalize(&bpc, &ret);
+    av_vbprintf(bpc, format, args);
 
-    return ret;
-}
+    int ends_line = 1;
+    if (bpc->len && av_bprint_is_complete(bpc))
+        ends_line = bpc->str[FFMIN(bpc->len, bpc->size - 1) - 1] == '\n';
 
-static inline enum SPLogLevel get_component_level_locked(const char *component)
-{
-    for (int i = 0; i < log_ctx.num_log_levels; i++)
-        if (!strcmp(log_ctx.log_levels[i].component, component))
-            return log_ctx.log_levels[i].lvl;
+    if (colored_message) {
+        /* Remove newline, if there was one */
+        if (ends_line && bpc->len && av_bprint_is_complete(bpc)) {
+            bpc->str[FFMIN(bpc->len, bpc->size) - 1] = '\0';
+            bpc->len--;
+        }
 
-    return INT_MAX;
-}
+        /* Reset text color */
+        av_bprintf(bpc, "\033[0m");
 
-static inline int decide_print_line(SPClass *class, enum SPLogLevel lvl)
-{
-    pthread_mutex_lock(&log_ctx.levels_lock);
-
-    enum SPLogLevel global_lvl = log_ctx.log_levels[0].lvl;
-    enum SPLogLevel local_lvl = INT_MAX;
-    enum SPLogLevel parent_lvl = INT_MAX;
-
-    if (class) {
-        local_lvl = get_component_level_locked(class->name);
-        if ((local_lvl == INT_MAX) && class->parent)
-            parent_lvl = get_component_level_locked(sp_class_get_name(class->parent));
+        /* Readd new line, if there was one */
+        if (ends_line)
+            av_bprint_chars(bpc, '\n', 1);
     }
 
-    pthread_mutex_unlock(&log_ctx.levels_lock);
-
-    return local_lvl != INT_MAX ? local_lvl >= lvl :
-           (parent_lvl != INT_MAX ? parent_lvl >= lvl : (global_lvl >= lvl));
+    return ends_line;
 }
 
-static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format, va_list args)
+static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
+                     va_list args)
 {
-    int with_color = 1;
-    int print_line = decide_print_line(class, lvl);
-    int log_line = !!log_ctx.log_file;
-    int nl_end, last_nl_end;
-    char *pline = NULL, *lline = NULL;
+    int cont = 0, no_class = 0, ends_line = 1;
+    SPIncompleteLineCache *ic = NULL, *ic_unused = NULL;
+    int nolog = lvl & SP_NOLOG;
+    pthread_t thread = pthread_self();
 
+    lvl &= ~SP_NOLOG;
+    if (nolog && !lvl)
+        lvl = SP_LOG_INFO;
+
+    pthread_mutex_lock(&log_ctx.ctx_lock);
+
+    int print_line = nolog ? 1 : decide_print_line(class, lvl);
+    int json_out = log_ctx.json_out;
+    int json_file = log_ctx.json_file;
+    int with_color = log_ctx.color_out;
+    int log_line = !!log_ctx.log_file && !nolog;
     int64_t time_offset = av_gettime_relative() - log_ctx.time_offset;
-    char time_offset_str[16];
 
-    int time_offset_str_len = snprintf(time_offset_str, sizeof(time_offset_str),
-                                       "[%.3f%s", time_offset/(1000000.0f),
-                                       class ? "|" : "] ");
+    if (!class) {
+        class = &log_ctx.null_class;
+        no_class = 1;
+    }
 
-    /* Lock needed for log_ctx.last_was_newline */
-    pthread_mutex_lock(&log_ctx.term_lock);
+    if (!print_line && !log_line) {
+        pthread_mutex_unlock(&log_ctx.ctx_lock);
+        return;
+    }
 
-    last_nl_end = lvl <= SP_LOG_ERROR ? 1 : log_ctx.last_was_newline;
+    for (int i = 0; i < log_ctx.ic_len; i++) {
+        if (log_ctx.ic[i].used && (class->id == log_ctx.ic[i].id) &&
+            pthread_equal(thread, log_ctx.ic[i].thread)) {
+            ic = &log_ctx.ic[i];
+            cont = 1;
+            break;
+        } else if (!ic_unused && !log_ctx.ic[i].used) {
+            ic_unused = &log_ctx.ic[i];
+        }
+    }
+
+    if (!ic) {
+        if (!ic_unused) {
+            int alloc = 2;
+
+            ic = av_fast_realloc(log_ctx.ic, &log_ctx.ic_alloc,
+                                 (log_ctx.ic_len + alloc) * sizeof(*ic));
+            if (!ic) {
+                pthread_mutex_unlock(&log_ctx.ctx_lock);
+                return;
+            }
+
+            log_ctx.ic = ic;
+
+            ic_unused = &ic[log_ctx.ic_len];
+
+            for (int i = 0; i < alloc; i++) {
+                ic = &log_ctx.ic[log_ctx.ic_len + i];
+                memset(ic, 0, sizeof(*ic));
+                av_bprint_init(&ic->bpo, 32, AV_BPRINT_SIZE_UNLIMITED);
+                av_bprint_init(&ic->bpf, 32, AV_BPRINT_SIZE_UNLIMITED);
+            }
+
+            log_ctx.ic_len += alloc;
+
+            ic = ic_unused;
+        } else {
+            ic = ic_unused;
+        }
+
+        ic->id     = class->id;
+        ic->thread = thread;
+        ic->used   = 1;
+    }
+
+    class = no_class ? NULL : class;
+
+    if (log_line) {
+        ends_line = build_line_norm(class, &ic->bpf, lvl, 0, cont, nolog,
+                                    time_offset, format, args);
+
+        if (ends_line) {
+            pthread_mutex_lock(&log_ctx.file_lock);
+
+            if (av_bprint_is_complete(&ic->bpf))
+                fwrite(ic->bpf.str, FFMIN(ic->bpf.len, ic->bpf.size - 1), 1,
+                       log_ctx.log_file);
+
+            pthread_mutex_unlock(&log_ctx.file_lock);
+        }
+    }
 
     if (print_line) {
-        pline = build_line(class, lvl, with_color,
-                           time_offset_str, time_offset_str_len,
-                           format, args, &nl_end, last_nl_end);
+        AVBPrint *bpc;
+        int reuse_file = log_line && json_out == json_file && !with_color;
 
-        if (pline) {
+        if (reuse_file) {
+            bpc = &ic->bpf;
+        } else {
+            bpc = &ic->bpo;
+            ends_line = build_line_norm(class, bpc, lvl, with_color, cont, nolog,
+                                        time_offset, format, args);
+        }
+
+        if (ends_line) {
+            pthread_mutex_lock(&log_ctx.term_lock);
+
             /* Tell CLI to erase its line */
-            if (log_ctx.prompt.cb && last_nl_end)
+            if (log_ctx.prompt.cb)
                 log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
 
             /* Erase status */
-            if (last_nl_end && log_ctx.status.str) {
+            if (log_ctx.status.str) {
                 for (int i = 0; i < log_ctx.status.lines; i++)
                     printf("\033[2K\033[1F");
                 printf("\033[2K");
             }
 
-            printf("%s", pline);
+            if (av_bprint_is_complete(bpc))
+                fwrite(bpc->str, FFMIN(bpc->len + 1, bpc->size), 1,
+                       lvl == SP_LOG_ERROR ? stderr : stdout);
 
             /* Reprint status */
-            if (nl_end && log_ctx.status.str)
+            if (log_ctx.status.str)
                 printf("%s", log_ctx.status.str);
 
             /* Reprint CLI prompt */
-            if (log_ctx.prompt.cb && nl_end)
+            if (log_ctx.prompt.cb)
                 log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
 
-            /* Update newline state */
-            log_ctx.last_was_newline = nl_end;
+            pthread_mutex_unlock(&log_ctx.term_lock);
         }
     }
 
-    if (log_line) {
-        if (pline && !with_color)
-            SPSWAP(char *, lline, pline);
-        else
-            lline = build_line(class, lvl, 0,
-                               time_offset_str, time_offset_str_len,
-                               format, args, &nl_end, last_nl_end);
+    if (ends_line) {
+        av_bprint_clear(&ic->bpo);
+        av_bprint_clear(&ic->bpf);
+        ic->used = 0;
 
-        if (lline) {
-            pthread_mutex_lock(&log_ctx.file_lock);
-            fprintf(log_ctx.log_file, "%s", lline);
-            pthread_mutex_unlock(&log_ctx.file_lock);
+        /* "Free" if we have more than we'd like and it's the last one. */
+        if (log_ctx.ic_len > 28 && (ic == &log_ctx.ic[log_ctx.ic_len - 1])) {
+            av_bprint_finalize(&ic->bpo, NULL);
+            av_bprint_finalize(&ic->bpf, NULL);
+
+            ic = av_fast_realloc(log_ctx.ic, &log_ctx.ic_alloc,
+                                 (log_ctx.ic_len - 1) * sizeof(*ic));
+            if (ic) {
+                log_ctx.ic = ic;
+                log_ctx.ic_len--;
+            }
+        } else if (ic->bpo.size > 1048576 || ic->bpf.size > 1048576) {
+            av_bprint_finalize(&ic->bpo, NULL);
+            av_bprint_finalize(&ic->bpf, NULL);
+            av_bprint_init(&ic->bpo, 256, AV_BPRINT_SIZE_UNLIMITED);
+            av_bprint_init(&ic->bpf, 256, AV_BPRINT_SIZE_UNLIMITED);
         }
     }
 
-    pthread_mutex_unlock(&log_ctx.term_lock);
-
-    av_free(pline);
-    av_free(lline);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 }
 
 void sp_log(void *classed_ctx, enum SPLogLevel lvl, const char *format, ...)
@@ -318,42 +427,6 @@ void sp_log(void *classed_ctx, enum SPLogLevel lvl, const char *format, ...)
     va_start(args, format);
     SPClass *class = get_class(classed_ctx);
     main_log(class, lvl, format, args);
-    va_end(args);
-}
-
-void sp_log_sync(const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    int nl_end = format[strlen(format) - 1] == '\n';
-
-    pthread_mutex_lock(&log_ctx.term_lock);
-
-    /* Tell CLI to erase its line */
-    if (log_ctx.prompt.cb && log_ctx.last_was_newline)
-        log_ctx.prompt.cb(log_ctx.prompt.ctx, 0);
-
-    /* Erase status */
-    if (log_ctx.last_was_newline && log_ctx.status.str) {
-        for (int i = 0; i < log_ctx.status.lines; i++)
-            printf("\033[2K\033[1F");
-        printf("\033[2K");
-    }
-
-    vfprintf(stdout, format, args);
-
-    /* Reprint status */
-    if (nl_end && log_ctx.status.str)
-        printf("%s", log_ctx.status.str);
-
-    /* Reprint CLI prompt */
-    if (log_ctx.prompt.cb && nl_end)
-        log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
-
-    /* Update newline state */
-    log_ctx.last_was_newline = nl_end;
-
-    pthread_mutex_unlock(&log_ctx.term_lock);
     va_end(args);
 }
 
@@ -484,6 +557,7 @@ const char *sp_class_get_name(void *ctx)
     SPClass *class = get_class(ctx);
     if (!class)
         return NULL;
+
     return class->name;
 }
 
@@ -495,6 +569,7 @@ const char *sp_class_get_parent_name(void *ctx)
         if (parent)
             return parent->name;
     }
+
     return NULL;
 }
 
@@ -503,6 +578,7 @@ uint32_t sp_class_get_id(void *ctx)
     SPClass *class = get_class(ctx);
     if (class)
         return class->id;
+
     return 0x0;
 }
 
@@ -511,6 +587,7 @@ enum SPType sp_class_get_type(void *ctx)
     SPClass *class = get_class(ctx);
     if (class)
         return class->type;
+
     return SP_TYPE_NONE;
 }
 
@@ -603,7 +680,7 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl)
 
 enum SPLogLevel sp_log_get_ctx_lvl(const char *component)
 {
-    pthread_mutex_lock(&log_ctx.levels_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     enum SPLogLevel lvl = log_ctx.log_levels[0].lvl;
 
@@ -614,13 +691,14 @@ enum SPLogLevel sp_log_get_ctx_lvl(const char *component)
         }
     }
 
-    pthread_mutex_unlock(&log_ctx.levels_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
+
     return lvl;
 }
 
 int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
 {
-    pthread_mutex_lock(&log_ctx.levels_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     SPComponentLogLevel *level = NULL;
     for (int i = 0; i < log_ctx.num_log_levels; i++) {
@@ -634,7 +712,7 @@ int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
     if (!level) {
         component = av_strdup(component);
         if (!component) {
-            pthread_mutex_unlock(&log_ctx.levels_lock);
+            pthread_mutex_unlock(&log_ctx.ctx_lock);
             return AVERROR(ENOMEM);
         }
 
@@ -643,7 +721,7 @@ int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
         new_levels = av_realloc(log_ctx.log_levels, new_levels_size);
         if (!new_levels) {
             av_free((char *)component);
-            pthread_mutex_unlock(&log_ctx.levels_lock);
+            pthread_mutex_unlock(&log_ctx.ctx_lock);
             return AVERROR(ENOMEM);
         }
 
@@ -655,7 +733,7 @@ int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
     level->component = (char *)component;
     level->lvl = lvl;
 
-    pthread_mutex_unlock(&log_ctx.levels_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 
     return 0;
 }
@@ -663,7 +741,7 @@ int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl)
 int sp_log_set_file(const char *path)
 {
     int ret = 0;
-    pthread_mutex_lock(&log_ctx.file_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     if (log_ctx.log_file) {
         fflush(log_ctx.log_file);
@@ -674,16 +752,19 @@ int sp_log_set_file(const char *path)
     if (!log_ctx.log_file)
         ret = AVERROR(errno);
 
-    pthread_mutex_unlock(&log_ctx.file_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
+
     return ret;
 }
 
 void sp_log_set_prompt_callback(void *ctx, void (*cb)(void *ctx, int newline_started))
 {
-    pthread_mutex_lock(&log_ctx.term_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
+
     log_ctx.prompt.ctx = ctx;
     log_ctx.prompt.cb = cb;
-    pthread_mutex_unlock(&log_ctx.term_lock);
+
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 }
 
 int sp_log_set_status(const char *status, enum SPStatusFlags flags)
@@ -691,12 +772,14 @@ int sp_log_set_status(const char *status, enum SPStatusFlags flags)
     int status_newlines = 0;
     char *newstatus = NULL;
 
+    pthread_mutex_lock(&log_ctx.ctx_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
 
     if (flags & (SP_STATUS_LOCK | SP_STATUS_UNLOCK)) {
         log_ctx.status.lock = flags & SP_STATUS_LOCK;
     } else if (log_ctx.status.lock) {
         pthread_mutex_unlock(&log_ctx.term_lock);
+        pthread_mutex_unlock(&log_ctx.ctx_lock);
         return 0;
     }
 
@@ -707,6 +790,7 @@ int sp_log_set_status(const char *status, enum SPStatusFlags flags)
     newstatus = av_malloc(status_len + 1 + 1);
     if (!newstatus) {
         pthread_mutex_unlock(&log_ctx.term_lock);
+        pthread_mutex_unlock(&log_ctx.ctx_lock);
         return AVERROR(ENOMEM);
     }
 
@@ -726,6 +810,7 @@ int sp_log_set_status(const char *status, enum SPStatusFlags flags)
         if (err < 0) {
             printf("Error parsing status string: %s!\n", av_err2str(err));
             pthread_mutex_unlock(&log_ctx.term_lock);
+            pthread_mutex_unlock(&log_ctx.ctx_lock);
             av_free(newstatus);
             return err;
         }
@@ -759,13 +844,24 @@ print:
     if (log_ctx.prompt.cb)
         log_ctx.prompt.cb(log_ctx.prompt.ctx, 1);
 
-    log_ctx.last_was_newline = 1;
-
     newstatus = NULL;
 
     pthread_mutex_unlock(&log_ctx.term_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 
     return 0;
+}
+
+void sp_log_set_json_out(int file, int out)
+{
+    pthread_mutex_lock(&log_ctx.ctx_lock);
+
+    if (file > -1)
+        log_ctx.json_file = file;
+    if (out > -1)
+        log_ctx.json_out = out;
+
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 }
 
 int sp_log_init(enum SPLogLevel global_log_level)
@@ -773,9 +869,9 @@ int sp_log_init(enum SPLogLevel global_log_level)
     int ret = 0;
     sp_log_uninit();
 
-    pthread_mutex_lock(&log_ctx.levels_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     log_ctx.log_levels = av_malloc(sizeof(*log_ctx.log_levels));
     if (!log_ctx.log_levels) {
@@ -797,9 +893,10 @@ int sp_log_init(enum SPLogLevel global_log_level)
     av_log_set_callback(log_ff_cb);
 
 end:
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
-    pthread_mutex_unlock(&log_ctx.levels_lock);
+
     return ret;
 }
 
@@ -807,9 +904,15 @@ void sp_log_uninit(void)
 {
     av_log_set_callback(av_log_default_callback);
 
-    pthread_mutex_lock(&log_ctx.levels_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
+    pthread_mutex_lock(&log_ctx.ctx_lock);
+
+    for (int i = 0; i < log_ctx.ic_len; i++) {
+        av_bprint_finalize(&log_ctx.ic[i].bpo, NULL);
+        av_bprint_finalize(&log_ctx.ic[i].bpf, NULL);
+    }
+    av_freep(&log_ctx.ic);
 
     if (log_ctx.log_file) {
         fflush(log_ctx.log_file);
@@ -826,7 +929,7 @@ void sp_log_uninit(void)
     log_ctx.status.lines = 0;
     log_ctx.status.lock = 0;
 
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
-    pthread_mutex_unlock(&log_ctx.levels_lock);
 }

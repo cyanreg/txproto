@@ -142,6 +142,8 @@ int main(int argc, char *argv[])
 
     /* Options */
     int enable_cli = 0;
+    int enable_json_stdout_log = -1;
+    int enable_json_file_log = -1;
     const char *script_name = NULL;
     const char *script_entrypoint = DEFAULT_ENTRYPOINT;
 
@@ -156,7 +158,7 @@ int main(int argc, char *argv[])
 
     /* Options parsing */
     int opt;
-    while ((opt = getopt(argc, argv, "Cvhs:e:r:V:L:")) != -1) {
+    while ((opt = getopt(argc, argv, "hvCs:e:J:r:V:L:")) != -1) {
         switch (opt) {
         case 's':
             script_name = optarg;
@@ -169,6 +171,21 @@ int main(int argc, char *argv[])
             goto end;
         case 'C':
             enable_cli = 1;
+            break;
+        case 'J':
+            if (!strcmp(optarg, "file")) {
+                enable_json_file_log = 1;
+            } else if (!strcmp(optarg, "stdout")) {
+                enable_json_stdout_log = 1;
+            } else if (!strcmp(optarg, "both")) {
+                enable_json_file_log = 1;
+                enable_json_stdout_log = 1;
+            } else {
+                sp_log(ctx, SP_LOG_ERROR, "Invalid JSON log output setting \"%s\", "
+                       "valid syntax is \"file\", \"stdout\" or \"both\"!\n", optarg);
+                err = AVERROR(EINVAL);
+                goto end;
+            }
             break;
         case 'r':
             {
@@ -248,6 +265,8 @@ int main(int argc, char *argv[])
         goto end;
     }
 
+    sp_log_set_json_out(enable_json_file_log, enable_json_stdout_log);
+
     print_version_features(ctx);
     print_ff_libs(ctx);
 
@@ -266,7 +285,7 @@ int main(int argc, char *argv[])
 
     /* Create Lua context */
     err = sp_lua_create_ctx(&ctx->lua, ctx, lua_libs_list);
-    av_free(lua_libs_list);
+    av_freep(&lua_libs_list);
     if (err < 0)
         goto end;
 
@@ -325,6 +344,8 @@ int main(int argc, char *argv[])
         av_usleep(UINT_MAX);
 
 end:
+    av_freep(&lua_libs_list);
+
 #ifdef HAVE_LIBEDIT
     sp_cli_uninit(&ctx->cli);
 #endif

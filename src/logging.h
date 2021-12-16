@@ -60,14 +60,20 @@ enum SPType {
 };
 
 enum SPLogLevel {
-    SP_LOG_QUIET   = -(1 << 0),
-    SP_LOG_FATAL   =  (0 << 0),
-    SP_LOG_ERROR   = +(1 << 0),
-    SP_LOG_WARN    = +(1 << 1),
-    SP_LOG_INFO    = +(1 << 2),
-    SP_LOG_VERBOSE = +(1 << 3),
-    SP_LOG_DEBUG   = +(1 << 4),
-    SP_LOG_TRACE   = +(1 << 5),
+    SP_LOG_QUIET    = -(1 << 0),
+    SP_LOG_FATAL    =  (0 << 0),
+    SP_LOG_ERROR    = +(1 << 0),
+    SP_LOG_WARN     = +(1 << 1),
+    SP_LOG_INFO     = +(1 << 2),
+    SP_LOG_VERBOSE  = +(1 << 3),
+    SP_LOG_DEBUG    = +(1 << 4),
+    SP_LOG_TRACE    = +(1 << 5),
+
+    /* Minimal styling, no recording, for CLI feedback and such */
+    SP_NOLOG        = +(1 << 8),
+    /* List logging */
+    SP_LOG_LIST     = +(1 << 9),
+    SP_LOG_LIST_END = +(1 << 9),
 };
 
 typedef struct SPClass SPClass;
@@ -99,11 +105,11 @@ enum SPLogLevel sp_log_get_ctx_lvl(const char *component);
 int sp_log_set_ctx_lvl(const char *component, enum SPLogLevel lvl);
 int sp_log_set_ctx_lvl_str(const char *component, const char *lvl);
 
+/* JSON output setting, negative to leave as-is */
+void sp_log_set_json_out(int file, int std);
+
 /* Main logging */
 void sp_log(void *ctx, int level, const char *fmt, ...) sp_printf_format(3, 4);
-
-/* Sync-only logging */
-void sp_log_sync(const char *fmt, ...) sp_printf_format(1, 2);
 
 /* Set log file */
 int sp_log_set_file(const char *path);

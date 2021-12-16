@@ -70,9 +70,9 @@ enum SPLogLevel {
     SP_LOG_TRACE    = +(1 << 5),
 
     /* Minimal styling, no recording, for CLI feedback and such */
-    SP_NOLOG        = +(1 << 8),
+    SP_NOLOG        = +(1 << 7),
     /* List logging */
-    SP_LOG_LIST     = +(1 << 9),
+    SP_LOG_LIST     = +(1 << 8),
     SP_LOG_LIST_END = +(1 << 9),
 };
 

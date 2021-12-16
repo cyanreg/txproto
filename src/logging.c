@@ -174,9 +174,9 @@ static inline const char *get_class_color(SPClass *class)
 
 static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
                            int with_color, int cont, int nolog, int64_t time_o,
-                           const char *format, va_list args)
+                           const char *format, va_list args, int list, int list_end)
 {
-    if (!cont) {
+    if (list || list_end || !cont) {
         if (!with_color && !nolog) {
             if (lvl == SP_LOG_FATAL)
                 av_bprintf(bpc, "(fatal)");
@@ -213,6 +213,9 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
                            with_color ? "\033[0m" : "");
             av_bprint_chars(bpc, ' ', 1);
         }
+
+        if ((list || list_end) && cont > 0)
+            av_bprintf(bpc, "    %02i - ", cont);
     }
 
     int colored_message = 0;
@@ -256,7 +259,7 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
             av_bprint_chars(bpc, '\n', 1);
     }
 
-    return ends_line;
+    return list ? 0 : ends_line;
 }
 
 static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
@@ -265,10 +268,12 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
     int cont = 0, no_class = 0, ends_line = 1;
     SPIncompleteLineCache *ic = NULL, *ic_unused = NULL;
     int nolog = lvl & SP_NOLOG;
+    int list_entry = lvl & SP_LOG_LIST;
+    int list_end = lvl & SP_LOG_LIST_END;
     pthread_t thread = pthread_self();
 
-    lvl &= ~SP_NOLOG;
-    if (nolog && !lvl)
+    lvl &= ~(SP_NOLOG | SP_LOG_LIST | SP_LOG_LIST_END);
+    if ((nolog || list_entry || list_end) && !lvl)
         lvl = SP_LOG_INFO;
 
     pthread_mutex_lock(&log_ctx.ctx_lock);
@@ -294,7 +299,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
         if (log_ctx.ic[i].used && (class->id == log_ctx.ic[i].id) &&
             pthread_equal(thread, log_ctx.ic[i].thread)) {
             ic = &log_ctx.ic[i];
-            cont = 1;
+            cont = log_ctx.ic[i].used++;
             break;
         } else if (!ic_unused && !log_ctx.ic[i].used) {
             ic_unused = &log_ctx.ic[i];
@@ -339,7 +344,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
 
     if (log_line) {
         ends_line = build_line_norm(class, &ic->bpf, lvl, 0, cont, nolog,
-                                    time_offset, format, args);
+                                    time_offset, format, args, list_entry, list_end);
 
         if (ends_line) {
             pthread_mutex_lock(&log_ctx.file_lock);
@@ -361,7 +366,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
         } else {
             bpc = &ic->bpo;
             ends_line = build_line_norm(class, bpc, lvl, with_color, cont, nolog,
-                                        time_offset, format, args);
+                                        time_offset, format, args, list_entry, list_end);
         }
 
         if (ends_line) {

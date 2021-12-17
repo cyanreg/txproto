@@ -244,13 +244,13 @@ static int build_line_json(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
         av_bprintf(bpc, "    \"level\": \"%s\",\n", lvl_to_str(lvl));
         av_bprintf(bpc, "    \"component\": \"%s\",\n", class->name);
         av_bprintf(bpc, "    \"component_id\": %u,\n", class->id);
-        av_bprintf(bpc, "    \"component_type\": \"%s\"\n", type_to_string(class->type));
+        av_bprintf(bpc, "    \"component_type\": \"%s\",\n", type_to_string(class->type));
 
         SPClass *parent = get_class(class->parent);
         if (parent) {
             av_bprintf(bpc, "    \"parent\": \"%s\",\n", parent->name);
             av_bprintf(bpc, "    \"parent_id\": %u,\n", parent->id);
-            av_bprintf(bpc, "    \"parent_type\": \"%s\"\n", type_to_string(parent->type));
+            av_bprintf(bpc, "    \"parent_type\": \"%s\",\n", type_to_string(parent->type));
         }
         av_bprintf(bpc, "    \"time_us\": %lu,\n", time_o);
 

@@ -184,8 +184,8 @@ int main(int argc, char *argv[])
                 enable_json_file_log = 1;
                 enable_json_stdout_log = 1;
             } else if (!strcmp(optarg, "none")) {
-                enable_json_file_log = 1;
-                enable_json_stdout_log = 1;
+                enable_json_file_log = 0;
+                enable_json_stdout_log = 0;
             } else {
                 sp_log(ctx, SP_LOG_ERROR, "Invalid JSON log output setting \"%s\", "
                        "valid syntax is \"file\", \"stdout\", \"both\" or \"none\"!\n", optarg);

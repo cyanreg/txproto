@@ -426,7 +426,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
     class = no_class ? NULL : class;
 
     if (log_line) {
-        if (json_out)
+        if (json_file)
             ends_line = build_line_json(class, &ic->bpf, lvl, 0, cont, nolog,
                                         time_offset, format, args, list_entry, list_end,
                                         &ic->list_entry_incomplete, ic->list_id);

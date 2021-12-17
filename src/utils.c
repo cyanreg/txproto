@@ -607,12 +607,17 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
 
     if (sp_log_get_ctx_lvl(sp_class_get_name(ctx)) >= SP_LOG_TRACE) {
         char *fstrs = sp_event_flags_to_str(type);
-        sp_log(ctx, SP_LOG_DEBUG | SP_LOG_LIST, "Dispatching (%s), list contains %i events\n", fstrs, num_events);
+        enum SPLogLevel lvl = num_events ? SP_LOG_LIST : 0;
+
+        sp_log(ctx, SP_LOG_DEBUG | lvl, "Dispatching (%s), list contains %i events\n",
+               fstrs, num_events);
+
         av_free(fstrs);
+
         for (int i = 0; i < num_events; i++) {
             SPEvent *event = (SPEvent *)list->entries[i]->data;
             char *fstr = sp_event_flags_to_str(event->type);
-            enum SPLogLevel lvl = i == num_events - 1 ? SP_LOG_LIST_END : SP_LOG_LIST;
+            lvl = (i == (num_events - 1)) ? SP_LOG_LIST_END : SP_LOG_LIST;
             sp_log(ctx, SP_LOG_DEBUG | lvl, "id:%lu %s%s%s\n", event->id, fstr,
                    (list->priv_flags[i] & SP_BUF_PRIV_SIGNAL) ? " | signalling" : "",
                    (list->priv_flags[i] & SP_BUF_PRIV_RUNNING) ? " | running" : "");

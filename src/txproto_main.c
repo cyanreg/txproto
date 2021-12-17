@@ -76,15 +76,16 @@ static void print_ff_libs(TXMainContext *ctx)
         {"libswresample", LIBSWRESAMPLE_VERSION_INT, swresample_version() },
     };
 
-    sp_log(ctx, SP_LOG_INFO, "FFmpeg library versions:\n");
+    sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "FFmpeg library versions:\n");
 
 #define VER(x) (x) >> 16, (x) >> 8 & 255, (x) & 255
     for (int i = 0; i < SP_ARRAY_ELEMS(libs); i++) {
         const struct lib *l = &libs[i];
-        sp_log(ctx, SP_LOG_INFO, "   %-15s %d.%d.%d", l->name, VER(l->buildv));
+        enum SPLogLevel lvl = i == SP_ARRAY_ELEMS(libs) - 1 ? SP_LOG_LIST_END : SP_LOG_LIST;
+        sp_log(ctx, SP_LOG_INFO | lvl, "   %-15s %d.%d.%d", l->name, VER(l->buildv));
         if (l->buildv != l->runv)
-            sp_log(ctx, SP_LOG_INFO, " (runtime %d.%d.%d)", VER(l->runv));
-        sp_log(ctx, SP_LOG_INFO, "\n");
+            sp_log(ctx, SP_LOG_INFO | lvl, " (runtime %d.%d.%d)", VER(l->runv));
+        sp_log(ctx, SP_LOG_INFO | lvl, "\n");
     }
 #undef VER
 }
@@ -175,14 +176,19 @@ int main(int argc, char *argv[])
         case 'J':
             if (!strcmp(optarg, "file")) {
                 enable_json_file_log = 1;
+                enable_json_stdout_log = 0;
             } else if (!strcmp(optarg, "stdout")) {
+                enable_json_file_log = 0;
                 enable_json_stdout_log = 1;
             } else if (!strcmp(optarg, "both")) {
                 enable_json_file_log = 1;
                 enable_json_stdout_log = 1;
+            } else if (!strcmp(optarg, "none")) {
+                enable_json_file_log = 1;
+                enable_json_stdout_log = 1;
             } else {
                 sp_log(ctx, SP_LOG_ERROR, "Invalid JSON log output setting \"%s\", "
-                       "valid syntax is \"file\", \"stdout\" or \"both\"!\n", optarg);
+                       "valid syntax is \"file\", \"stdout\", \"both\" or \"none\"!\n", optarg);
                 err = AVERROR(EINVAL);
                 goto end;
             }
@@ -234,27 +240,25 @@ int main(int argc, char *argv[])
             sp_log(ctx, SP_LOG_ERROR, "Unrecognized option \'%c\'!\n", optopt);
             err = AVERROR(EINVAL);
         case 'h':
-            sp_log(ctx, SP_LOG_INFO, "Usage info:\n"
-                   "    -s <filename>                 "
-                            "External Lua script name to load\n"
-                   "    -e <entrypoint>               "
-                            "Entrypoint to call into the custom script (default: \""
-                            DEFAULT_ENTRYPOINT "\")\n"
-                   "    -r <string1>,<string2>        "
-                            "Additional comma-separated Lua libraries/packages to load\n"
-                   "    -V <component>=<level>,...    "
-                            "Per-component log level, set \"global\" or leave component out for global\n"
-                   "    -L <filename>                 "
-                            "Logfile destination (warning: produces huge files)\n"
-                   "    -C                            "
-                            "Enable the command line interface\n"
-                   "    -v                            "
-                            "Print program version\n"
-                   "    -h                            "
-                            "Usage help (this)\n"
-                   "    <trailing arguments>          "
-                            "Given directly to the script's entrypoint to interpret\n"
-                   );
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Usage info:\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -s <filename>                 ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "External Lua script name to load\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -e <entrypoint>               ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Entrypoint to call into the custom script (default: \"" DEFAULT_ENTRYPOINT "\")\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -r <string1>,<string2>        ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Additional comma-separated Lua libraries/packages to load\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -V <component>=<level>,...    ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Per-component log level, set \"global\" or leave component out for global\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -L <filename>                 ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Logfile destination (warning: produces huge files)\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -C                            ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Enable the command line interface\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -v                            ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Print program version\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    -h                            ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "Usage help (this)\n");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST, "    <trailing arguments>          ");
+            sp_log(ctx, SP_LOG_INFO | SP_LOG_LIST_END, "Given directly to the script's entrypoint to interpret\n");
             goto end;
         }
     }

@@ -51,6 +51,8 @@ typedef struct SPIncompleteLineCache {
     uint32_t id;
     pthread_t thread;
     int used;
+    int list_entry_incomplete;
+    uint32_t list_id;
 } SPIncompleteLineCache;
 
 struct SPLogState {
@@ -92,6 +94,8 @@ struct SPLogState {
     .ctx_lock = PTHREAD_MUTEX_INITIALIZER,
 
     .color_out = 1,
+    .json_out  = 0,
+    .json_file = 0,
 
     .null_class = (SPClass){
         .name = "noname",
@@ -172,11 +176,84 @@ static inline const char *get_class_color(SPClass *class)
         return "";
 }
 
+static const char *lvl_to_str(enum SPLogLevel lvl)
+{
+    switch (lvl) {
+    case SP_LOG_QUIET:   return "quiet";
+    case SP_LOG_FATAL:   return "fatal";
+    case SP_LOG_ERROR:   return "error";
+    case SP_LOG_WARN:    return "warn";
+    case SP_LOG_INFO:    return "info";
+    case SP_LOG_VERBOSE: return "verbose";
+    case SP_LOG_DEBUG:   return "debug";
+    case SP_LOG_TRACE:   return "trace";
+    default: break;
+    }
+
+    return "unknown";
+}
+
+static int build_line_json(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
+                           int with_color, int cont, int nolog, int64_t time_o,
+                           const char *format, va_list args, int list, int list_end,
+                           int *list_entry_incomplete, uint32_t list_id)
+{
+    if (!(*list_entry_incomplete) && (list || list_end || !cont)) {
+        av_bprintf(bpc, "{\n");
+        av_bprintf(bpc, "    \"level\": \"%s\",\n", lvl_to_str(lvl));
+        av_bprintf(bpc, "    \"component\": \"%s\",\n", class->name);
+        av_bprintf(bpc, "    \"component_id\": %u,\n", class->id);
+        SPClass *parent = get_class(class->parent);
+        if (parent) {
+            av_bprintf(bpc, "    \"parent\": \"%s\",\n", parent->name);
+            av_bprintf(bpc, "    \"parent_id\": %u,\n", parent->id);
+        }
+        av_bprintf(bpc, "    \"time_us\": %lu,\n", time_o);
+
+        if (list || list_end) {
+            av_bprintf(bpc, "    \"part_of\": %u,\n", list_id);
+            av_bprintf(bpc, "    \"part_nb\": %u,\n", cont);
+        }
+
+        av_bprintf(bpc, "    \"message\": \"");
+    }
+
+    AVBPrint tmp;
+    av_bprint_init(&tmp, 128, AV_BPRINT_SIZE_UNLIMITED);
+
+    av_vbprintf(&tmp, format, args);
+
+    char *to_escape;
+    av_bprint_finalize(&tmp, &to_escape);
+
+    av_bprint_escape(bpc, to_escape, "\"",
+                     AV_ESCAPE_MODE_BACKSLASH, AV_ESCAPE_FLAG_STRICT);
+
+    av_free(to_escape);
+
+    int ends_line = 1;
+    if (bpc->len && av_bprint_is_complete(bpc))
+        ends_line = bpc->str[FFMIN(bpc->len, bpc->size - 1) - 1] == '\n';
+
+    if (list || list_end)
+        *list_entry_incomplete = !ends_line;
+
+    if (ends_line) {
+        bpc->str[FFMIN(bpc->len, bpc->size) - 1] = '\0';
+        bpc->len--;
+        av_bprintf(bpc, "\"\n");
+        av_bprintf(bpc, "}\n");
+    }
+
+    return list && !list_end ? 0 : ends_line;
+}
+
 static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
                            int with_color, int cont, int nolog, int64_t time_o,
-                           const char *format, va_list args, int list, int list_end)
+                           const char *format, va_list args, int list, int list_end,
+                           int *list_entry_incomplete, uint32_t list_id)
 {
-    if (list || list_end || !cont) {
+    if (!(*list_entry_incomplete) && (list || list_end || !cont)) {
         if (!with_color && !nolog) {
             if (lvl == SP_LOG_FATAL)
                 av_bprintf(bpc, "(fatal)");
@@ -215,7 +292,7 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
         }
 
         if ((list || list_end) && cont > 0)
-            av_bprintf(bpc, "    %02i - ", cont);
+            av_bprintf(bpc, "    %02i: ", cont);
     }
 
     int colored_message = 0;
@@ -244,6 +321,9 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
     if (bpc->len && av_bprint_is_complete(bpc))
         ends_line = bpc->str[FFMIN(bpc->len, bpc->size - 1) - 1] == '\n';
 
+    if (list || list_end)
+        *list_entry_incomplete = !ends_line;
+
     if (colored_message) {
         /* Remove newline, if there was one */
         if (ends_line && bpc->len && av_bprint_is_complete(bpc)) {
@@ -259,7 +339,7 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
             av_bprint_chars(bpc, '\n', 1);
     }
 
-    return list ? 0 : ends_line;
+    return list && !list_end ? 0 : ends_line;
 }
 
 static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
@@ -326,6 +406,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
                 memset(ic, 0, sizeof(*ic));
                 av_bprint_init(&ic->bpo, 32, AV_BPRINT_SIZE_UNLIMITED);
                 av_bprint_init(&ic->bpf, 32, AV_BPRINT_SIZE_UNLIMITED);
+                ic->list_id = av_get_random_seed();
             }
 
             log_ctx.ic_len += alloc;
@@ -338,13 +419,21 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
         ic->id     = class->id;
         ic->thread = thread;
         ic->used   = 1;
+        ic->list_entry_incomplete = 0;
+        ic->list_id++;
     }
 
     class = no_class ? NULL : class;
 
     if (log_line) {
-        ends_line = build_line_norm(class, &ic->bpf, lvl, 0, cont, nolog,
-                                    time_offset, format, args, list_entry, list_end);
+        if (json_out)
+            ends_line = build_line_json(class, &ic->bpf, lvl, 0, cont, nolog,
+                                        time_offset, format, args, list_entry, list_end,
+                                        &ic->list_entry_incomplete, ic->list_id);
+        else
+            ends_line = build_line_norm(class, &ic->bpf, lvl, 0, cont, nolog,
+                                        time_offset, format, args, list_entry, list_end,
+                                        &ic->list_entry_incomplete, ic->list_id);
 
         if (ends_line) {
             pthread_mutex_lock(&log_ctx.file_lock);
@@ -365,8 +454,14 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
             bpc = &ic->bpf;
         } else {
             bpc = &ic->bpo;
-            ends_line = build_line_norm(class, bpc, lvl, with_color, cont, nolog,
-                                        time_offset, format, args, list_entry, list_end);
+            if (json_out)
+                ends_line = build_line_json(class, bpc, lvl, with_color, cont, nolog,
+                                            time_offset, format, args, list_entry, list_end,
+                                            &ic->list_entry_incomplete, ic->list_id);
+            else
+                ends_line = build_line_norm(class, bpc, lvl, with_color, cont, nolog,
+                                            time_offset, format, args, list_entry, list_end,
+                                            &ic->list_entry_incomplete, ic->list_id);
         }
 
         if (ends_line) {
@@ -403,6 +498,7 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
         av_bprint_clear(&ic->bpo);
         av_bprint_clear(&ic->bpf);
         ic->used = 0;
+        ic->list_entry_incomplete = 0;
 
         /* "Free" if we have more than we'd like and it's the last one. */
         if (log_ctx.ic_len > 28 && (ic == &log_ctx.ic[log_ctx.ic_len - 1])) {
@@ -421,6 +517,8 @@ static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
             av_bprint_init(&ic->bpo, 256, AV_BPRINT_SIZE_UNLIMITED);
             av_bprint_init(&ic->bpf, 256, AV_BPRINT_SIZE_UNLIMITED);
         }
+    } else if (ic->list_entry_incomplete) {
+        ic->used--;
     }
 
     pthread_mutex_unlock(&log_ctx.ctx_lock);

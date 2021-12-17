@@ -176,6 +176,47 @@ static inline const char *get_class_color(SPClass *class)
         return "";
 }
 
+static inline const char *type_to_string(enum SPType type)
+{
+    switch (type) {
+    case SP_TYPE_NONE:         return "none";
+    case SP_TYPE_INTERFACE:    return "interface";
+    case SP_TYPE_CONTEXT:      return "context";
+    case SP_TYPE_EXTERNAL:     return "external";
+    case SP_TYPE_SCRIPT:       return "script";
+
+    case SP_TYPE_AUDIO_SOURCE: return "audio input";
+    case SP_TYPE_AUDIO_SINK:   return "audio output";
+    case SP_TYPE_AUDIO_BIDIR:  return "audio in+out";
+
+    case SP_TYPE_VIDEO_SOURCE: return "video input";
+    case SP_TYPE_VIDEO_SINK:   return "video output";
+    case SP_TYPE_VIDEO_BIDIR:  return "video in+out";
+
+    case SP_TYPE_SUB_SOURCE:   return "subtitle input";
+    case SP_TYPE_SUB_SINK:     return "subtitle output";
+    case SP_TYPE_SUB_BIDIR:    return "subtitle in+out";
+
+    case SP_TYPE_CLOCK_SOURCE: return "clock source";
+    case SP_TYPE_CLOCK_SINK:   return "clock sink";
+
+    case SP_TYPE_FILTER:       return "filter";
+
+    case SP_TYPE_ENCODER:      return "encoder";
+    case SP_TYPE_DECODER:      return "decoder";
+
+    case SP_TYPE_BSF:          return "bsf";
+
+    case SP_TYPE_MUXER:        return "muxer";
+    case SP_TYPE_DEMUXER:      return "demuxer";
+
+    /* zalgofied because this should never happen */
+    default: break;
+    }
+
+    return "û̴̼n̷̡̎̄k̸͍̓͒ṅ̵̨̅ò̷̢̏w̷̙͍͌n̸̩̦̅";
+}
+
 static const char *lvl_to_str(enum SPLogLevel lvl)
 {
     switch (lvl) {
@@ -203,10 +244,13 @@ static int build_line_json(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
         av_bprintf(bpc, "    \"level\": \"%s\",\n", lvl_to_str(lvl));
         av_bprintf(bpc, "    \"component\": \"%s\",\n", class->name);
         av_bprintf(bpc, "    \"component_id\": %u,\n", class->id);
+        av_bprintf(bpc, "    \"component_type\": \"%s\"\n", type_to_string(class->type));
+
         SPClass *parent = get_class(class->parent);
         if (parent) {
             av_bprintf(bpc, "    \"parent\": \"%s\",\n", parent->name);
             av_bprintf(bpc, "    \"parent_id\": %u,\n", parent->id);
+            av_bprintf(bpc, "    \"parent_type\": \"%s\"\n", type_to_string(parent->type));
         }
         av_bprintf(bpc, "    \"time_us\": %lu,\n", time_o);
 
@@ -700,41 +744,7 @@ const char *sp_class_type_string(void *ctx)
     if (!class)
         return NULL;
 
-    switch (class->type) {
-    case SP_TYPE_NONE:         return "none";
-    case SP_TYPE_INTERFACE:    return "interface";
-    case SP_TYPE_CONTEXT:      return "context";
-    case SP_TYPE_EXTERNAL:     return "external";
-    case SP_TYPE_SCRIPT:       return "script";
-
-    case SP_TYPE_AUDIO_SOURCE: return "audio input";
-    case SP_TYPE_AUDIO_SINK:   return "audio output";
-    case SP_TYPE_AUDIO_BIDIR:  return "audio in+out";
-
-    case SP_TYPE_VIDEO_SOURCE: return "video input";
-    case SP_TYPE_VIDEO_SINK:   return "video output";
-    case SP_TYPE_VIDEO_BIDIR:  return "video in+out";
-
-    case SP_TYPE_SUB_SOURCE:   return "subtitle input";
-    case SP_TYPE_SUB_SINK:     return "subtitle output";
-    case SP_TYPE_SUB_BIDIR:    return "subtitle in+out";
-
-    case SP_TYPE_CLOCK_SOURCE: return "clock source";
-    case SP_TYPE_CLOCK_SINK:   return "clock sink";
-
-    case SP_TYPE_FILTER:       return "filter";
-
-    case SP_TYPE_ENCODER:      return "encoder";
-    case SP_TYPE_DECODER:      return "decoder";
-
-    case SP_TYPE_BSF:          return "bsf";
-
-    case SP_TYPE_MUXER:        return "muxer";
-    case SP_TYPE_DEMUXER:      return "demuxer";
-
-    /* zalgofied because this should never happen */
-    default:                   return "û̴̼n̷̡̎̄k̸͍̓͒ṅ̵̨̅ò̷̢̏w̷̙͍͌n̸̩̦̅";
-    }
+    return type_to_string(class->type);
 }
 
 enum SPType sp_avcategory_to_type(AVClassCategory category)

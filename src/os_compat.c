@@ -16,10 +16,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+/* Needed to enable pthread_setname_np extension on Darwin */
+# ifdef __APPLE__
+#  define _DARWIN_C_SOURCE 1
+# endif
+
 #include "os_compat.h"
 #include "utils.h"
 
-#ifdef HAVE_PTHREAD_SETNAME_NP
+#if defined(HAVE_PTHREAD_SETNAME_NP) && !defined(__APPLE__)
 #include <string.h>
 #include <errno.h>
 void sp_set_thread_name_self(const char *name)
@@ -31,6 +36,11 @@ void sp_set_thread_name_self(const char *name)
         trunc_name[15] = '\0';
         pthread_setname_np(self, trunc_name);
     }
+}
+#elif defined(HAVE_PTHREAD_SETNAME_NP) && defined(__APPLE__)
+void sp_set_thread_name_self(const char *name)
+{
+    pthread_setname_np(name);
 }
 #else
 void sp_set_thread_name_self(const char *name)

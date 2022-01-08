@@ -258,9 +258,6 @@ static void destroy_entry(void *opaque, uint8_t *data)
 static void mod_device(LavdCtx *ctx, const AVInputFormat *cur,
                        AVDeviceInfo *dev_info, AVClassCategory category)
 {
-    if (cur && strcmp(cur->name, "fbdev"))
-        return;
-
     const AVCRC *crc_tab = av_crc_get_table(AV_CRC_32_IEEE);
     uint32_t src_crc = av_crc(crc_tab, UINT32_MAX, (void *)cur, sizeof(cur));
 

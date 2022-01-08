@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <pthread.h>
+
 #include "bufferlist.h"
 
 /**

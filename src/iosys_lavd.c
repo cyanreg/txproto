@@ -340,6 +340,12 @@ start:
             continue;
         }
 
+        if (category == AV_CLASS_CATEGORY_NA) {
+            category = (iter == av_input_video_device_next) ?
+                       AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT :
+                       AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT;
+        }
+
         if (!list || (err == AVERROR(ENOSYS))) {
             mod_device(ctx, cur, NULL, category);
             continue;
@@ -363,6 +369,12 @@ start:
 
 static void update_entries(LavdCtx *ctx)
 {
+    iter_sources(ctx, av_input_video_device_next,
+                 AV_CLASS_CATEGORY_NA);
+
+    iter_sources(ctx, av_input_audio_device_next,
+                 AV_CLASS_CATEGORY_NA);
+
     iter_sources(ctx, av_input_video_device_next,
                  AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT);
 

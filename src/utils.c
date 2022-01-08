@@ -832,7 +832,7 @@ SPEventType sp_eventlist_has_queued(SPBufferList *list, SPEventType type)
     return ret;
 }
 
-char *sp_event_flags_to_str(uint64_t flags)
+char *sp_event_flags_to_str(SPEventType flags)
 {
     AVBPrint bp;
     av_bprint_init(&bp, 32, AV_BPRINT_SIZE_UNLIMITED);

@@ -937,10 +937,14 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             sp_lua_lock_interface(lctx);
         }
     } while (ret == LUA_YIELD);
+
     ret = 0;
 
 end:
-    sp_log(lctx, SP_LOG_DEBUG, "Lua thread ended: %s!\n", av_err2str(ret));
+    if (ret < 0)
+        sp_log(lctx, SP_LOG_ERROR, "Lua thread ended with error: %s!\n", av_err2str(ret));
+    else
+        sp_log(lctx, SP_LOG_DEBUG, "Lua thread ended\n");
 
     if (clean_stack) {
         lua_pop(L, nresults);

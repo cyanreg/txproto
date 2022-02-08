@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <stdatomic.h>
+
 #include "events.h"
 #include "utils.h"
 

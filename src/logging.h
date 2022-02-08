@@ -114,6 +114,9 @@ void sp_log(void *ctx, int level, const char *fmt, ...) sp_printf_format(3, 4);
 /* Set log file */
 int sp_log_set_file(const char *path);
 
+/* Enable/disable timestamp/component printing */
+void sp_log_print_ts(int enable);
+
 /* Class allocation */
 int sp_class_alloc(void *ctx, const char *name, enum SPType type, void *parent);
 void sp_class_free(void *ctx);

@@ -70,6 +70,7 @@ struct SPLogState {
     int json_file;
     int json_out;
     int color_out;
+    atomic_int print_ts;
 
     SPIncompleteLineCache classless_ic;
     SPIncompleteLineCache *ic;
@@ -96,6 +97,7 @@ struct SPLogState {
     .color_out = 1,
     .json_out  = 0,
     .json_file = 0,
+    .print_ts = ATOMIC_VAR_INIT(0),
 
     .null_class = (SPClass){
         .name = "noname",
@@ -297,7 +299,8 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
                            const char *format, va_list args, int list, int list_end,
                            int *list_entry_incomplete, uint32_t list_id)
 {
-    if (!(*list_entry_incomplete) && (list || list_end || !cont)) {
+    if (!(*list_entry_incomplete) && (list || list_end || !cont) &&
+        atomic_load(&log_ctx.print_ts)) {
         if (!with_color && !nolog) {
             if (lvl == SP_LOG_FATAL)
                 av_bprintf(bpc, "(fatal)");
@@ -975,6 +978,11 @@ void sp_log_set_json_out(int file, int out)
         log_ctx.json_out = out;
 
     pthread_mutex_unlock(&log_ctx.ctx_lock);
+}
+
+void sp_log_print_ts(int enable)
+{
+    atomic_store(&log_ctx.print_ts, enable);
 }
 
 int sp_log_init(enum SPLogLevel global_log_level)

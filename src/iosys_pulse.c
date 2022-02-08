@@ -39,8 +39,7 @@ enum PulseType {
 };
 
 typedef struct PulseCtx {
-    AVClass *class;
-    int log_lvl_offset;
+    SPClass *class;
 
     pa_context *pa_context;
     pa_threaded_mainloop *pa_mainloop;

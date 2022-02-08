@@ -544,6 +544,7 @@ static void *encoding_thread(void *arg)
             }
 
             out_pkt->opaque = (void *)(intptr_t)sp_class_get_id(ctx);
+            out_pkt->time_base = ctx->avctx->time_base;
 
             sp_log(ctx, SP_LOG_TRACE, "Pushing packet to FIFO, pts = %f\n",
                    av_q2d(ctx->avctx->time_base) * out_pkt->pts);

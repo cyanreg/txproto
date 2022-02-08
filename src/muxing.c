@@ -26,7 +26,6 @@
 typedef struct MuxEncoderMap {
     intptr_t encoder_id;
     int stream_index;
-    AVRational time_base;
     char *name;
 } MuxEncoderMap;
 
@@ -108,8 +107,9 @@ static void *muxing_thread(void *arg)
         if (flush)
             goto send;
 
+        AVRational src_tb = in_pkt->time_base;
+
         MuxEncoderMap *src_enc = enc_id_lookup(ctx, (intptr_t)in_pkt->opaque);
-        AVRational src_tb = src_enc->time_base;
         int sidx = src_enc->stream_index;
 
         in_pkt->stream_index = sidx;
@@ -248,7 +248,6 @@ int sp_muxer_add_stream(MuxingContext *ctx, EncodingContext *enc)
 
         enc_map_entry->stream_index = ctx->avf->nb_streams - 1;
         enc_map_entry->name = av_strdup(enc->name);
-        enc_map_entry->time_base = enc->avctx->time_base;
 
         ctx->stream_has_link[st->id] = 1;
         ctx->stream_codec_id[st->id] = enc->avctx->codec_id;

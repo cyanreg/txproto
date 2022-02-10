@@ -71,6 +71,10 @@ extern const IOSysAPI src_lavd;
 extern const IOSysAPI src_pulse;
 #endif
 
+#ifdef HAVE_XCB
+extern const IOSysAPI src_xcb;
+#endif
+
 #ifdef HAVE_WAYLAND
 extern const IOSysAPI src_wayland;
 #endif
@@ -84,6 +88,9 @@ const IOSysAPI *sp_compiled_apis[] = {
 #endif
 #ifdef HAVE_WAYLAND
     &src_wayland,
+#endif
+#ifdef HAVE_XCB
+    &src_xcb,
 #endif
 };
 

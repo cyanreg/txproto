@@ -65,6 +65,23 @@ if libpulse.found()
     features += ', ' + libpulse.name() + ' ' + libpulse.version()
 endif
 
+# xcb
+have_xcb = false
+libxcb = dependency('xcb', version: '>= 1.14', required: get_option('xcb'))
+if libxcb.found()
+    libxcb_shm = dependency('xcb-shm', version: '>= 1.14', required: get_option('xcb'))
+    libxcb_randr = dependency('xcb-randr', version: '>= 1.14', required: get_option('xcb'))
+    if libxcb_shm.found()
+        dependencies += libxcb
+        dependencies += libxcb_shm
+        dependencies += libxcb_randr
+        conf.set('HAVE_XCB', 1)
+        features += ', ' + 'xcb' + ' ' + libxcb.version()
+        sources += 'iosys_xcb.c'
+        have_xcb = true
+    endif
+endif
+
 # Wayland
 wayland_scanner = find_program('wayland-scanner', required: get_option('wayland'))
 wayland_deps = [ # Reorder with care, wayland_protocols expects them like this
@@ -106,7 +123,8 @@ summary({
 }, section: 'Interface', bool_yn: true)
 
 summary({
-    'libavdevice': libavdevice.found(),
     'pulse': libpulse.found(),
+    'xcb': have_xcb,
     'wayland': have_wayland,
+    'libavdevice': libavdevice.found(),
 }, section: 'I/O systems', bool_yn: true)

@@ -11,6 +11,7 @@ Features
  * Custom first-class capture/output code for minimal overhead:
      * Most feature-complete and accurate Pulseaudio implementation, including isolated client capture
      * Zero-copy Wayland capture via the wlr-export-dmabuf-unstable protocol
+     * Low-overhead X11 capture via XCB/SHM
      * Wayland capture via the wlr-screencopy-unstable protocol (both software or DMA-BUF frames supported)
  * Second-class libavdevice capture/output support
  * Headless operation supported

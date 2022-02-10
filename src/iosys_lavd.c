@@ -226,6 +226,9 @@ static const char *blacklist[] = {
     "sndio",
     "oss",
 #endif
+#ifdef HAVE_XCB
+    "x11grab",
+#endif
 };
 
 static void destroy_entry(void *opaque, uint8_t *data)

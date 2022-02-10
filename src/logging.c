@@ -20,7 +20,6 @@
 
 #include <stdatomic.h>
 #include <libavutil/bprint.h>
-#include <libavutil/crc.h>
 #include <libavutil/dict.h>
 #include <libavutil/time.h>
 #include <libavutil/random_seed.h>
@@ -654,17 +653,10 @@ int sp_class_alloc(void *ctx, const char *name, enum SPType type, void *parent)
         return AVERROR(ENOMEM);
 
     s->class->canary = CANARY_PATTERN;
-    s->class->name = av_strdup(name);
-    s->class->type = type;
+    s->class->name   = av_strdup(name);
+    s->class->type   = type;
     s->class->parent = parent;
-
-    uint32_t id = av_get_random_seed();
-    if (name)
-        id ^= av_crc(av_crc_get_table(AV_CRC_32_IEEE), UINT32_MAX, name, strlen(name));
-
-    id ^= av_crc(av_crc_get_table(AV_CRC_32_IEEE), UINT32_MAX, (void *)ctx, sizeof(void *));
-
-    s->class->id = id;
+    s->class->id     = av_get_random_seed();
 
     pthread_mutex_init(&s->class->lock, NULL);
 

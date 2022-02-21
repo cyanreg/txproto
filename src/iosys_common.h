@@ -79,6 +79,8 @@ typedef struct IOSysEntry {
 
     /* Video specific input properties */
     int scale;
+    int x;
+    int y;
     int width;
     int height;
     AVRational framerate;

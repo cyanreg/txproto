@@ -212,7 +212,7 @@ static void *xcb_thread(void *s)
             goto end;
         }
 
-        fsize = (geo_r->width * geo_r->height * bpp) / 8;
+        fsize = (entry->width * entry->height * bpp) / 8;
 
         err = alloc_buffer_pool(ctx, priv, fsize, &out_buf);
         if (err < 0)
@@ -226,7 +226,7 @@ static void *xcb_thread(void *s)
         seg = (xcb_shm_seg_t)(uintptr_t)av_buffer_pool_buffer_get_opaque(out_buf);
 
         img_c = xcb_shm_get_image(ctx->con, priv->drawable,
-                                  0, 0, geo_r->width, geo_r->height, ~0,
+                                  entry->x, entry->y, entry->width, entry->height, ~0,
                                   XCB_IMAGE_FORMAT_Z_PIXMAP, seg, 0);
         img_r = xcb_shm_get_image_reply(ctx->con, img_c, &xerr);
 
@@ -249,13 +249,13 @@ static void *xcb_thread(void *s)
 
         free(img_r);
 
-        frame->width       = geo_r->width;
-        frame->height      = geo_r->height;
+        frame->width       = entry->width;
+        frame->height      = entry->height;
         frame->format      = pixfmt;
         frame->pts         = av_gettime_relative() - priv->epoch;
         frame->time_base   = AV_TIME_BASE_Q;
         frame->data[0]     = (uint8_t *)out_buf->data;
-        frame->linesize[0] = geo_r->width * bpp / 8;
+        frame->linesize[0] = entry->width * bpp / 8;
         frame->buf[0]      = out_buf;
 
         frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
@@ -492,6 +492,8 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
         priv->root = xscreen;
         entry->framerate = av_make_q(info_r->rate, 1);
         entry->scale = 1;
+        entry->x = mon->x;
+        entry->y = mon->y;
         entry->width = mon->width;
         entry->height = mon->height;
         entry->is_default = !!mon->primary;

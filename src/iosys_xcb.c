@@ -346,7 +346,6 @@ static int xcb_ioctx_ctrl(AVBufferRef *entry, SPEventType ctrl, void *arg)
 static int xcb_init_io(AVBufferRef *ctx_ref, AVBufferRef *entry,
                        AVDictionary *opts)
 {
-    XCBCtx *ctx = (XCBCtx *)ctx_ref->data;
     IOSysEntry *iosys_entry = (IOSysEntry *)entry->data;
     XCBPriv *priv = iosys_entry->api_priv;
 

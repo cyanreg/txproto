@@ -1,8 +1,10 @@
 video_display_id = nil
 
 function io_update_cb(identifier, entry)
-    if video_display_id == nil and entry.type == "display" and entry.default then
-        video_display_id = identifier
+    if video_display_id == nil and entry.type == "display" then
+        if video_display_id == nil or entry.default then
+            video_display_id = identifier
+        end
     end
 end
 
@@ -35,16 +37,19 @@ function main(...)
          This creates an event that can be .destroy()ed to stop it.
          When a callback is registered, this function call will block until
          the callback has been sent for all devices, so no need to .await(). ]]--
-    event = tx.register_io_cb(io_update_cb, { "wayland" })
-    event.destroy()
+    update_event = tx.register_io_cb(io_update_cb)
+    update_event.destroy()
 
-    --[[ Create a GUI interface context. Backedn will be autodetected. ]]--
+    --[[ Create a GUI interface context. Backend will be autodetected. ]]--
     iface = tx.create_interface()
 
-    --[[ Create a selection/highlight context. Takes one argument, a callback
-         which will be called with one argument, a region which may be
-         nil if the user does not make a selection. ]]--
-    event = iface.create_selection(selection_cb)
+    sel_event = nil
+    if iface ~= nil then
+        --[[ Create a selection/highlight context. Takes one argument, a callback
+             which will be called with one argument, a region which may be
+             nil if the user does not make a selection. ]]--
+        sel_event = iface.create_selection(selection_cb)
+    end
 
     --[[ Sets the offset at which all timestamps start at. Should always be
          zero unless you know what you're doing ]]--
@@ -81,9 +86,11 @@ function main(...)
         })
     encoder.link(filter)
 
-    --[[ While waiting for the user to make a selection we inidialized all we
-         need, but now we have no choice but to wait. ]]--
-    event.await()
+    if sel_event ~= nil then
+        --[[ While waiting for the user to make a selection we inidialized all we
+             need, but now we have no choice but to wait. ]]--
+        sel_event.await()
+    end
 
     --[[ If no filename is given, prompt the user to enter one ]]--
     if filename == nil then
@@ -104,10 +111,12 @@ function main(...)
          filter doesn't have a scale option. ]]--
     selection.region.scale = nil
 
-    --[[ Send commands to the crop filter from the filtergraph. This commands
-         set the w, h, x and y options, which coincide with what out region has.
-         Takes in the same options as libavfilter. ]]--
-    filter.command("crop", selection.region)
+    if sel_event ~= nil then
+        --[[ Send commands to the crop filter from the filtergraph. This commands
+             set the w, h, x and y options, which coincide with what out region has.
+             Takes in the same options as libavfilter. ]]--
+        filter.command("crop", selection.region)
+    end
 
     --[[ Runs all events queued. tx.discard() to discard them. ]]--
     tx.commit()

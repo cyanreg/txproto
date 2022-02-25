@@ -24,7 +24,7 @@
 #include <sys/shm.h>
 
 #include <libavutil/time.h>
-#include <libavutil/crc.h>
+#include <libavutil/pixdesc.h>
 
 #include "iosys_common.h"
 #include "utils.h"
@@ -179,8 +179,6 @@ static int pixfmt_from_pixmap_format(XCBCtx *ctx, int depth,
 
     return AVERROR(EINVAL);
 }
-
-#include <libavutil/pixdesc.h>
 
 static void *xcb_thread(void *s)
 {

@@ -388,6 +388,82 @@ static void destroy_entry(void *opaque, uint8_t *data)
     av_free(entry);
 }
 
+static AVRational get_monitor_rate(XCBCtx *ctx, xcb_window_t root,
+                                   const xcb_randr_monitor_info_t *mon, const char *mon_name)
+{
+    xcb_randr_get_screen_resources_cookie_t resources_c;
+    xcb_randr_get_screen_resources_reply_t *resources_r = NULL;
+
+    /* Default rate is 60fps */
+    AVRational rate = av_make_q(60, 1);
+
+    /* Find output for the requested monitor.
+     * We handle only the case with only one output for now. */
+    int outputs = xcb_randr_monitor_info_outputs_length(mon);
+    if (xcb_randr_monitor_info_outputs_length(mon) > 1) {
+        sp_log(ctx, SP_LOG_WARN, "Monitor '%s' has %d outputs. Only one is supported\n",
+               mon_name, outputs);
+        goto end;
+    }
+
+    xcb_randr_output_t output = xcb_randr_monitor_info_outputs(mon)[0];
+
+    /* Get the resources. Resources contains the list of modes and actives CRTCs */
+    resources_c = xcb_randr_get_screen_resources(ctx->con, root);
+    resources_r = xcb_randr_get_screen_resources_reply(ctx->con, resources_c, NULL);
+    if (!resources_r) {
+        sp_log(ctx, SP_LOG_WARN, "Fail to get resources for monitor \"%s\"\n", mon_name);
+        goto end;
+    }
+
+    /* Find the active mode ID for the current monitor */
+    xcb_randr_mode_t active_mode = 0;
+
+    xcb_randr_crtc_t *crtcs = xcb_randr_get_screen_resources_crtcs(resources_r);
+    for (int i = 0; i < xcb_randr_get_screen_resources_crtcs_length(resources_r); i++) {
+        xcb_randr_get_crtc_info_cookie_t crtc_info_c;
+        xcb_randr_get_crtc_info_reply_t *crtc_info_r;
+
+        crtc_info_c = xcb_randr_get_crtc_info(ctx->con, crtcs[i], XCB_CURRENT_TIME);
+        crtc_info_r = xcb_randr_get_crtc_info_reply(ctx->con, crtc_info_c, NULL);
+        if (!crtc_info_r || !crtc_info_r->mode) {
+            free(crtc_info_r);
+            continue;
+        }
+
+        xcb_randr_output_t *crtc_output = xcb_randr_get_crtc_info_outputs(crtc_info_r);
+        if (crtc_output && crtc_output[0] == output)
+            active_mode = crtc_info_r->mode;
+
+        free(crtc_info_r);
+
+        if (active_mode)
+            break;
+    }
+
+    if (!active_mode) {
+        sp_log(ctx, SP_LOG_WARN, "Could not find active mode for monitor \"%s\"\n",
+               mon_name);
+        goto end;
+    }
+
+    xcb_randr_mode_info_t *modes = xcb_randr_get_screen_resources_modes(resources_r);
+    for (int i = 0; i < xcb_randr_get_screen_resources_modes_length(resources_r); i++) {
+        if (active_mode == modes[i].id) {
+            rate = av_make_q(modes[i].dot_clock, modes[i].htotal * modes[i].vtotal);
+
+            sp_log(ctx, SP_LOG_DEBUG, "Found rate %d/%d (%f) for monitor \"%s\"\n",
+                   rate.num, rate.den, av_q2d(rate), mon_name);
+
+            break;
+        }
+    }
+
+end:
+    free(resources_r);
+    return rate;
+}
+
 static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
 {
     xcb_connection_t *con = ctx->con;
@@ -490,7 +566,7 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
                   (entry->framerate.num != info_r->rate);
 
         priv->root = xscreen;
-        entry->framerate = av_make_q(info_r->rate, 1);
+        entry->framerate = get_monitor_rate(ctx, xscreen->root, mon, sp_class_get_name(entry));
         entry->scale = 1;
         entry->x = mon->x;
         entry->y = mon->y;

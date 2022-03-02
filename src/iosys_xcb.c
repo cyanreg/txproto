@@ -443,11 +443,16 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
 			atom_r = xcb_get_atom_name_reply(con, atom_c, 0);
 
             if (atom_r) {
-                const char *name = xcb_get_atom_name_name(atom_r);
+                // xcb strings are not null terminated
+                const char *atom_name = xcb_get_atom_name_name(atom_r);
+                int name_len = xcb_get_atom_name_name_length(atom_r);
+                char *name = strndup(atom_name, name_len);
+
                 const char *old_name = sp_class_get_name(entry);
                 if (old_name)
                     change |= strcmp(name, old_name);
                 sp_class_set_name(entry, name);
+                av_free(name);
                 av_free(atom_r);
             } else {
                 sp_class_set_name(entry, "unknown");

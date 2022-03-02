@@ -415,15 +415,13 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
     for (int i = 0; i < monitors; i++) {
         xcb_randr_monitor_info_t *mon = mon_i.data;
 
-        uint32_t idx = mon_i.index;
-
         int change = 0;
         int new_entry = 0;
         IOSysEntry *entry = NULL;
         XCBPriv *priv = NULL;
         AVBufferRef *entry_ref = sp_bufferlist_ref(ctx->entries,
                                                    sp_bufferlist_iosysentry_by_id,
-                                                   &idx);
+                                                   &mon->name);
 
         if (!entry_ref) {
             entry = av_mallocz(sizeof(*entry));
@@ -478,8 +476,8 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
         if (new_entry) {
             priv->main_ctx = ctx;
 
-            entry->identifier = mon_i.index;
-            entry->api_id = mon_i.index;
+            entry->identifier = mon->name;
+            entry->api_id = mon->name;
             entry->api_priv = priv;
             entry->type = SP_IO_TYPE_VIDEO_DISPLAY;
             entry->frames = sp_frame_fifo_create(entry, 0, 0);

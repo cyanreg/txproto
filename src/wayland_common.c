@@ -112,6 +112,9 @@ static void output_handle_geometry(void *opaque, struct wl_output *wl_output,
     if (!x && !y)
         entry->is_default = 1;
 
+    entry->x = x;
+    entry->y = y;
+
     pthread_mutex_unlock(&main->lock);
 }
 

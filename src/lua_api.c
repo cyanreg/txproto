@@ -1067,6 +1067,8 @@ static int source_event_cb(AVBufferRef *event, void *callback_ctx, void *ctx,
     if (sp_class_get_type(entry) & SP_TYPE_VIDEO_BIDIR) {
         lua_newtable(L);
 
+        SET_OPT_INT(entry->x, "x");
+        SET_OPT_INT(entry->x, "y");
         SET_OPT_INT(entry->width, "width");
         SET_OPT_INT(entry->height, "height");
         SET_OPT_INT(entry->scale, "scale");

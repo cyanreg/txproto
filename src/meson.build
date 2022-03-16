@@ -11,10 +11,6 @@ sources = [
     # Sources
     'iosys_common.c',
 
-    # Outputs
-    'interface.c',
-    'interface_common.c',
-
     # Muxing
     'muxing.c',
 
@@ -51,6 +47,18 @@ if libedit.found()
     sources += 'cli.c'
     conf.set('HAVE_LIBEDIT', 1)
     features += ', ' + libedit.name() + ' ' + libedit.version()
+endif
+
+# libplacebo + vulkan
+libplacebo = dependency('libplacebo', version: '>= 3.120.0', required: get_option('interface'))
+vulkan = dependency('vulkan', version: '>= 1.1', required: get_option('interface'))
+have_interface = libplacebo.found() and vulkan.found()
+if have_interface
+    dependencies += libplacebo
+    dependencies += vulkan
+    sources += 'interface.c'
+    sources += 'interface_common.c'
+    conf.set('HAVE_INTERFACE', 1)
 endif
 
 # libavdevice
@@ -105,8 +113,12 @@ if have_wayland
     dependencies += wayland_deps.get(3)
     dependencies += wayland_deps.get(4)
     sources += 'iosys_wayland.c'
-    sources += 'interface_wayland.c'
     sources += 'wayland_common.c'
+
+    if have_interface
+        sources += 'interface_wayland.c'
+    endif
+
     conf.set('HAVE_WAYLAND', 1)
     features += ', ' + 'wayland' + ' ' + wayland_deps.get(0).version()
 
@@ -126,6 +138,7 @@ executable('txproto',
 summary({
     'CLI': libedit.found(),
     'Wayland': have_wayland,
+    'Vulkan GUI': have_interface,
 }, section: 'Interface', bool_yn: true)
 
 summary({

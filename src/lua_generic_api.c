@@ -16,7 +16,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#ifdef HAVE_INTERFACE
 #include "interface_common.h"
+#endif
+
 #include "iosys_common.h"
 #include "encoding.h"
 #include "decoding.h"
@@ -116,8 +119,10 @@ static ctrl_fn get_ctrl_fn(void *ctx)
         return sp_demuxer_ctrl;
     case SP_TYPE_FILTER:
         return sp_filter_ctrl;
+#ifdef HAVE_INTERFACE
     case SP_TYPE_INTERFACE:
         return sp_interface_ctrl;
+#endif
     case SP_TYPE_AUDIO_SOURCE:
     case SP_TYPE_AUDIO_SINK:
     case SP_TYPE_AUDIO_BIDIR:
@@ -188,8 +193,10 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
             return ((EncodingContext *)ctx)->dst_packets;
         else
             return ((EncodingContext *)ctx)->src_frames;
+#ifdef HAVE_INTERFACE
     case SP_TYPE_INTERFACE:
         return sp_interface_get_fifo(ctx);
+#endif
     case SP_TYPE_DECODER:
         if (out)
             return ((DecodingContext *)ctx)->dst_frames;
@@ -432,6 +439,7 @@ int sp_lua_generic_link(lua_State *L)
         dst_filt_pad = av_strdup(dst_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
         dst_ctrl_fn = sp_filter_ctrl;
+#ifdef HAVE_INTERFACE
     } else if (EITHER(obj1, obj2, SP_TYPE_INTERFACE, SP_TYPE_FILTER)) {
         src_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
@@ -448,6 +456,7 @@ int sp_lua_generic_link(lua_State *L)
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
         src_ctrl_fn = ((IOSysEntry *)src_ref->data)->ctrl;
         dst_ctrl_fn = sp_interface_ctrl;
+#endif
     } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_DECODER)) {
         src_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);

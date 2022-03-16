@@ -29,7 +29,10 @@
 #include "encoding.h"
 #include "decoding.h"
 #include "filtering.h"
+
+#ifdef HAVE_INTERFACE
 #include "interface_common.h"
+#endif
 
 #include "lua_generic_api.h"
 #include "lua_api_utils.h"
@@ -402,6 +405,7 @@ static int lua_generic_schedule(lua_State *L)
     return 1;
 }
 
+#ifdef HAVE_INTERFACE
 static int lua_interface_create_display(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -499,6 +503,7 @@ static int lua_create_interface(lua_State *L)
 
     return 1;
 }
+#endif
 
 static int lua_create_muxer(lua_State *L)
 {
@@ -1646,7 +1651,9 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
     { "create_decoder", lua_create_decoder },
     { "create_filter", lua_create_filter },
     { "create_filtergraph", lua_create_filtergraph },
+#ifdef HAVE_INTERFACE
     { "create_interface", lua_create_interface },
+#endif
 
     { "set_epoch", lua_set_epoch },
 

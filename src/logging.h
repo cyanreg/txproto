@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <libavutil/log.h>
 
 enum SPType {

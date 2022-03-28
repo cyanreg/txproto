@@ -1413,8 +1413,9 @@ static int lua_dump_chunk(lua_State *L)
     int base64 = 0;
 
     if (nb_args == 2) {
-
-
+        GET_OPT_BOOL(gzip, "gzip");
+        GET_OPT_BOOL(strip, "strip");
+        GET_OPT_BOOL(base64, "base64");
         lua_pop(L, 1);
     }
 
@@ -1422,7 +1423,7 @@ static int lua_dump_chunk(lua_State *L)
     size_t data_len;
     err = sp_lua_write_chunk(ctx->lua, &data, &data_len, gzip, strip, base64);
     if (err < 0)
-        LUA_ERROR("Unable to write function as binary: %s!\n", av_err2str(err));
+        LUA_ERROR("Unable to write function as binary: %s!", av_err2str(err));
 
     lua_pushlstring(L, (const char *)data, data_len);
     av_free(data);
@@ -1526,6 +1527,7 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
 
     { "prompt", lua_prompt },
 
+    { "dump", lua_dump_chunk },
     { "load", lua_load_chunk },
 
     { "api_version", lua_api_version },

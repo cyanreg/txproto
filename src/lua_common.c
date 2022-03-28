@@ -173,7 +173,7 @@ out:
         fclose(lw->out.file);
         av_freep(&lw->out.data);
         ret = ret < 0 ? ret : lw->out.written;
-    } else if (*buf && *len) {
+    } else if (buf && len) {
         *buf = lw->out.data;
         *len = lw->out.len;
         ret = ret < 0 ? ret : lw->out.len;

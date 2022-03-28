@@ -311,9 +311,11 @@ static int lua_generic_schedule(lua_State *L)
     if (lua_gettop(L) != 2)
         LUA_ERROR("Invalid number of arguments, expected 2, got %i!", lua_gettop(L));
     if (!lua_isfunction(L, -1))
-        LUA_ERROR("Invalid argument, expected \"function\" (callback), got \"%s\"!", lua_typename(L, lua_type(L, -1)));
+        LUA_ERROR("Invalid argument, expected \"function\" (callback), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
     if (!lua_isstring(L, -2) && !lua_istable(L, -2))
-        LUA_ERROR("Invalid argument, expected \"string\" or \"table\" (flags), got \"%s\"!", lua_typename(L, lua_type(L, -2)));
+        LUA_ERROR("Invalid argument, expected \"string\" or \"table\" (flags), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -2)));
 
     /* ref pops the item off the stack! */
     int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -611,7 +613,8 @@ static int lua_create_io(lua_State *L)
     if (num_args != 1 && num_args != 2)
         LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", num_args);
     if (num_args == 2 && !lua_istable(L, -1))
-        LUA_ERROR("Invalid argument, expected \"table\" (options), got \"%s\"!", lua_typename(L, lua_type(L, -1)));
+        LUA_ERROR("Invalid argument, expected \"table\" (options), got \"%s\"!",
+                  lua_typename(L, lua_type(L, -1)));
     if (!lua_islightuserdata(L, -num_args))
         LUA_ERROR("Invalid argument, expected \"lightuserdata\" (identifier), got \"%s\"!",
                   lua_typename(L, lua_type(L, -num_args)));
@@ -972,8 +975,8 @@ static int lua_set_epoch(lua_State *L)
 
         lua_getupvalue(L, 3, 2);
         if (!lua_isuserdata(L, -1))
-            LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\"[upvalue].\"userdata\", got \"%s\"!",
-                      lua_typename(L, lua_type(L, -1)));
+            LUA_ERROR("Invalid argument, expected \"table\"[0].\"function\"[upvalue].\"userdata\", "
+                      "got \"%s\"!", lua_typename(L, lua_type(L, -1)));
 
         AVBufferRef *obj = lua_touserdata(L, -1);
 
@@ -1121,8 +1124,8 @@ static int lua_register_io_cb(lua_State *L)
     if (nb_args != 1 && nb_args != 2)
         LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", nb_args);
     if (nb_args == 2 && !(lua_istable(L, -1) || lua_isstring(L, -1)))
-        LUA_ERROR("Invalid argument, expected \"string\" (API name) or \"table\" (API name list), got \"%s\"!",
-                  lua_typename(L, lua_type(L, -1)));
+        LUA_ERROR("Invalid argument, expected \"string\" (API name) or \"table\" "
+                  "(API name list), got \"%s\"!", lua_typename(L, lua_type(L, -1)));
     if (!lua_isfunction(L, -nb_args))
         LUA_ERROR("Invalid argument, expected \"function\" (callback), got \"%s\"!",
                   lua_typename(L, lua_type(L, -nb_args)));

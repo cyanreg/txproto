@@ -400,6 +400,32 @@ static int lua_generic_schedule(lua_State *L)
     return 1;
 }
 
+static int lua_interface_create_display(lua_State *L)
+{
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+    AVBufferRef *iface_ref = lua_touserdata(L, lua_upvalueindex(2));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(iface_ref->data), "create_display")
+
+    if (lua_gettop(L))
+        LUA_ERROR("Invalid number of arguments, expected 0, got %i!", lua_gettop(L));
+
+    AVBufferRef *ref = sp_interface_main_win(iface_ref, PROJECT_NAME " display");
+    if (!ref)
+        LUA_ERROR("Unable to create %s!\n", "display");
+
+    void *contexts[] = { ctx, ref };
+    static const struct luaL_Reg lua_fns[] = {
+        { "link", sp_lua_generic_link },
+        { "destroy", lua_event_destroy },
+        { NULL, NULL },
+    };
+
+    LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
+
+    return 1;
+}
+
 static int lua_interface_create_selection(lua_State *L)
 {
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
@@ -461,6 +487,7 @@ static int lua_create_interface(lua_State *L)
 
     void *contexts[] = { ctx, interface_ref };
     static const struct luaL_Reg lua_fns[] = {
+        { "create_display", lua_interface_create_display },
         { "create_selection", lua_interface_create_selection },
         { "destroy", lua_generic_destroy },
         { NULL, NULL },

@@ -22,13 +22,17 @@
 #include <vulkan/vulkan.h>
 
 #include "fifo_frame.h"
+#include "utils.h"
 
 int sp_interface_init(AVBufferRef **s);
 
+int sp_interface_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg);
+
+AVBufferRef *sp_interface_main_win(AVBufferRef *ref, const char *title);
+AVBufferRef *sp_interface_get_fifo(void *s);
+
 AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
                                         AVBufferRef *event);
-
-int interface_send_fifo_to_main(void *s, AVBufferRef *fifo);
 
 enum MouseStyle {
     MSTYLE_NONE = 0,

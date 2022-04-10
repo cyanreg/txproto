@@ -16,6 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "interface_common.h"
 #include "iosys_common.h"
 #include "encoding.h"
 #include "muxing.h"
@@ -110,6 +111,8 @@ static ctrl_fn get_ctrl_fn(void *ctx)
         return sp_muxer_ctrl;
     case SP_TYPE_FILTER:
         return sp_filter_ctrl;
+    case SP_TYPE_INTERFACE:
+        return sp_interface_ctrl;
     case SP_TYPE_AUDIO_SOURCE:
     case SP_TYPE_AUDIO_SINK:
     case SP_TYPE_AUDIO_BIDIR:
@@ -176,6 +179,8 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
             return ((EncodingContext *)ctx)->dst_packets;
         else
             return ((EncodingContext *)ctx)->src_frames;
+    case SP_TYPE_INTERFACE:
+        return sp_interface_get_fifo(ctx);
     default:
         sp_assert(0); /* Should never happen */
         return NULL;
@@ -236,6 +241,21 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
     } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_ENCODER)) {
         sp_assert(dst_fifo && src_fifo);
+
+        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+    } else if ((s_type == SP_TYPE_FILTER) && (d_type == SP_TYPE_INTERFACE)) {
+        if (!dst_fifo) {
+            sp_log(dst_ctx, SP_LOG_VERBOSE, "Unable to get FIFO from interface, unsupported!\n");
+            return AVERROR(EINVAL);
+        }
+
+        return sp_map_fifo_to_pad((FilterContext *)src_ctx, dst_fifo,
+                                  cb_ctx->src_filt_pad, 1);
+    } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_INTERFACE)) {
+        if (!dst_fifo) {
+            sp_log(dst_ctx, SP_LOG_VERBOSE, "Unable to get FIFO from interface, unsupported!\n");
+            return AVERROR(EINVAL);
+        }
 
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
     } else {
@@ -358,6 +378,12 @@ int sp_lua_generic_link(lua_State *L)
         dst_filt_pad = av_strdup(dst_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
         dst_ctrl_fn = sp_filter_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_INTERFACE, SP_TYPE_FILTER)) {
+        src_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
+        src_filt_pad = av_strdup(src_pad_name);
+        src_ctrl_fn = sp_filter_ctrl;
+        dst_ctrl_fn = sp_interface_ctrl;
     } else {
         LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",
                   sp_class_get_name(obj1->data), sp_class_type_string(obj1->data),

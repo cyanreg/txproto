@@ -27,6 +27,7 @@
 #include <libplacebo/shaders/icc.h>
 #include <libplacebo/utils/libav.h>
 
+#include "ctrl_template.h"
 #include "interface_common.h"
 #include "utils.h"
 #include "logging.h"
@@ -67,6 +68,10 @@ typedef struct InterfaceWindowCtx {
 
     struct {
         AVBufferRef *fifo;
+        int have_last;
+        struct pl_frame last;
+        double last_dar;
+        pl_tex tex[4];
     } main_win;
 
     /* State */
@@ -74,7 +79,6 @@ typedef struct InterfaceWindowCtx {
     int width;
     int height;
     float scale;
-    AVFrame *last_frame;
 
     /* Windowing system context */
     void *wctx;
@@ -113,7 +117,7 @@ typedef struct InterfaceCtx {
     } placebo;
 } InterfaceCtx;
 
-//#include "interface_main.h"
+#include "interface_main.h"
 #include "interface_highlight.h"
 
 /* Do not call from interface, call win->main->sys->surf_destroy instead */
@@ -122,16 +126,21 @@ static void destroy_win(void *wctx)
     InterfaceWindowCtx *win = wctx;
     pthread_mutex_lock(&win->lock);
 
+    pl_unmap_avframe(win->pl_gpu, &win->main_win.last);
+    for (int i = 0; i < 4; i++)
+        pl_tex_destroy(win->pl_gpu, &win->main_win.tex[i]);
+
     pl_tex_destroy(win->pl_gpu, &win->highlight.region);
     pl_swapchain_destroy(&win->pl_swap);
     pl_renderer_destroy(&win->pl_renderer);
 
-    av_frame_free(&win->last_frame);
     av_buffer_unref(&win->frames_ref);
     av_buffer_unref(&win->device_ref);
 
     pthread_mutex_unlock(&win->lock);
     pthread_mutex_destroy(&win->lock);
+
+    sp_class_free(win);
 }
 
 static void state_win(void *wctx, int is_fs, float scale)
@@ -178,7 +187,7 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     win->cursor.x     = INT32_MIN;
     win->cursor.y     = INT32_MIN;
     win->main         = ctx;
-    win->width        = win->width ? win->width :-1;
+    win->width        = win->width ? win->width : -1;
     win->height       = win->height ? win->height : -1;
     win->scale        = 1.0f;
     win->device_ref   = av_buffer_ref(ctx->device_ref);
@@ -253,51 +262,85 @@ static int common_windows_init(InterfaceCtx *ctx, InterfaceWindowCtx *win,
     return 0;
 }
 
-/*
-static int create_window(InterfaceCtx *ctx, InterfaceWindowCtx *win,
-                         InterfaceWindowCtx *main, const char *title,
-                         int init_w, int init_h,
-                         void *in_frames, enum SurfaceType type)
+AVBufferRef *sp_interface_get_fifo(void *s)
 {
-    void *ref_wctx = NULL;
-    AVHWDeviceContext *ref_data = (AVHWDeviceContext*)ctx->device_ref->data;
-    AVVulkanDeviceContext *hwctx = ref_data->hwctx;
+    InterfaceWindowCtx *win = s;
+    return win->main_win.fifo;
+}
 
-    win->root         = main;
+static int interface_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
+                                   void *_ctx, void *dep_ctx, void *data)
+{
+    int err;
+    SPCtrlTemplateCbCtx *event = callback_ctx;
+    InterfaceWindowCtx *win = _ctx;
 
-
-    switch (type) {
-    case STYPE_MAIN:
-        win->cb.mouse_mov_cb = mouse_move_main;
-        win->cb.input        = win_input_main;
-        win->cb.render       = render_main;
-        break;
-    case STYPE_OVERLAY:
-        if (!main || main->type != STYPE_MAIN) {
-            sp_log(ctx, SP_LOG_ERROR, "Invalid reference window for overlay!\n");
-            return AVERROR(EINVAL);
+    if (event->ctrl & SP_EVENT_CTRL_START) {
+        err = sp_eventlist_dispatch(win, win->events, SP_EVENT_ON_CONFIG, NULL);
+        if (err < 0)
+            return err;
+        err = sp_eventlist_dispatch(win, win->events, SP_EVENT_ON_INIT, NULL);
+        if (err < 0)
+            return err;
+    } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
+    } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        const char *tmp_val = NULL;
+        if ((tmp_val = dict_get(event->opts, "fifo_size"))) {
+            long int len = strtol(tmp_val, NULL, 10);
+            if (len < 0)
+                sp_log(win, SP_LOG_ERROR, "Invalid fifo size \"%s\"!\n", tmp_val);
+            else
+                sp_frame_fifo_set_max_queued(win->main_win.fifo, len);
         }
-        ref_wctx = main->wctx;
-        break;
-    case STYPE_HIGHLIGHT:
-        break;
+    } else {
+        return AVERROR(ENOTSUP);
     }
 
     return 0;
 }
 
-static int interface_create_main_win(InterfaceCtx *ctx, InterfaceWindowCtx *win,
-                                     const char *title, int init_w, int init_h)
+int sp_interface_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
-    return create_window(ctx, win, NULL, title, init_w, init_h, NULL, STYPE_MAIN);
+    InterfaceWindowCtx *win = (InterfaceWindowCtx *)ctx_ref->data;
+    return sp_ctrl_template(win, win->events, 0x0,
+                            interface_ioctx_ctrl_cb, ctrl, arg);
 }
 
-static int interface_create_highlight_win(InterfaceCtx *ctx, InterfaceWindowCtx *win,
-                                          const char *title)
+AVBufferRef *sp_interface_main_win(AVBufferRef *ref, const char *title)
 {
-    return create_window(ctx, win, NULL, title, -1, -1, NULL, STYPE_HIGHLIGHT);
+    InterfaceCtx *ctx = (InterfaceCtx *)ref->data;
+
+    AVBufferRef *win_ref = av_buffer_allocz(sizeof(InterfaceWindowCtx));
+    InterfaceWindowCtx *win = (InterfaceWindowCtx *)win_ref->data;
+
+    int err = sp_class_alloc(win, title, SP_TYPE_INTERFACE, ctx);
+    if (err < 0) {
+        av_buffer_unref(&win_ref);
+        return NULL;
+    }
+
+    win->main_win.fifo = sp_frame_fifo_create(win->main, 1, 0x0);
+    if (!win->main_win.fifo) {
+        av_buffer_unref(&win_ref);
+        sp_class_free(win);
+        return NULL;
+    }
+
+    win->type             = STYPE_MAIN;
+    win->cb.mouse_mov_cb  = mouse_move_main;
+    win->cb.input         = win_input_main;
+    win->cb.render        = render_main;
+
+    win->width            = 1920;
+    win->height           = 1080;
+
+    common_windows_init(ctx, win, title ? title : NULL);
+
+    /* Signal to the window system we're ready to render */
+    ctx->sys->surf_done(win->wctx);
+
+    return win_ref;
 }
-*/
 
 AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
                                         AVBufferRef *event)
@@ -326,19 +369,6 @@ AVBufferRef *sp_interface_highlight_win(AVBufferRef *ref, const char *title,
     ctx->sys->surf_done(win->wctx);
 
     return win_ref;
-}
-
-int interface_send_fifo_to_main(void *s, AVBufferRef *fifo)
-{
-    InterfaceCtx *ctx = s;
-
-    pthread_mutex_lock(&ctx->main_win.lock);
-
-//    ctx->main_win.main_win.fifo = sp_frame_fifo_tap(fifo, 1);
-
-    pthread_mutex_unlock(&ctx->main_win.lock);
-
-    return 0;
 }
 
 static void log_cb_pl(void *ctx, enum pl_log_level level, const char *msg)

@@ -241,7 +241,6 @@ end:
 static int render_highlight(void *wctx)
 {
     int ret = 0;
-    AVFrame *in_f = NULL;
     InterfaceWindowCtx *win = wctx;
     pthread_mutex_lock(&win->lock);
 
@@ -325,21 +324,18 @@ static int render_highlight(void *wctx)
     pl_render_image(win->pl_renderer, &src_frame, &target, &render_params);
 
 finish:
-    pl_swapchain_submit_frame(win->pl_swap);
-    if (!ret)
-        pl_swapchain_swap_buffers(win->pl_swap);
+    if (!(ret = pl_swapchain_submit_frame(win->pl_swap)))
+        sp_log(win->main, SP_LOG_ERROR, "Could not submit swapchain frame!\n");
 
-    /* Replace last frame if different */
-    if (!ret && in_f && (!win->last_frame || (win->last_frame->pts != in_f->pts))) {
-        av_frame_free(&win->last_frame);
-        win->last_frame = in_f;
+    if (ret) {
+        pl_swapchain_swap_buffers(win->pl_swap);
+        win->is_dirty = 1;
     }
 
-    ret = !ret ? 1 : ret;
+    ret = !ret ? AVERROR(EINVAL) : 0;
 
 end:
-    win->is_dirty = 1;
-
     pthread_mutex_unlock(&win->lock);
+
     return ret;
 }

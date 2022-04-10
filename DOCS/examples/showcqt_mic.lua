@@ -13,43 +13,21 @@ function main(...)
     tx.set_epoch(0)
 
     source_mic = tx.create_io(audio_mic_id, {
-            buffer_ms = 8,
+            buffer_ms = 2,
         })
 
     filter_av = tx.create_filtergraph({
-            graph = "showcqt=r=60:s=1920x550:count=8:axisfile=data\\\\:'" .. axis_img,
-            priv_options = { dump_graph = false },
+            graph = "showcqt=r=60:s=1920x1080:count=8:axisfile=data\\\\:'" .. axis_img,
+            priv_options = { dump_graph = false, fifo_size = 1 },
         })
     filter_av.link(source_mic)
 
-    encoder_a = tx.create_encoder({
-            encoder = "libopus",
-            options = {
-                b = 10^3 --[[ Kbps ]] * 128,
-                application = "audio",
-                frame_duration = 120,
-                vbr = "on",
-            },
-        })
-    encoder_a.link(source_mic)
+    iface = tx.create_interface()
 
-    encoder_v = tx.create_encoder({
-            encoder = "rawvideo",
-        })
-    encoder_v.link(filter_av, { src_pad = "vid" })
+    display = iface.create_display()
 
-    muxer_a = tx.create_muxer({
-            out_url = "rec.opus",
-            priv_options = { dump_info = true, low_latency = true },
-        })
-    muxer_a.link(encoder_a)
 
-    muxer_v = tx.create_muxer({
-            out_url = "/dev/null",
-            out_format = "sdl2",
-            priv_options = { dump_info = true, low_latency = true },
-        })
-    muxer_v.link(encoder_v)
+    filter_av.link(display)
 
     tx.commit()
 

@@ -136,6 +136,9 @@ int main(int argc, char *argv[])
         return err;
     }
 
+    /* Print timestamps in logs */
+    sp_log_print_ts(1);
+
     ctx->events = sp_bufferlist_new();
     ctx->ext_buf_refs = sp_bufferlist_new();
     ctx->epoch_value = ATOMIC_VAR_INIT(0);
@@ -340,9 +343,6 @@ int main(int argc, char *argv[])
 
         sp_lua_unlock_interface(ctx->lua, 0);
     }
-
-    /* Print timestamps in logs */
-    sp_log_print_ts(1);
 
     /* We weren't told to exit or anything, so...
      * In the future, maybe we should put an event loop here to process

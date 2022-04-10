@@ -359,13 +359,13 @@ int sp_lua_generic_link(lua_State *L)
         dst_ctrl_fn = sp_encoder_ctrl;
     } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_FILTER)) {
         src_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
-        dst_ref  = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
         src_filt_pad = av_strdup(src_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
         dst_ctrl_fn = sp_encoder_ctrl;
     } else if (EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_VIDEO_SOURCE) ||
                EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_AUDIO_SOURCE)) {
-        src_ref  = PICK_REF_INV(obj1, obj2, SP_TYPE_FILTER);
+        src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_FILTER);
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
         dst_filt_pad = av_strdup(dst_pad_name);
         src_ctrl_fn = ((IOSysEntry *)src_ref->data)->ctrl;
@@ -383,6 +383,11 @@ int sp_lua_generic_link(lua_State *L)
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
         src_filt_pad = av_strdup(src_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
+        dst_ctrl_fn = sp_interface_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_INTERFACE, SP_TYPE_VIDEO_SOURCE)) {
+        src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_INTERFACE);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
+        src_ctrl_fn = ((IOSysEntry *)src_ref->data)->ctrl;
         dst_ctrl_fn = sp_interface_ctrl;
     } else {
         LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",

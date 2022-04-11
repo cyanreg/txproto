@@ -261,9 +261,9 @@ static void destroy_entry(void *opaque, uint8_t *data)
 static void mod_device(LavdCtx *ctx, const AVInputFormat *cur,
                        AVDeviceInfo *dev_info, AVClassCategory category)
 {
+    const char *name_src = !dev_info ? cur->name : dev_info->device_name;
     const AVCRC *crc_tab = av_crc_get_table(AV_CRC_32_IEEE);
-    uint32_t src_crc = av_crc(crc_tab, UINT32_MAX, (void *)cur, sizeof(cur));
-
+    uint32_t src_crc = av_crc(crc_tab, UINT32_MAX, name_src, strlen(name_src));
     uint32_t idx = sp_iosys_gen_identifier(ctx, src_crc, category);
 
     IOSysEntry *entry = NULL;
@@ -276,7 +276,6 @@ static void mod_device(LavdCtx *ctx, const AVInputFormat *cur,
         if (!entry)
             return;
 
-        const char *name_src = !dev_info ? cur->name : dev_info->device_name;
         const char *desc_src = !dev_info ? cur->long_name : dev_info->device_description;
 
         entry->desc = av_strdup(desc_src);
@@ -328,8 +327,9 @@ static void iter_sources(LavdCtx *ctx, const AVInputFormat *(*iter)(const AVInpu
 start:
     while ((cur = iter(cur))) {
         AVDeviceInfoList *list = NULL;
+        AVClassCategory dev_cat = cur->priv_class->category;
 
-        if (cur->priv_class->category != category)
+        if (dev_cat != category)
             continue;
 
         for (int i = 0; i < SP_ARRAY_ELEMS(blacklist); i++)
@@ -337,20 +337,20 @@ start:
                 goto start;
 
         int err = avdevice_list_input_sources(cur, NULL, NULL, &list);
-        if ((err && (err != AVERROR(ENOSYS)))) {
-            sp_log(ctx, SP_LOG_DEBUG, "Unable to retrieve device list for source \"%s\": %s\n",
+        if (((err < 0) && (err != AVERROR(ENOSYS)))) {
+            sp_log(ctx, SP_LOG_ERROR, "Unable to retrieve device list for source \"%s\": %s\n",
                    cur->name, av_err2str(err));
             continue;
         }
 
-        if (category == AV_CLASS_CATEGORY_NA) {
-            category = (iter == av_input_video_device_next) ?
-                       AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT :
-                       AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT;
+        if (dev_cat == AV_CLASS_CATEGORY_NA) {
+            dev_cat = (iter == av_input_video_device_next) ?
+                      AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT :
+                      AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT;
         }
 
         if (!list || (err == AVERROR(ENOSYS))) {
-            mod_device(ctx, cur, NULL, category);
+            mod_device(ctx, cur, NULL, dev_cat);
             continue;
         }
 
@@ -363,7 +363,7 @@ start:
 
         for (int i = 0; i < nb_devs; i++) {
             AVDeviceInfo *info = list->devices[i];
-            mod_device(ctx, cur, info, category);
+            mod_device(ctx, cur, info, dev_cat);
         }
 
         avdevice_free_list_devices(&list);

@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#define USE_LAVU 0
+
 static enum MouseStyle mouse_move_main(void *wctx, int x, int y)
 {
     InterfaceWindowCtx *win = wctx;
@@ -50,9 +52,84 @@ static int win_input_main(void *wctx, uint64_t val)
     return 0;
 }
 
+#if USE_LAVU
+static int get_frames_ref(InterfaceWindowCtx *win, AVFrame *in_f)
+{
+    int err = 0;
+    AVBufferRef *input_frames_ref = NULL;
+    AVHWFramesContext *hwfc = NULL, *in_hwfc = NULL;
+    AVVulkanFramesContext *vkfc;
+
+    if (win->frames_ref)
+        hwfc = (AVHWFramesContext *)win->frames_ref->data;
+
+    if (in_f->hw_frames_ctx) {
+        input_frames_ref = in_f->hw_frames_ctx;
+        in_hwfc = (AVHWFramesContext *)input_frames_ref->data;
+    }
+
+    if (hwfc && in_hwfc) {
+        if ((in_hwfc->width == hwfc->width) && (in_hwfc->height == hwfc->height) &&
+            (in_hwfc->sw_format == hwfc->sw_format))
+            return 0;
+    } else if (hwfc) {
+        if ((in_f->width == hwfc->width) && (in_f->height == hwfc->height) &&
+            (in_f->format == hwfc->sw_format))
+            return 0;
+    }
+
+    if (win->frames_ref)
+        av_buffer_unref(&win->frames_ref);
+
+    if (input_frames_ref) {
+        err = av_hwframe_ctx_create_derived(&win->frames_ref, AV_PIX_FMT_VULKAN,
+                                            win->device_ref, input_frames_ref, 0);
+        if (err < 0)
+            sp_log(win->main, SP_LOG_WARN, "Could not derive hardware frames context: %s!\n",
+                   av_err2str(err));
+        else
+            return 0;
+    }
+
+    win->frames_ref = av_hwframe_ctx_alloc(win->device_ref);
+    if (!win->frames_ref)
+        return AVERROR(ENOMEM);
+
+    hwfc = (AVHWFramesContext *)win->frames_ref->data;
+    hwfc->format = AV_PIX_FMT_VULKAN;
+
+    if (in_hwfc) {
+        hwfc->sw_format = in_hwfc->sw_format;
+        hwfc->width     = in_hwfc->width;
+        hwfc->height    = in_hwfc->height;
+    } else {
+        hwfc->sw_format = in_f->format;
+        hwfc->width     = in_f->width;
+        hwfc->height    = in_f->height;
+    }
+
+    vkfc = (AVVulkanFramesContext *)hwfc->hwctx;
+
+    vkfc->flags = AV_VK_FRAME_FLAG_NONE;
+    vkfc->tiling = VK_IMAGE_TILING_LINEAR;
+
+    err = av_hwframe_ctx_init(win->frames_ref);
+    if (err < 0) {
+        sp_log(win->main, SP_LOG_ERROR, "Could not init hardware frames context: %s!\n",
+               av_err2str(err));
+        av_buffer_unref(&win->frames_ref);
+        return err;
+    }
+
+    return 0;
+}
+#endif
+
 static int get_render_source(InterfaceWindowCtx *win, struct pl_frame *dst,
                              AVFrame **src, double *dar)
 {
+    int ret;
+
     if (!*src) {
         if (win->main_win.have_last) {
             memcpy(dst, &win->main_win.last, sizeof(*dst));
@@ -68,13 +145,97 @@ static int get_render_source(InterfaceWindowCtx *win, struct pl_frame *dst,
     else
         *dar = 1.0;
 
+#if USE_LAVU
+    /* Generate new frames reference */
+    ret = get_frames_ref(win, *src);
+    if (ret < 0) {
+        av_frame_free(src);
+        return ret;
+    }
+
+    /* Map frame */
+    if ((*src)->hw_frames_ctx && ((*src)->format != AV_PIX_FMT_VULKAN)) {
+        AVFrame *mapped_frame = av_frame_alloc();
+        if (!mapped_frame) {
+            av_frame_free(src);
+            return AVERROR(ENOMEM);
+        }
+
+        AVHWFramesContext *mapped_hwfc;
+        mapped_hwfc = (AVHWFramesContext *)win->frames_ref->data;
+        mapped_frame->format = mapped_hwfc->format;
+
+        /* Set frame hardware context referencce */
+        mapped_frame->hw_frames_ctx = av_buffer_ref(win->frames_ref);
+        if (!mapped_frame->hw_frames_ctx) {
+            av_frame_free(&mapped_frame);
+            av_frame_free(src);
+            return AVERROR(ENOMEM);
+        }
+
+        ret = av_hwframe_map(mapped_frame, *src, AV_HWFRAME_MAP_READ);
+        if (ret < 0) {
+            sp_log(win->main, SP_LOG_ERROR, "Error mapping: %s!\n",
+                   av_err2str(ret));
+            av_frame_free(&mapped_frame);
+            av_frame_free(src);
+            return ret;
+        }
+
+        /* Copy properties */
+        av_frame_copy_props(mapped_frame, *src);
+
+        /* Replace original frame with mapped */
+        av_frame_free(src);
+        *src = mapped_frame;
+    } else if (!(*src)->hw_frames_ctx) { /* Upload */
+        AVFrame *tx_frame = av_frame_alloc();
+        if (!tx_frame) {
+            av_frame_free(src);
+            return AVERROR(ENOMEM);
+        }
+
+        AVHWFramesContext *enc_hwfc;
+        enc_hwfc = (AVHWFramesContext *)win->frames_ref->data;
+
+        tx_frame->format = enc_hwfc->format;
+        tx_frame->width  = enc_hwfc->width;
+        tx_frame->height = enc_hwfc->height;
+
+        /* Set frame hardware context referencce */
+        tx_frame->hw_frames_ctx = av_buffer_ref(win->frames_ref);
+        if (!tx_frame->hw_frames_ctx) {
+            av_frame_free(&tx_frame);
+            av_frame_free(src);
+            return AVERROR(ENOMEM);
+        }
+
+        /* Get hardware frame buffer */
+        av_hwframe_get_buffer(win->frames_ref, tx_frame, 0);
+
+        /* Transfer data */
+        ret = av_hwframe_transfer_data(tx_frame, *src, 0);
+        if (ret < 0) {
+            sp_log(win->main, SP_LOG_ERROR, "Error transferring: %s!\n",
+                   av_err2str(ret));
+            av_frame_free(&tx_frame);
+            av_frame_free(src);
+            return ret;
+        }
+
+        av_frame_copy_props(tx_frame, *src);
+        av_frame_free(src);
+        *src = tx_frame;
+    }
+#endif
+
     struct pl_avframe_params map_params = {
         .frame    = *src,
         .tex      = win->main_win.tex,
         .map_dovi = true,
     };
 
-    bool ret = pl_map_avframe_ex(win->pl_gpu, dst, &map_params);
+    ret = pl_map_avframe_ex(win->pl_gpu, dst, &map_params);
     av_frame_free(src);
     if (!ret) {
         sp_log(win->main, SP_LOG_ERROR, "Could not map AVFrame to libplacebo!\n");

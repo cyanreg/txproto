@@ -97,7 +97,7 @@ send:
             break; /* decoder flushed */
         } else if (err && (err != AVERROR(EAGAIN))) {
             sp_log(entry, SP_LOG_ERROR, "Unable to decode frame: %s!\n", av_err2str(err));
-            goto end;
+            continue;
         }
 
         AVFrame *frame = av_frame_alloc();

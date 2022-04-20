@@ -1193,7 +1193,7 @@ static int lua_register_io_cb(lua_State *L)
         ctx->io_api_ctx = av_mallocz(sizeof(*ctx->io_api_ctx)*sp_compiled_apis_len);
 
     /* Initialize I/O APIs */
-    int initialized_apis = 0;
+    int initialized_apis = 0, apis_initialized = 0;
     for (int i = 0; i < sp_compiled_apis_len; i++) {
         if (ctx->io_api_ctx[i]) {
             initialized_apis++;
@@ -1213,15 +1213,18 @@ static int lua_register_io_cb(lua_State *L)
         if (!api_list && err == AVERROR(ENOSYS)) {
             continue;
         } else if (err < 0) {
+            luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
             FREE_STR_LIST(api_list);
             LUA_ERROR("Unable to load API \"%s\": %s!", sp_compiled_apis[i]->name,
                       av_err2str(err));
         }
 
         initialized_apis++;
+        apis_initialized++;
     }
 
     if (!initialized_apis) {
+        luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
         FREE_STR_LIST(api_list);
 
         if (api_list)
@@ -1231,6 +1234,8 @@ static int lua_register_io_cb(lua_State *L)
             sp_log(ctx, SP_LOG_WARN, "No I/O APIs available.\n");
 
         return 0;
+    } else if (apis_initialized) {
+        sp_log(ctx, SP_LOG_DEBUG, "%i I/O(s) initialized.\n", apis_initialized);
     }
 
     SPEventType type = SP_EVENT_TYPE_SOURCE    | SP_EVENT_ON_CHANGE |

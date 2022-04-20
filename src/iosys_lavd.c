@@ -55,6 +55,8 @@ typedef struct LavdCaptureCtx {
     int64_t delay;
     int64_t epoch;
 
+    int dropped_frames;
+
     atomic_bool quit;
     pthread_t pull_thread;
 } LavdCaptureCtx;
@@ -113,18 +115,36 @@ send:
             goto end;
         }
 
-        if (frame) {
-            /* avcodec_open2 changes the timebase */
-            frame->pts = av_rescale_q(pts, priv->avf->streams[0]->time_base, priv->avctx->time_base);
+        /* avcodec_open2 changes the timebase */
+        frame->pts = av_rescale_q(pts, priv->avf->streams[0]->time_base,
+                                  priv->avctx->time_base);
 
-            frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
+        frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
+        FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
+        fe->time_base       = priv->avctx->time_base;
+        fe->avg_frame_rate  = priv->avctx->framerate;
 
-            FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
-            fe->time_base       = priv->avctx->time_base;
-            fe->avg_frame_rate  = priv->avctx->framerate;
+        sp_log(entry, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",
+               av_q2d(fe->time_base) * frame->pts);
 
-            sp_frame_fifo_push(entry->frames, frame);
-            av_frame_free(&frame);
+        /* We don't do this check at the start on since there's still some chance
+         * whatever's consuming the FIFO will be done by now. */
+        err = sp_frame_fifo_push(entry->frames, frame);
+        av_frame_free(&frame);
+        if (err == AVERROR(ENOBUFS)) {
+            priv->dropped_frames++;
+            sp_log(entry, SP_LOG_WARN, "Dropping frame (%i dropped so far)!\n",
+                   priv->dropped_frames);
+
+            SPGenericData entries[] = {
+                D_TYPE("dropped_frames", NULL, priv->dropped_frames),
+                { 0 },
+            };
+            sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_STATS, entries);
+        } else if (err) {
+            sp_log(entry, SP_LOG_ERROR, "Unable to push frame to FIFO: %s!\n",
+                   av_err2str(err));
+            goto end;
         }
     }
 

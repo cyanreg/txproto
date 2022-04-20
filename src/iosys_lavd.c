@@ -70,6 +70,8 @@ static void *lavd_thread(void *s)
 
     sp_set_thread_name_self(sp_class_get_name(entry));
 
+    sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_INIT | SP_EVENT_ON_CONFIG, NULL);
+
     while (!flushed) {
         AVPacket *pkt = NULL;
         if (atomic_load(&priv->quit))

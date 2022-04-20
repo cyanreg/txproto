@@ -886,13 +886,13 @@ static int pulse_init(AVBufferRef **s)
         goto fail;
 
     ctx->pa_mainloop = pa_threaded_mainloop_new();
-    pa_threaded_mainloop_start(ctx->pa_mainloop);
-    pa_threaded_mainloop_set_name(ctx->pa_mainloop, sp_class_get_name(ctx));
+    ctx->pa_mainloop_api = pa_threaded_mainloop_get_api(ctx->pa_mainloop);
 
+    pa_threaded_mainloop_start(ctx->pa_mainloop);
     pa_threaded_mainloop_lock(ctx->pa_mainloop);
     locked = 1;
 
-    ctx->pa_mainloop_api = pa_threaded_mainloop_get_api(ctx->pa_mainloop);
+    pa_threaded_mainloop_set_name(ctx->pa_mainloop, sp_class_get_name(ctx));
 
     pa_proplist *proplist = pa_proplist_new();
     if (!proplist) {

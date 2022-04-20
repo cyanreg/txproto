@@ -982,9 +982,9 @@ int sp_log_init(enum SPLogLevel global_log_level)
     int ret = 0;
     sp_log_uninit();
 
+    pthread_mutex_lock(&log_ctx.ctx_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
-    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     log_ctx.log_levels = av_malloc(sizeof(*log_ctx.log_levels));
     if (!log_ctx.log_levels) {
@@ -1006,9 +1006,9 @@ int sp_log_init(enum SPLogLevel global_log_level)
     av_log_set_callback(log_ff_cb);
 
 end:
-    pthread_mutex_unlock(&log_ctx.ctx_lock);
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 
     return ret;
 }
@@ -1017,9 +1017,9 @@ void sp_log_uninit(void)
 {
     av_log_set_callback(av_log_default_callback);
 
+    pthread_mutex_lock(&log_ctx.ctx_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
-    pthread_mutex_lock(&log_ctx.ctx_lock);
 
     for (int i = 0; i < log_ctx.ic_len; i++) {
         av_bprint_finalize(&log_ctx.ic[i].bpo, NULL);
@@ -1042,7 +1042,7 @@ void sp_log_uninit(void)
     log_ctx.status.lines = 0;
     log_ctx.status.lock = 0;
 
-    pthread_mutex_unlock(&log_ctx.ctx_lock);
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
+    pthread_mutex_unlock(&log_ctx.ctx_lock);
 }

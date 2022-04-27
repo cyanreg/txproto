@@ -39,7 +39,7 @@ build_opts = [
 threads_dep = dependency('threads')
 dependencies = [
     # ffmpeg libs
-    dependency('libavcodec', version: '>= 58.82.100'),
+    dependency('libavcodec', version: '>= 59.4.100'),
     dependency('libavformat', version: '>= 58.42.100'),
     dependency('libswresample', version: '>= 3.6.100'),
     dependency('libavfilter', version: '>= 7.79.100'),

@@ -681,6 +681,8 @@ static void xcb_uninit(void *opaque, uint8_t *data)
     pthread_join(ctx->source_update, NULL);
 
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, ctx);
+    sp_bufferlist_free(&ctx->events);
+
     sp_bufferlist_free(&ctx->entries);
 
     xcb_disconnect(ctx->con);

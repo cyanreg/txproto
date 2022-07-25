@@ -515,7 +515,7 @@ int sp_lua_load_chunk(TXLuaContext *s, const uint8_t *in, size_t len)
         return 0;
 
     int is_base64 = 0;
-    if (in[len] == '\0') {
+    if (in[len - 1] == '\0') {
         is_base64 = av_base64_decode(NULL, (const char *)in, 0) >= 0;
 
         if (is_base64) {

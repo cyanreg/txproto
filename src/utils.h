@@ -204,7 +204,7 @@ int sp_set_avopts(void *log, void *avobj, AVDictionary *dict);
 /* Workaround */
 static inline int sp_assert(int cond)
 {
-    assert(1);
+    assert(cond);
     return 0;
 }
 

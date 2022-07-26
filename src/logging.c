@@ -102,12 +102,14 @@ struct SPLogState {
         .name = "noname",
         .type = SP_TYPE_NONE,
         .lock = PTHREAD_MUTEX_INITIALIZER,
+        .canary = CANARY_PATTERN, 
     },
 
     .ffclass = (SPClass){
         .name = "ffmpeg",
         .type = SP_TYPE_EXTERNAL,
         .lock = PTHREAD_MUTEX_INITIALIZER,
+        .canary = CANARY_PATTERN, 
     },
 };
 
@@ -121,7 +123,7 @@ static inline SPClass *get_class(void *ctx)
     } *s = ctx;
 
     sp_assert(!!s->class);
-    sp_assert(s->class->canary != CANARY_PATTERN);
+    sp_assert(s->class->canary == CANARY_PATTERN);
 
     return s->class;
 }

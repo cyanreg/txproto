@@ -135,8 +135,10 @@ static SPBufferList *sp_ctx_get_events_list(void *ctx)
     switch (type) {
     case SP_TYPE_AUDIO_SOURCE:
     case SP_TYPE_AUDIO_SINK:
+    case SP_TYPE_AUDIO_BIDIR:
     case SP_TYPE_VIDEO_SOURCE:
     case SP_TYPE_VIDEO_SINK:
+    case SP_TYPE_VIDEO_BIDIR:
         return ((IOSysEntry *)ctx)->events;
     case SP_TYPE_MUXER:
         return ((MuxingContext *)ctx)->events;
@@ -145,9 +147,8 @@ static SPBufferList *sp_ctx_get_events_list(void *ctx)
     case SP_TYPE_ENCODER:
         return ((EncodingContext *)ctx)->events;
     default:
-        sp_assert(0); /* Should never happen */
+        break;
     }
-    sp_assert(0);
     return NULL;
 }
 
@@ -172,7 +173,6 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
         sp_assert(!out);
         return ((MuxingContext *)ctx)->src_packets;
     case SP_TYPE_FILTER:
-        sp_assert(0);
         return NULL;
     case SP_TYPE_ENCODER:
         if (out)
@@ -404,6 +404,11 @@ int sp_lua_generic_link(lua_State *L)
                         sp_class_to_event_type(dctx);
 
     SPBufferList *src_events = sp_ctx_get_events_list(sctx);
+    if (!src_events) {
+        LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",
+                  sp_class_get_name(obj1->data), sp_class_type_string(obj1->data),
+                  sp_class_get_name(obj2->data), sp_class_type_string(obj2->data));
+    }
 
     SPEventType src_post_init = sp_eventlist_has_dispatched(src_events,
                                                             SP_EVENT_ON_INIT);

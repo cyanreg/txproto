@@ -102,14 +102,14 @@ struct SPLogState {
         .name = "noname",
         .type = SP_TYPE_NONE,
         .lock = PTHREAD_MUTEX_INITIALIZER,
-        .canary = CANARY_PATTERN, 
+        .canary = CANARY_PATTERN,
     },
 
     .ffclass = (SPClass){
         .name = "ffmpeg",
         .type = SP_TYPE_EXTERNAL,
         .lock = PTHREAD_MUTEX_INITIALIZER,
-        .canary = CANARY_PATTERN, 
+        .canary = CANARY_PATTERN,
     },
 };
 

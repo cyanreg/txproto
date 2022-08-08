@@ -134,12 +134,14 @@ static enum AVPixelFormat drm_wl_fmt_to_pixfmt(enum wl_shm_format *drm_format,
         enum AVPixelFormat dst;
     } format_map[] = {
 #define FMTDBL(fmt) DRM_FORMAT_##fmt, WL_SHM_FORMAT_##fmt
-        { FMTDBL(XRGB8888), FMTDBL(XRGB8888), AV_PIX_FMT_BGR0 },
-        { FMTDBL(ARGB8888), FMTDBL(XRGB8888), AV_PIX_FMT_BGR0 },
-        { FMTDBL(XBGR8888), FMTDBL(XBGR8888), AV_PIX_FMT_RGB0 },
-        { FMTDBL(ABGR8888), FMTDBL(XBGR8888), AV_PIX_FMT_RGB0 },
-        { FMTDBL(NV12),     FMTDBL(NV12),     AV_PIX_FMT_NV12 },
-        { FMTDBL(P010),     FMTDBL(P010),     AV_PIX_FMT_P010 },
+        { FMTDBL(XRGB8888),    FMTDBL(XRGB8888),    AV_PIX_FMT_BGR0    },
+        { FMTDBL(ARGB8888),    FMTDBL(XRGB8888),    AV_PIX_FMT_BGR0    },
+        { FMTDBL(XBGR8888),    FMTDBL(XBGR8888),    AV_PIX_FMT_RGB0    },
+        { FMTDBL(ABGR8888),    FMTDBL(XBGR8888),    AV_PIX_FMT_RGB0    },
+        { FMTDBL(XRGB2101010), FMTDBL(ARGB2101010), AV_PIX_FMT_X2BGR10 },
+        { FMTDBL(XBGR2101010), FMTDBL(ABGR2101010), AV_PIX_FMT_X2RGB10 },
+        { FMTDBL(NV12),        FMTDBL(NV12),        AV_PIX_FMT_NV12    },
+        { FMTDBL(P010),        FMTDBL(P010),        AV_PIX_FMT_P010    },
 #undef FMTDBL
     };
 

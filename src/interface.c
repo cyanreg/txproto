@@ -59,7 +59,7 @@ typedef struct InterfaceWindowCtx {
         int x0, x1, y0, y1;
         int state_x0, state_x1, state_y0, state_y1;
         uint32_t flags;
-        const struct pl_tex *region;
+        pl_tex region;
     } highlight;
 
     struct {
@@ -90,11 +90,11 @@ typedef struct InterfaceWindowCtx {
     InterfaceCB cb;
 
     /* Renderer */
+    pl_gpu pl_gpu;
+    pl_swapchain pl_swap;
     struct pl_vulkan_swapchain_params pl_swap_params;
-    const struct pl_swapchain *pl_swap;
-    const struct pl_vulkan *pl_vk_ctx;
-    const struct pl_gpu *pl_gpu;
-    struct pl_renderer *pl_renderer;
+    pl_vulkan pl_vk_ctx;
+    pl_renderer pl_renderer;
 } InterfaceWindowCtx;
 
 typedef struct InterfaceCtx {

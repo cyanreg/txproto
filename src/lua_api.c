@@ -24,8 +24,10 @@
 
 #include "cli.h"
 #include "iosys_common.h"
-#include "encoding.h"
 #include "muxing.h"
+#include "demuxing.h"
+#include "encoding.h"
+#include "decoding.h"
 #include "filtering.h"
 #include "interface_common.h"
 
@@ -546,6 +548,53 @@ static int lua_create_muxer(lua_State *L)
     return 1;
 }
 
+static int lua_create_demuxer(lua_State *L)
+{
+    int err;
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_demuxer")
+    LUA_INTERFACE_BOILERPLATE();
+
+    AVBufferRef *mctx_ref = sp_demuxer_alloc();
+    DemuxingContext *mctx = (DemuxingContext *)mctx_ref->data;
+
+    LUA_SET_CLEANUP(mctx_ref);
+
+    GET_OPT_STR(mctx->name, "name");
+    GET_OPT_STR(mctx->in_url, "in_url");
+    GET_OPT_STR(mctx->in_format, "in_format");
+    GET_OPTS_DICT(mctx->start_options, "options");
+
+    err = sp_demuxer_init(mctx_ref);
+    if (err < 0)
+        LUA_ERROR("Unable to init demuxer: %s!", av_err2str(err));
+
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_muxer_ctrl(mctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
+
+    sp_bufferlist_append_noref(ctx->ext_buf_refs, mctx_ref);
+
+    void *contexts[] = { ctx, mctx_ref };
+    static const struct luaL_Reg lua_fns[] = {
+        { "ctrl", sp_lua_generic_ctrl },
+        { "schedule", lua_generic_schedule },
+        { "link", sp_lua_generic_link },
+        { "destroy", lua_generic_destroy },
+        { NULL, NULL },
+    };
+
+    LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
+
+    return 1;
+}
+
 static int lua_create_encoder(lua_State *L)
 {
     int err;
@@ -617,6 +666,57 @@ static int lua_create_encoder(lua_State *L)
     sp_bufferlist_append_noref(ctx->ext_buf_refs, ectx_ref);
 
     void *contexts[] = { ctx, ectx_ref };
+    static const struct luaL_Reg lua_fns[] = {
+        { "ctrl", sp_lua_generic_ctrl },
+        { "schedule", lua_generic_schedule },
+        { "link", sp_lua_generic_link },
+        { "destroy", lua_generic_destroy },
+        { NULL, NULL },
+    };
+
+    LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
+
+    return 1;
+}
+
+static int lua_create_decoder(lua_State *L)
+{
+    int err;
+    TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
+
+    LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "create_decoder")
+    LUA_INTERFACE_BOILERPLATE();
+
+    AVBufferRef *dctx_ref = sp_decoder_alloc();
+    DecodingContext *dctx = (DecodingContext *)dctx_ref->data;
+
+    LUA_SET_CLEANUP(dctx_ref);
+
+    const char *dec_name = NULL;
+    GET_OPT_STR(dec_name, "decoder");
+    dctx->codec = avcodec_find_decoder_by_name(dec_name);
+    if (!dctx->codec)
+        LUA_ERROR("Decoder \"%s\" not found!", dec_name);
+
+    GET_OPT_STR(dctx->name, "name");
+    err = sp_decoder_init(dctx_ref);
+    if (err < 0)
+        LUA_ERROR("Unable to init decoder: %s!", av_err2str(err));
+
+    SET_OPT_STR(sp_class_get_name(dctx), "name");
+
+    AVDictionary *init_opts = NULL;
+    GET_OPTS_DICT(init_opts, "priv_options");
+    if (init_opts) {
+        err = sp_decoder_ctrl(dctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        if (err < 0)
+            LUA_ERROR("Unable to set options: %s!", av_err2str(err));
+    }
+    av_dict_free(&init_opts);
+
+    sp_bufferlist_append_noref(ctx->ext_buf_refs, dctx_ref);
+
+    void *contexts[] = { ctx, dctx_ref };
     static const struct luaL_Reg lua_fns[] = {
         { "ctrl", sp_lua_generic_ctrl },
         { "schedule", lua_generic_schedule },
@@ -1541,7 +1641,9 @@ const struct luaL_Reg sp_lua_lib_fns[] = {
 
     { "create_io", lua_create_io },
     { "create_muxer", lua_create_muxer },
+    { "create_demuxer", lua_create_demuxer },
     { "create_encoder", lua_create_encoder },
+    { "create_decoder", lua_create_decoder },
     { "create_filter", lua_create_filter },
     { "create_filtergraph", lua_create_filtergraph },
     { "create_interface", lua_create_interface },

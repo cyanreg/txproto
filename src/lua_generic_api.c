@@ -19,6 +19,7 @@
 #include "interface_common.h"
 #include "iosys_common.h"
 #include "encoding.h"
+#include "decoding.h"
 #include "muxing.h"
 #include "filtering.h"
 
@@ -109,6 +110,10 @@ static ctrl_fn get_ctrl_fn(void *ctx)
         return sp_encoder_ctrl;
     case SP_TYPE_MUXER:
         return sp_muxer_ctrl;
+    case SP_TYPE_DECODER:
+        return sp_decoder_ctrl;
+    case SP_TYPE_DEMUXER:
+        return sp_demuxer_ctrl;
     case SP_TYPE_FILTER:
         return sp_filter_ctrl;
     case SP_TYPE_INTERFACE:
@@ -146,6 +151,10 @@ static SPBufferList *sp_ctx_get_events_list(void *ctx)
         return ((FilterContext *)ctx)->events;
     case SP_TYPE_ENCODER:
         return ((EncodingContext *)ctx)->events;
+    case SP_TYPE_DECODER:
+        return ((DecodingContext *)ctx)->events;
+    case SP_TYPE_DEMUXER:
+        return ((DemuxingContext *)ctx)->events;
     default:
         break;
     }
@@ -181,6 +190,13 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
             return ((EncodingContext *)ctx)->src_frames;
     case SP_TYPE_INTERFACE:
         return sp_interface_get_fifo(ctx);
+    case SP_TYPE_DECODER:
+        if (out)
+            return ((DecodingContext *)ctx)->dst_frames;
+        else
+            return ((DecodingContext *)ctx)->src_packets;
+    case SP_TYPE_DEMUXER:
+        return ((DemuxingContext *)ctx)->dst_packets;
     default:
         sp_assert(0); /* Should never happen */
         return NULL;
@@ -237,6 +253,21 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
         int err = sp_muxer_add_stream(dst_mux_ctx, src_enc_ctx);
         if (err < 0)
             return err;
+
+        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+    } else if ((s_type == SP_TYPE_DEMUXER) && (d_type == SP_TYPE_DECODER)) {
+        DemuxingContext *src_mux_ctx = src_ctx;
+        DecodingContext *dst_dec_ctx = dst_ctx;
+
+        sp_assert(dst_fifo && src_fifo);
+
+        int err = sp_decoding_connect(dst_dec_ctx, src_mux_ctx);
+        if (err < 0)
+            return err;
+
+        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+    } else if ((s_type & SP_TYPE_DECODER) && (d_type == SP_TYPE_ENCODER)) {
+        sp_assert(dst_fifo && src_fifo);
 
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
     } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_ENCODER)) {
@@ -389,6 +420,16 @@ int sp_lua_generic_link(lua_State *L)
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
         src_ctrl_fn = ((IOSysEntry *)src_ref->data)->ctrl;
         dst_ctrl_fn = sp_interface_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_ENCODER, SP_TYPE_DECODER)) {
+        src_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_ENCODER);
+        src_ctrl_fn = sp_decoder_ctrl;
+        dst_ctrl_fn = sp_encoder_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_DEMUXER, SP_TYPE_DECODER)) {
+        src_ref = PICK_REF(obj1, obj2, SP_TYPE_DEMUXER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
+        src_ctrl_fn = sp_demuxer_ctrl;
+        dst_ctrl_fn = sp_decoder_ctrl;
     } else {
         LUA_ERROR("Unable to link \"%s\" (%s) to \"%s\" (%s)!",
                   sp_class_get_name(obj1->data), sp_class_type_string(obj1->data),

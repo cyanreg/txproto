@@ -18,11 +18,17 @@ sources = [
     # Muxing
     'muxing.c',
 
+    # Demuxing
+    'demuxing.c',
+
     # Filtering
     'filtering.c',
 
     # Encoding
     'encoding.c',
+
+    # Decoding
+    'decoding.c',
 
     # Misc
     'utils.c',

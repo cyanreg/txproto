@@ -96,6 +96,8 @@ has_stream_id:
         dec->avctx->extradata_size = st->codecpar->extradata_size;
     }
 
+    dec->avctx->time_base = mux->avf->streams[idx]->time_base;
+
     err = avcodec_parameters_to_context(dec->avctx, st->codecpar);
     if (err < 0) {
     	sp_log(dec, SP_LOG_ERROR, "Cannot copy coder parameters: %s!\n", av_err2str(err));
@@ -183,9 +185,10 @@ static void *decoding_thread(void *arg)
 
             out_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
-            FormatExtraData *fe = (FormatExtraData *)out_frame->opaque_ref->data;
-            fe->time_base       = av_make_q(1, 1000000);
-            fe->bits_per_sample = 32;
+            FormatExtraData *fe  = (FormatExtraData *)out_frame->opaque_ref->data;
+            fe->time_base        = ctx->avctx->time_base;
+            fe->bits_per_sample  = 32;
+            out_frame->time_base = fe->time_base;
 
             sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",
                    av_q2d(out_frame->time_base) * out_frame->pts);

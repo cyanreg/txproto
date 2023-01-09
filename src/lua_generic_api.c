@@ -272,6 +272,11 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
         sp_assert(dst_fifo && src_fifo);
 
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+    } else if (s_type == SP_TYPE_DECODER && (d_type == SP_TYPE_FILTER)) {
+        sp_assert(!!src_fifo);
+
+        return sp_map_fifo_to_pad((FilterContext *)dst_ctx, src_fifo,
+                                  cb_ctx->dst_filt_pad, 0);
     } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_ENCODER)) {
         if (!dst_fifo) {
             sp_log(dst_ctx, SP_LOG_VERBOSE, "Unable to get FIFO from interface, unsupported!\n");
@@ -406,6 +411,12 @@ int sp_lua_generic_link(lua_State *L)
         src_filt_pad = av_strdup(src_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
         dst_ctrl_fn = sp_encoder_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_DECODER, SP_TYPE_FILTER)) {
+        src_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_FILTER);
+        dst_filt_pad = av_strdup(dst_pad_name);
+        src_ctrl_fn = sp_decoder_ctrl;
+        dst_ctrl_fn = sp_filter_ctrl;
     } else if (EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_VIDEO_SOURCE) ||
                EITHER(obj1, obj2, SP_TYPE_FILTER, SP_TYPE_AUDIO_SOURCE)) {
         src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_FILTER);

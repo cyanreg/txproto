@@ -515,7 +515,7 @@ static int push_input_pads(FilterContext *ctx, int *flush, int opportunistically
         for (j = 0; j < nb_req; j++) {
             AVFrame *in_frame;
             ret = sp_frame_fifo_pop_flags(in_pad->fifo, &in_frame, pull_flags);
-            if (!opportunistically && (ret == AVERROR(EAGAIN))) {
+            if (opportunistically && (ret == AVERROR(EAGAIN))) {
                 break;
             } else if (ret < 0) {
                 sp_log(ctx, SP_LOG_ERROR, "Error pulling frame from FIFO at input pad \"%s\": %s!\n",

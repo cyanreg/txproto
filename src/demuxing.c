@@ -38,12 +38,20 @@ static void *demuxing_thread(void *arg)
         AVPacket *out_packet = av_packet_alloc();
 
         err = av_read_frame(ctx->avf, out_packet);
-        if (err < 0) {
+        if (err == AVERROR(EOF)) {
+            for (int i = 0; i < ctx->avf->nb_streams; i++)
+                sp_packet_fifo_push(ctx->dst_packets[i], NULL);
+
+            sp_log(ctx, SP_LOG_VERBOSE, "Stream EOF, FIFOs flushed!\n");
+            break;
+        } else if (err < 0) {
             sp_log(ctx, SP_LOG_ERROR, "Failed to read packet: %s\n", av_err2str(err));
             goto fail;
         }
 
-        sp_packet_fifo_push(ctx->dst_packets, out_packet);
+        sp_log(ctx, SP_LOG_TRACE, "Sending packet from stream %i\n", out_packet->stream_index);
+        sp_packet_fifo_push(ctx->dst_packets[out_packet->stream_index], out_packet);
+
         av_packet_free(&out_packet);
     }
 
@@ -128,6 +136,10 @@ int sp_demuxer_init(AVBufferRef *ctx_ref)
         goto fail;
     }
 
+    ctx->dst_packets = av_mallocz(ctx->avf->nb_streams*sizeof(ctx->dst_packets));
+    for (int i = 0; i < ctx->avf->nb_streams; i++)
+        ctx->dst_packets[i] = sp_packet_fifo_create(ctx, 10, PACKET_FIFO_BLOCK_MAX_OUTPUT);
+
     /* Both fields alive for the duration of the avf context */
     ctx->in_format = ctx->avf->iformat->name;
     ctx->in_url = ctx->avf->url;
@@ -146,7 +158,8 @@ static void demuxer_free(void *opaque, uint8_t *data)
     if (ctx->demuxing_thread)
         pthread_join(ctx->demuxing_thread, NULL);
 
-    av_buffer_unref(&ctx->dst_packets);
+    for (int i = 0; i < ctx->avf->nb_streams; i++)
+        av_buffer_unref(&ctx->dst_packets[i]);
 
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
     sp_bufferlist_free(&ctx->events);
@@ -154,6 +167,8 @@ static void demuxer_free(void *opaque, uint8_t *data)
     avformat_close_input(&ctx->avf);
 
     pthread_mutex_destroy(&ctx->lock);
+
+    av_free(ctx->dst_packets);
 
     sp_log(ctx, SP_LOG_VERBOSE, "Demuxer destroyed!\n");
     sp_class_free(ctx);
@@ -177,7 +192,6 @@ AVBufferRef *sp_demuxer_alloc(void)
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
-    ctx->dst_packets = sp_packet_fifo_create(ctx, 10, PACKET_FIFO_BLOCK_MAX_OUTPUT); // FIXME
 
     return ctx_ref;
 }

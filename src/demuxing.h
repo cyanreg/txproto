@@ -42,7 +42,7 @@ typedef struct DemuxingContext {
     const char *in_format;
     AVDictionary *start_options;
 
-    AVBufferRef *dst_packets;
+    AVBufferRef **dst_packets; // One per output stream
     AVCodecParameters par;
 
     int err;

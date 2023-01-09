@@ -196,7 +196,7 @@ static AVBufferRef *sp_ctx_get_fifo(void *ctx, int out)
         else
             return ((DecodingContext *)ctx)->src_packets;
     case SP_TYPE_DEMUXER:
-        return ((DemuxingContext *)ctx)->dst_packets;
+        return NULL;
     default:
         sp_assert(0); /* Should never happen */
         return NULL;
@@ -210,6 +210,9 @@ typedef struct SPLinkCtx {
     char *dst_filt_pad;
     AVBufferRef *src_ref;
     AVBufferRef *dst_ref;
+
+    int src_stream_id;
+    char *src_stream_desc;
 } SPLinkCtx;
 
 static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
@@ -254,24 +257,26 @@ static int link_fn(AVBufferRef *event_ref, void *callback_ctx, void *dst_ctx,
         if (err < 0)
             return err;
 
-        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+        return sp_packet_fifo_mirror(dst_fifo, src_fifo);
     } else if ((s_type == SP_TYPE_DEMUXER) && (d_type == SP_TYPE_DECODER)) {
         DemuxingContext *src_mux_ctx = src_ctx;
         DecodingContext *dst_dec_ctx = dst_ctx;
 
-        sp_assert(dst_fifo && src_fifo);
-
-        int err = sp_decoding_connect(dst_dec_ctx, src_mux_ctx);
-        if (err < 0)
-            return err;
-
-        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+        return sp_decoding_connect(dst_dec_ctx, src_mux_ctx,
+                                   cb_ctx->src_stream_id, cb_ctx->src_stream_desc);
     } else if ((s_type & SP_TYPE_DECODER) && (d_type == SP_TYPE_ENCODER)) {
         sp_assert(dst_fifo && src_fifo);
 
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
-    } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_ENCODER)) {
+    } else if ((s_type & SP_TYPE_DECODER) && (d_type == SP_TYPE_INTERFACE)) {
         sp_assert(dst_fifo && src_fifo);
+
+        return sp_frame_fifo_mirror(dst_fifo, src_fifo);
+    } else if ((s_type & SP_TYPE_INOUT) && (d_type == SP_TYPE_ENCODER)) {
+        if (!dst_fifo) {
+            sp_log(dst_ctx, SP_LOG_VERBOSE, "Unable to get FIFO from interface, unsupported!\n");
+            return AVERROR(EINVAL);
+        }
 
         return sp_frame_fifo_mirror(dst_fifo, src_fifo);
     } else if ((s_type == SP_TYPE_FILTER) && (d_type == SP_TYPE_INTERFACE)) {
@@ -303,6 +308,7 @@ static void link_free(void *callback_ctx, void *dst_ctx, void *src_ctx)
     SPLinkCtx *cb_ctx = callback_ctx;
     av_free(cb_ctx->src_filt_pad);
     av_free(cb_ctx->dst_filt_pad);
+    av_free(cb_ctx->src_stream_desc);
     av_buffer_unref(&cb_ctx->src_ref);
     av_buffer_unref(&cb_ctx->dst_ref);
 }
@@ -322,15 +328,19 @@ int sp_lua_generic_link(lua_State *L)
     int autostart = 1;
     const char *src_pad_name = NULL;
     const char *dst_pad_name = NULL;
+    int src_stream_id = -1;
+    const char *src_stream_desc = NULL;
     if (nargs == 2) {
         if (lua_istable(L, -1)) {
             GET_OPT_STR(src_pad_name, "src_pad");
             GET_OPT_STR(dst_pad_name, "dst_pad");
             GET_OPT_BOOL(autostart, "autostart");
         } else if (lua_isstring(L, -1)) {
-            src_pad_name = dst_pad_name = lua_tostring(L, -1);
+            src_pad_name = dst_pad_name = src_stream_desc = lua_tostring(L, -1);
+        } else if (lua_isinteger(L, -1)) {
+            src_stream_id = lua_tointeger(L, -1);
         } else {
-            LUA_ERROR("Invalid argument, expected \"table\" (options) or \"string\" (pad name), got \"%s\"!",
+            LUA_ERROR("Invalid argument, expected \"table\" (options) or \"string\" (stream/pad name), got \"%s\"!",
                       lua_typename(L, lua_type(L, -1)));
         }
         lua_pop(L, 1);
@@ -357,6 +367,8 @@ int sp_lua_generic_link(lua_State *L)
     AVBufferRef *dst_ref;
     char *src_filt_pad = NULL;
     char *dst_filt_pad = NULL;
+    int stream_id = -1;
+    char *stream_desc = NULL;
     ctrl_fn src_ctrl_fn = NULL;
     ctrl_fn dst_ctrl_fn = NULL;
 
@@ -415,6 +427,11 @@ int sp_lua_generic_link(lua_State *L)
         src_filt_pad = av_strdup(src_pad_name);
         src_ctrl_fn = sp_filter_ctrl;
         dst_ctrl_fn = sp_interface_ctrl;
+    } else if (EITHER(obj1, obj2, SP_TYPE_INTERFACE, SP_TYPE_DECODER)) {
+        src_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
+        dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
+        src_ctrl_fn = sp_decoder_ctrl;
+        dst_ctrl_fn = sp_interface_ctrl;
     } else if (EITHER(obj1, obj2, SP_TYPE_INTERFACE, SP_TYPE_VIDEO_SOURCE)) {
         src_ref = PICK_REF_INV(obj1, obj2, SP_TYPE_INTERFACE);
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_INTERFACE);
@@ -428,6 +445,8 @@ int sp_lua_generic_link(lua_State *L)
     } else if (EITHER(obj1, obj2, SP_TYPE_DEMUXER, SP_TYPE_DECODER)) {
         src_ref = PICK_REF(obj1, obj2, SP_TYPE_DEMUXER);
         dst_ref = PICK_REF(obj1, obj2, SP_TYPE_DECODER);
+        stream_id = src_stream_id;
+        stream_desc = av_strdup(src_stream_desc);
         src_ctrl_fn = sp_demuxer_ctrl;
         dst_ctrl_fn = sp_decoder_ctrl;
     } else {
@@ -470,6 +489,8 @@ int sp_lua_generic_link(lua_State *L)
     link_event_ctx->dst_filt_pad = dst_filt_pad;
     link_event_ctx->src_ref = src_ref;
     link_event_ctx->dst_ref = dst_ref;
+    link_event_ctx->src_stream_id = stream_id;
+    link_event_ctx->src_stream_desc = stream_desc;
 
     /* Add event to destination context */
     dst_ctrl_fn(dst_ref, SP_EVENT_CTRL_NEW_EVENT, link_event);

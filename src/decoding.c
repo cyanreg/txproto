@@ -25,10 +25,65 @@
 
 #include "ctrl_template.h"
 
-int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux)
+int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux,
+                        int stream_id, char *stream_desc)
 {
     int err;
-    AVStream *st = mux->avf->streams[0];
+    int idx = -1;
+
+    if (stream_id >= 0) {
+has_stream_id:
+        idx = stream_id;
+        if (stream_id > (mux->avf->nb_streams - 1)) {
+            sp_log(dec, SP_LOG_ERROR, "Invalid stream ID %i, demuxer only has %i streams!\n",
+                   stream_id, mux->avf->nb_streams);
+            return AVERROR(EINVAL);
+        }
+    } else if (stream_desc) {
+#define FIND_STREAM(prefix_str, media_type)                                     \
+        if (!strncmp(stream_desc, prefix_str, strlen(prefix_str))) {            \
+            int cnt = 0;                                                        \
+            stream_id = strtol(stream_desc + strlen(prefix_str), NULL, 10);     \
+            for (int i = 0; i < mux->avf->nb_streams; i++) {                    \
+                if (mux->avf->streams[i]->codecpar->codec_type == media_type) { \
+                    if (stream_id == cnt) {                                     \
+                        stream_id = i;                                          \
+                        goto has_stream_id;                                     \
+                    }                                                           \
+                    cnt++;                                                      \
+                }                                                               \
+            }                                                                   \
+            goto has_stream_id;                                                 \
+        }
+
+        FIND_STREAM("video=", AVMEDIA_TYPE_VIDEO)
+        FIND_STREAM("vid=", AVMEDIA_TYPE_VIDEO)
+        FIND_STREAM("audio=", AVMEDIA_TYPE_VIDEO)
+        FIND_STREAM("aid=", AVMEDIA_TYPE_VIDEO)
+        FIND_STREAM("subtitle=", AVMEDIA_TYPE_VIDEO)
+        FIND_STREAM("sub=", AVMEDIA_TYPE_VIDEO)
+
+        for (int i = 0; i < mux->avf->nb_streams; i++) {
+            AVDictionaryEntry *d = av_dict_get(mux->avf->streams[i]->metadata, "title", NULL, 0);
+            if (!d)
+                continue;
+            if (!strcmp(d->value, stream_desc)) {
+                stream_id = i;
+                break;
+            }
+        }
+
+        sp_log(dec, SP_LOG_ERROR, "Unable to find stream with title \"%s\"\n",
+               stream_desc);
+        return AVERROR(EINVAL);
+    } else if (mux->avf->nb_streams == 1) {
+        idx = 0;
+    } else {
+        sp_log(dec, SP_LOG_ERROR, "No stream ID or description specified for searching!\n");
+        return AVERROR(EINVAL);
+    }
+
+    AVStream *st = mux->avf->streams[idx];
 
     if (st->codecpar->extradata_size) {
         dec->avctx->extradata = av_mallocz(st->codecpar->extradata_size +
@@ -47,7 +102,13 @@ int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux)
         return err;
     }
 
-    dec->src_packets = mux->dst_packets;
+    err = avcodec_open2(dec->avctx, dec->codec, NULL);
+    if (err < 0) {
+    	sp_log(dec, SP_LOG_ERROR, "Cannot open decoder: %s!\n", av_err2str(err));
+    	return err;
+    }
+
+    dec->src_packets = av_buffer_ref(mux->dst_packets[idx]);
 
     return 0;
 }
@@ -59,12 +120,6 @@ static int context_full_config(DecodingContext *ctx)
     ctx->avctx = avcodec_alloc_context3(ctx->codec);
     if (!ctx->avctx)
         return AVERROR(ENOMEM);
-
-    err = avcodec_open2(ctx->avctx, ctx->codec, NULL);
-    if (err < 0) {
-    	sp_log(ctx, SP_LOG_ERROR, "Cannot open decoder: %s!\n", av_err2str(err));
-    	return err;
-    }
 
     err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
     if (err < 0)
@@ -111,19 +166,22 @@ static void *decoding_thread(void *arg)
 
             ret = avcodec_receive_frame(ctx->avctx, out_frame);
             if (ret == AVERROR_EOF) {
-                ret = 0;
                 pthread_mutex_unlock(&ctx->lock);
+                av_frame_free(&out_frame);
+                ret = 0;
                 goto end;
             } else if (ret == AVERROR(EAGAIN)) {
+                av_frame_free(&out_frame);
                 ret = 0;
                 break;
             } else if (ret < 0) {
-                sp_log(ctx, SP_LOG_ERROR, "Error decoding: %s!\n", av_err2str(ret));
                 pthread_mutex_unlock(&ctx->lock);
+                sp_log(ctx, SP_LOG_ERROR, "Error decoding: %s!\n", av_err2str(ret));
+                av_frame_free(&out_frame);
                 goto fail;
             }
 
-            out_frame->opaque_ref       = av_buffer_allocz(sizeof(FormatExtraData));
+            out_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
             FormatExtraData *fe = (FormatExtraData *)out_frame->opaque_ref->data;
             fe->time_base       = av_make_q(1, 1000000);
@@ -268,7 +326,7 @@ AVBufferRef *sp_decoder_alloc(void)
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
 
-    ctx->src_packets = sp_packet_fifo_create(ctx, 8, FRAME_FIFO_BLOCK_NO_INPUT);
+    ctx->src_packets = sp_packet_fifo_create(ctx, 8, PACKET_FIFO_BLOCK_NO_INPUT);
     ctx->dst_frames = sp_frame_fifo_create(ctx, 0, 0);
 
     return ctx_ref;

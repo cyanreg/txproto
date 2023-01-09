@@ -319,7 +319,8 @@ AVBufferRef *sp_interface_main_win(AVBufferRef *ref, const char *title)
         return NULL;
     }
 
-    win->main_win.fifo = sp_frame_fifo_create(win->main, 1, 0x0);
+    win->main_win.fifo = sp_frame_fifo_create(win->main, 1,
+                                              FRAME_FIFO_BLOCK_MAX_OUTPUT);
     if (!win->main_win.fifo) {
         av_buffer_unref(&win_ref);
         sp_class_free(win);

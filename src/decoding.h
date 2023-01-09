@@ -62,5 +62,6 @@ typedef struct DecodingContext {
 
 AVBufferRef *sp_decoder_alloc(void);
 int sp_decoder_init(AVBufferRef *ctx_ref);
-int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux);
+int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux,
+                        int stream_id, char *stream_desc);
 int sp_decoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg);

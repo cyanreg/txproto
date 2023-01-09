@@ -278,7 +278,7 @@ int RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
     pthread_mutex_lock(&ctx->lock);
 
     if (!ctx->num_queued) {
-        if ((flags && !(flags & FRENAME(PULL_NO_BLOCK))) ||
+        if ((flags & FRENAME(PULL_NO_BLOCK)) ||
             !(ctx->block_flags & FRENAME(BLOCK_NO_INPUT))) {
             ret = AVERROR(EAGAIN);
             goto unlock;

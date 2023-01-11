@@ -183,6 +183,11 @@ static void *decoding_thread(void *arg)
                 goto fail;
             }
 
+            if (!ctx->start_pts)
+                ctx->start_pts = out_frame->pts;
+
+            out_frame->pts -= ctx->start_pts;
+
             out_frame->opaque_ref = av_buffer_allocz(sizeof(FormatExtraData));
 
             FormatExtraData *fe  = (FormatExtraData *)out_frame->opaque_ref->data;

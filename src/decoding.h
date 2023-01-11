@@ -35,6 +35,7 @@ typedef struct DecodingContext {
     const char *name;
     pthread_mutex_t lock;
 
+    int64_t start_pts;
     int64_t epoch;
 
     /* Needed to start */

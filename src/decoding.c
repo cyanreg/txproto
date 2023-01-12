@@ -110,6 +110,10 @@ has_stream_id:
     	return err;
     }
 
+    sp_log(dec, SP_LOG_VERBOSE, "Linked to demuxer %s (tb: %i/%i)\n",
+           sp_class_get_name(dec),
+           dec->avctx->time_base.num, dec->avctx->time_base.den);
+
     dec->src_packets = av_buffer_ref(mux->dst_packets[idx]);
 
     return 0;

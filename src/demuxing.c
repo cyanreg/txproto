@@ -138,7 +138,7 @@ int sp_demuxer_init(AVBufferRef *ctx_ref)
 
     ctx->dst_packets = av_mallocz(ctx->avf->nb_streams*sizeof(ctx->dst_packets));
     for (int i = 0; i < ctx->avf->nb_streams; i++)
-        ctx->dst_packets[i] = sp_packet_fifo_create(ctx, 10, PACKET_FIFO_BLOCK_MAX_OUTPUT);
+        ctx->dst_packets[i] = sp_packet_fifo_create(ctx, 10, PACKET_FIFO_BLOCK_MAX_OUTPUT | PACKET_FIFO_BLOCK_NO_INPUT);
 
     /* Both fields alive for the duration of the avf context */
     ctx->in_format = ctx->avf->iformat->name;

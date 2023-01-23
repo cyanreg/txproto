@@ -122,7 +122,9 @@ static inline SPClass *get_class(void *ctx)
         SPClass *class;
     } *s = ctx;
 
-    sp_assert(!!s->class);
+    if (!s->class)
+        return NULL;
+
     sp_assert(s->class->canary == CANARY_PATTERN);
 
     return s->class;

@@ -241,7 +241,7 @@ static int context_full_config(EncodingContext *ctx)
     }
 
     if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
-        if ((ctx->codec->capabilities & AV_CODEC_CAP_HARDWARE)) {
+        if ((ctx->codec->capabilities & (AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_HYBRID))) {
             err = init_hwcontext(ctx, conf);
             if (err < 0) {
                 av_frame_free(&conf);

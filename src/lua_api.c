@@ -634,7 +634,12 @@ static int lua_create_encoder(lua_State *L)
     SET_OPT_STR(sp_class_get_name(ectx), "name");
 
     SET_OPT_LIGHTUSERDATA(ectx_ref, LUA_PRIV_PREFIX "_priv");
-    GET_OPTS_CLASS(ectx->avctx, "options");
+
+    AVDictionary *opts = NULL;
+    GET_OPTS_DICT(opts, "options");
+    if (opts)
+        ectx->codec_config = opts;
+
     GET_OPTS_CLASS(ectx->swr, "resampler_options");
 
     SET_OPT_INT(ectx->width, "width");

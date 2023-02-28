@@ -38,6 +38,7 @@ typedef struct EncodingContext {
     atomic_int soft_flush;
 
     /* Needed to start */
+    AVDictionary *codec_config;
     AVBufferRef *src_frames;
     AVBufferRef *dst_packets;
     const AVCodec *codec;

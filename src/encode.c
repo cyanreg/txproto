@@ -74,6 +74,13 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
     ctx->avctx->thread_type           = FF_THREAD_FRAME | FF_THREAD_SLICE;
     ctx->avctx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
 
+    if (ctx->codec_config) {
+        AVDictionary *config = NULL;
+        av_dict_copy(&config, ctx->codec_config, 0);
+
+        av_opt_set_dict2(ctx->avctx, &config, AV_OPT_SEARCH_CHILDREN);
+    }
+
     if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
         ctx->avctx->width           = conf->width;
         ctx->avctx->height          = conf->height;
@@ -669,6 +676,7 @@ static void encoder_free(void *opaque, uint8_t *data)
 
     av_buffer_unref(&ctx->src_frames);
     av_buffer_unref(&ctx->dst_packets);
+    av_dict_free(&ctx->codec_config);
 
     sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_DESTROY, NULL);
     sp_bufferlist_free(&ctx->events);

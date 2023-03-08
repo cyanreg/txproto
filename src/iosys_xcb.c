@@ -669,7 +669,7 @@ static int xcb_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 static AVBufferRef *xcb_ref_entry(AVBufferRef *ctx_ref, uint32_t identifier)
 {
     XCBCtx *ctx = (XCBCtx *)ctx_ref->data;
-    return sp_bufferlist_pop(ctx->entries, sp_bufferlist_iosysentry_by_id, &identifier);
+    return sp_bufferlist_ref(ctx->entries, sp_bufferlist_iosysentry_by_id, &identifier);
 }
 
 static void xcb_uninit(void *opaque, uint8_t *data)

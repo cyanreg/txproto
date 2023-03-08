@@ -559,14 +559,20 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
             entry->frames = sp_frame_fifo_create(entry, 0, 0);
         }
 
+        AVRational framerate = get_monitor_rate(ctx,
+                                                xscreen->root,
+                                                mon,
+                                                sp_class_get_name(entry));
+
         change |= (entry->width != mon->width) ||
                   (entry->height != mon->height) ||
                   (entry->is_default != !!mon->primary) ||
                   (priv->root != xscreen) ||
-                  (entry->framerate.num != info_r->rate);
+                  (entry->framerate.num != framerate.num) ||
+                  (entry->framerate.den != framerate.den);
 
         priv->root = xscreen;
-        entry->framerate = get_monitor_rate(ctx, xscreen->root, mon, sp_class_get_name(entry));
+        entry->framerate = framerate;
         entry->scale = 1;
         entry->x = mon->x;
         entry->y = mon->y;

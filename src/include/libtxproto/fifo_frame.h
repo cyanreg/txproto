@@ -63,9 +63,17 @@ TYPE *RENAME(fifo_peek)(AVBufferRef *src);
 #undef RENAME
 #undef FRENAME
 
+typedef enum SPRotation {
+    ROTATION_IDENTITY = 0,
+    ROTATION_ROTATE90,
+    ROTATION_ROTATE180,
+    ROTATION_ROTATE270,
+} SPRotation;
+
 /* opaque data each frame carries */
 typedef struct FormatExtraData {
     AVRational avg_frame_rate;
     int bits_per_sample;
     AVRational time_base;
+    SPRotation rotation;
 } FormatExtraData;

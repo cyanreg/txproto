@@ -111,6 +111,8 @@ static int init_avctx(EncodingContext *ctx, AVFrame *conf)
 
         if (fe->avg_frame_rate.num && fe->avg_frame_rate.den)
             ctx->avctx->framerate = fe->avg_frame_rate;
+
+        ctx->rotation = fe->rotation;
     }
 
     if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
@@ -490,10 +492,37 @@ static int attach_sidedata(EncodingContext *ctx,
 {
     int ret;
 
+    /* Gather metadata */
+    AVDictionary *dict = NULL;
+
+    av_dict_set_int(&dict, "rotation", fe->rotation, 0);
+
+    /* Attach metadata */
+    size_t packed_dict_size = 0;
+    uint8_t *packed_dict = av_packet_pack_dictionary(dict, &packed_dict_size);
+    if (!packed_dict) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
+
+    ret = av_packet_add_side_data(pkt,
+                                  AV_PKT_DATA_STRINGS_METADATA,
+                                  packed_dict,
+                                  packed_dict_size);
+    if (ret < 0) {
+        sp_log(ctx, SP_LOG_ERROR, "Attach side data failed(%d): %s!\n",
+               __LINE__, av_err2str(ret));
+        goto fail;
+    }
+
+    packed_dict = NULL;
+
     /* Attach extradata */
     uint8_t *extradata = av_memdup(ctx->avctx->extradata, ctx->avctx->extradata_size);
-    if (!extradata)
-        return AVERROR(ENOMEM);
+    if (!extradata) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
 
     ret = av_packet_add_side_data(pkt,
                                   AV_PKT_DATA_NEW_EXTRADATA,
@@ -511,6 +540,8 @@ static int attach_sidedata(EncodingContext *ctx,
 
 fail:
     av_free(&extradata);
+    av_freep(&packed_dict);
+    av_dict_free(&dict);
 
     return ret;
 }
@@ -578,11 +609,12 @@ static void *encoding_thread(void *arg)
 
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
             int conf_changed = (ctx->avctx->width != frame->width) ||
-                               (ctx->avctx->height != frame->height);
+                               (ctx->avctx->height != frame->height) ||
+                               (ctx->rotation != fe->rotation);
 
             if (conf_changed) {
-                sp_log(ctx, SP_LOG_INFO, "Configuration change detected: %dx%d\n",
-                       frame->width, frame->height);
+                sp_log(ctx, SP_LOG_INFO, "Configuration change detected: %dx%d, Rotation: %d\n",
+                       frame->width, frame->height, fe->rotation);
 
                 ret = avcodec_send_frame(ctx->avctx, NULL);
                 if (ret < 0) {
@@ -836,6 +868,7 @@ AVBufferRef *sp_encoder_alloc(void)
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->pix_fmt = AV_PIX_FMT_NONE;
+    ctx->rotation = ROTATION_IDENTITY;
     ctx->sample_fmt = AV_SAMPLE_FMT_NONE;
     ctx->events = sp_bufferlist_new();
     ctx->swr = swr_alloc();

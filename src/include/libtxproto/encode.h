@@ -55,6 +55,7 @@ typedef struct EncodingContext {
     /* Video options only */
     int width, height;
     enum AVPixelFormat pix_fmt;
+    SPRotation rotation;
 
     /* Audio options only */
     int sample_rate;

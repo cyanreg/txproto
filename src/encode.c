@@ -22,6 +22,7 @@
 #include <libavutil/cpu.h>
 
 #include <libtxproto/encode.h>
+#include <libtxproto/log.h>
 
 #include "encoding_utils.h"
 #include "os_compat.h"
@@ -227,22 +228,9 @@ end:
     return err;
 }
 
-static int context_full_config(EncodingContext *ctx)
+static int configure_encoder(EncodingContext *ctx, AVFrame *conf)
 {
     int err;
-
-    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
-    if (err < 0)
-        return err;
-
-    av_buffer_unref(&ctx->mode_negotiate_event);
-
-    sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
-    AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
-    if (!conf) {
-        sp_log(ctx, SP_LOG_ERROR, "No input frame to configure with!\n");
-        return AVERROR(EINVAL);
-    }
 
     if ((err = init_avctx(ctx, conf))) {
         av_frame_free(&conf);
@@ -273,6 +261,31 @@ static int context_full_config(EncodingContext *ctx)
 		sp_log(ctx, SP_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
 		return err;
 	}
+
+    return 0;
+}
+
+static int context_full_config(EncodingContext *ctx)
+{
+    int err;
+
+    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+    if (err < 0)
+        return err;
+
+    av_buffer_unref(&ctx->mode_negotiate_event);
+
+    sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
+    AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
+    if (!conf) {
+        sp_log(ctx, SP_LOG_ERROR, "No input frame to configure with!\n");
+        return AVERROR(EINVAL);
+    }
+
+    if ((err = configure_encoder(ctx, conf))) {
+        av_frame_free(&conf);
+        return err;
+    }
 
     av_frame_free(&conf);
 
@@ -471,6 +484,64 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
     return 0;
 }
 
+static int attach_sidedata(EncodingContext *ctx,
+                           AVPacket *pkt,
+                           const FormatExtraData *fe)
+{
+    int ret;
+
+    /* Attach extradata */
+    uint8_t *extradata = av_memdup(ctx->avctx->extradata, ctx->avctx->extradata_size);
+    if (!extradata)
+        return AVERROR(ENOMEM);
+
+    ret = av_packet_add_side_data(pkt,
+                                  AV_PKT_DATA_NEW_EXTRADATA,
+                                  extradata,
+                                  ctx->avctx->extradata_size);
+    if (ret < 0) {
+        sp_log(ctx, SP_LOG_ERROR, "Attach side data failed(%d): %s!\n",
+               __LINE__, av_err2str(ret));
+        goto fail;
+    }
+
+    extradata = NULL;
+
+    return 0;
+
+fail:
+    av_free(&extradata);
+
+    return ret;
+}
+
+static int recreate_encoder(EncodingContext *ctx, AVFrame *conf)
+{
+    int ret;
+
+    sp_log(ctx, SP_LOG_INFO, "Recreate encoder\n");
+
+    /* Delete encoder */
+    if (ctx->enc_frames_ref)
+        av_buffer_unref(&ctx->enc_frames_ref);
+
+    avcodec_free_context(&ctx->avctx);
+
+    /* Create encoder */
+    ctx->avctx = avcodec_alloc_context3(ctx->codec);
+    if (!ctx->avctx)
+        return AVERROR(ENOMEM);
+
+    ret = configure_encoder(ctx, conf);
+    if (ret < 0) {
+        sp_log(ctx, SP_LOG_ERROR, "Encoder configuration failed\n");
+        avcodec_free_context(&ctx->avctx);
+        return ret;
+    }
+
+    return 0;
+}
+
 static void *encoding_thread(void *arg)
 {
     EncodingContext *ctx = arg;
@@ -488,16 +559,47 @@ static void *encoding_thread(void *arg)
 
         AVFrame *frame = NULL;
 
-        if (!flush) {
+        if (ctx->reconfigure_frame && !ctx->waiting_eof) {
+            frame = ctx->reconfigure_frame;
+            ctx->reconfigure_frame = NULL;
+
+            ret = recreate_encoder(ctx, frame);
+            if (ret < 0)
+                goto fail;
+
+            if (ctx->avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
+                ctx->attach_sidedata = 1;
+        } else if (!flush) {
             frame = sp_frame_fifo_pop(ctx->src_frames);
             flush = !frame;
         }
 
+        FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
+
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
-            ret = video_process_frame(ctx, &frame);
-            if (ret < 0) {
-                pthread_mutex_unlock(&ctx->lock);
-                goto fail;
+            int conf_changed = (ctx->avctx->width != frame->width) ||
+                               (ctx->avctx->height != frame->height);
+
+            if (conf_changed) {
+                sp_log(ctx, SP_LOG_INFO, "Configuration change detected: %dx%d\n",
+                       frame->width, frame->height);
+
+                ret = avcodec_send_frame(ctx->avctx, NULL);
+                if (ret < 0) {
+                    sp_log(ctx, SP_LOG_ERROR, "Flush encoder failed(%d): %s!\n", __LINE__, av_err2str(ret));
+                    pthread_mutex_unlock(&ctx->lock);
+                    goto fail;
+                }
+
+                ctx->reconfigure_frame = frame;
+                ctx->waiting_eof = 1;
+                frame = NULL;
+            } else {
+                ret = video_process_frame(ctx, &frame);
+                if (ret < 0) {
+                    pthread_mutex_unlock(&ctx->lock);
+                    goto fail;
+                }
             }
         } else if (ctx->codec->type == AVMEDIA_TYPE_AUDIO) {
             ret = audio_process_frame(ctx, &frame, flush);
@@ -510,20 +612,24 @@ static void *encoding_thread(void *arg)
             }
         }
 
-        if (!atomic_load(&ctx->soft_flush)) {
-            /* Give frame */
-            ret = avcodec_send_frame(ctx->avctx, frame);
-            av_frame_free(&frame);
-            if (ret < 0) {
-                sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
-                pthread_mutex_unlock(&ctx->lock);
-                goto fail;
+        if (!ctx->waiting_eof) {
+            if (!atomic_load(&ctx->soft_flush)) {
+                out_pkt = av_packet_alloc();
+
+                /* Give frame */
+                ret = avcodec_send_frame(ctx->avctx, frame);
+                av_frame_free(&frame);
+                if (ret < 0) {
+                    sp_log(ctx, SP_LOG_ERROR, "Error encoding(%d): %s!\n", __LINE__, av_err2str(ret));
+                    pthread_mutex_unlock(&ctx->lock);
+                    goto fail;
+                }
+            } else {
+                sp_log(ctx, SP_LOG_VERBOSE, "Soft-flushing encoder\n");
+                avcodec_flush_buffers(ctx->avctx);
+                atomic_store(&ctx->soft_flush, 0);
+                av_frame_free(&frame);
             }
-        } else {
-            sp_log(ctx, SP_LOG_VERBOSE, "Soft-flushing encoder\n");
-            avcodec_flush_buffers(ctx->avctx);
-            atomic_store(&ctx->soft_flush, 0);
-            av_frame_free(&frame);
         }
 
         /* Return */
@@ -533,8 +639,15 @@ static void *encoding_thread(void *arg)
 
             ret = avcodec_receive_packet(ctx->avctx, out_pkt);
             if (ret == AVERROR_EOF) {
-                pthread_mutex_unlock(&ctx->lock);
-                goto end;
+                if (ctx->waiting_eof) {
+                    ctx->waiting_eof = 0;
+                    ret = 0;
+                    break;
+                } else {
+                    ret = 0;
+                    pthread_mutex_unlock(&ctx->lock);
+                    goto end;
+                }
             } else if (ret == AVERROR(EAGAIN)) {
                 ret = 0;
                 break;
@@ -542,6 +655,16 @@ static void *encoding_thread(void *arg)
                 sp_log(ctx, SP_LOG_ERROR, "Error encoding: %s!\n", av_err2str(ret));
                 pthread_mutex_unlock(&ctx->lock);
                 goto fail;
+            }
+
+            if (ctx->attach_sidedata == 1) {
+                ret = attach_sidedata(ctx, out_pkt, fe);
+                if (ret < 0) {
+                    pthread_mutex_unlock(&ctx->lock);
+                    goto fail;
+                }
+
+                ctx->attach_sidedata = 0;
             }
 
             out_pkt->opaque = (void *)(intptr_t)sp_class_get_id(ctx);

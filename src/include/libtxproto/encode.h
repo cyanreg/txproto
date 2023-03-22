@@ -74,6 +74,11 @@ typedef struct EncodingContext {
     uint64_t swr_configured_layout;
     int swr_configured_format;
 
+    /* Reconfiguration */
+    AVFrame *reconfigure_frame;
+    int waiting_eof;
+    int attach_sidedata;
+
     int err;
 } EncodingContext;
 

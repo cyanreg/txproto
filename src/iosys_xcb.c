@@ -564,7 +564,9 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
                                                 mon,
                                                 sp_class_get_name(entry));
 
-        change |= (entry->width != mon->width) ||
+        change |= (entry->x != mon->x) ||
+                  (entry->y != mon->y) ||
+                  (entry->width != mon->width) ||
                   (entry->height != mon->height) ||
                   (entry->is_default != !!mon->primary) ||
                   (priv->root != xscreen) ||

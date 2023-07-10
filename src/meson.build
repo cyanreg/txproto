@@ -175,11 +175,13 @@ pkg.generate(
 )
 
 # executable
-executable('txproto',
-    install: true,
-    sources: sources + 'txproto_main.c',
-    dependencies: dependencies + libtxproto,
-)
+if get_option('tools').enabled()
+    executable('txproto',
+        install: true,
+        sources: sources + 'txproto_main.c',
+        dependencies: dependencies + libtxproto,
+    )
+endif
 
 summary({
     'CLI': libedit.found(),

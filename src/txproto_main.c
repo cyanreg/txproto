@@ -32,7 +32,8 @@
 
 #include "lua_api.h"
 #include "iosys_common.h"
-#include "txproto_main.h"
+
+#include <libtxproto/txproto_main.h>
 
 #ifdef HAVE_LIBEDIT
 #include "cli.h"

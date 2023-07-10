@@ -19,7 +19,8 @@
 #include <libavutil/time.h>
 #include <libavutil/avstring.h>
 
-#include "demuxing.h"
+#include <libtxproto/demuxing.h>
+
 #include "utils.h"
 #include "ctrl_template.h"
 

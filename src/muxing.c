@@ -19,7 +19,8 @@
 #include <libavutil/time.h>
 #include <libavutil/avstring.h>
 
-#include "muxing.h"
+#include <libtxproto/muxing.h>
+
 #include "utils.h"
 #include "ctrl_template.h"
 

@@ -19,7 +19,7 @@
 #pragma once
 
 #include "lua_common.h"
-#include "txproto_main.h"
+#include <libtxproto/txproto_main.h>
 
 /* Parse a Lua table on top of stack into an AVDictionary */
 int sp_lua_parse_table_to_avdict(lua_State *L, AVDictionary **dict);

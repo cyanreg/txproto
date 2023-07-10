@@ -23,10 +23,10 @@
 #endif
 
 #include "iosys_common.h"
-#include "encoding.h"
-#include "decoding.h"
-#include "muxing.h"
-#include "filtering.h"
+#include <libtxproto/encoding.h>
+#include <libtxproto/decoding.h>
+#include <libtxproto/muxing.h>
+#include <libtxproto/filtering.h>
 
 #include "lua_generic_api.h"
 #include "lua_api_utils.h"

@@ -1,7 +1,5 @@
 # Base files
 sources = [
-    'txproto_main.c',
-
     # Lua
     builtin_lua_scripts,
     'lua_common.c',
@@ -38,6 +36,16 @@ sources = [
     vcs_tag(command: ['git', 'rev-parse', '--short', 'HEAD'],
                       input: 'version.c.in', output: 'version.c',
                       fallback: 'release')
+]
+
+# Public headers
+headers = [
+    'txproto_main.h',
+    'muxing.h',
+    'demuxing.h',
+    'filtering.h',
+    'encoding.h',
+    'decoding.h'
 ]
 
 # libendit
@@ -129,10 +137,48 @@ if have_wayland
     endif
 endif
 
+inc = include_directories('./include')
+lib = library('txproto', sources,
+    install: true,
+    dependencies: dependencies,
+    soversion: ver_major,
+    include_directories: inc,
+)
+
+libtxproto = declare_dependency(
+    link_with: lib,
+    include_directories: inc,
+)
+
+# Allows projects to build libavstream by cloning into ./subprojects/libtxproto
+meson.override_dependency('libtxproto', libtxproto)
+
+# Install headers
+foreach h : headers
+    parts = h.split('/')
+    path = meson.project_name()
+    foreach p : parts
+        if p != parts[-1]
+            path = path / p
+        endif
+    endforeach
+
+    install_headers('include' / 'lib'+meson.project_name() / h, subdir: path)
+endforeach
+
+pkg = import('pkgconfig')
+pkg.generate(
+    name: meson.project_name(),
+    description: 'Scriptable multimedia framework',
+    libraries: lib,
+    version: meson.project_version(),
+)
+
+# executable
 executable('txproto',
     install: true,
-    sources: sources,
-    dependencies: dependencies,
+    sources: sources + 'txproto_main.c',
+    dependencies: dependencies + libtxproto,
 )
 
 summary({

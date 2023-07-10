@@ -19,7 +19,8 @@
 #pragma once
 
 #include "utils.h"
-#include "encoding.h"
+
+#include <libtxproto/encoding.h>
 
 static const AVCodecHWConfig *get_codec_hw_config(EncodingContext *ctx)
 {

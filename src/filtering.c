@@ -22,8 +22,9 @@
 #include <libavutil/avstring.h>
 #include <libavfilter/buffersink.h>
 
+#include <libtxproto/filtering.h>
+
 #include "fifo_frame.h"
-#include "filtering.h"
 #include "os_compat.h"
 #include "utils.h"
 #include "ctrl_template.h"

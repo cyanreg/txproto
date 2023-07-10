@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "txproto_main.h"
+#include <libtxproto/txproto_main.h>
 
 typedef struct TXCLIContext TXCLIContext;
 

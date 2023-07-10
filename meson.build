@@ -2,7 +2,7 @@ project('txproto', 'c',
     license: 'LGPL2.1+',
     default_options: [ 'buildtype=debugoptimized', 'c_std=c99', 'warning_level=1' ],
     version: '0.1.0',
-    meson_version: '>=0.53.0',
+    meson_version: '>=0.60.0',
 )
 
 lua_ver_maj = 5

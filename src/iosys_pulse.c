@@ -26,7 +26,7 @@
 #include <pulse/pulseaudio.h>
 
 #include "iosys_common.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "ctrl_template.h"
 #include "../config.h"
 

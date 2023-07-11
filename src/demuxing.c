@@ -21,7 +21,7 @@
 
 #include <libtxproto/demuxing.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "ctrl_template.h"
 
 static void *demuxing_thread(void *arg)

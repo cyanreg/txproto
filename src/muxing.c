@@ -21,7 +21,7 @@
 
 #include <libtxproto/muxing.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "ctrl_template.h"
 
 typedef struct MuxEncoderMap {

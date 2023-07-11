@@ -22,7 +22,7 @@
 #include <stdatomic.h>
 
 #include "logging.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 
 #include "version.h"
 #include "../config.h"

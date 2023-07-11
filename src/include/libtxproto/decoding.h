@@ -24,7 +24,7 @@
 
 #include "fifo_packet.h"
 #include "fifo_frame.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 #include "demuxing.h"
 

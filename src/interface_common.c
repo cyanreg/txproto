@@ -17,7 +17,7 @@
  */
 
 #include "interface_common.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "../config.h"
 
 #ifdef HAVE_WAYLAND

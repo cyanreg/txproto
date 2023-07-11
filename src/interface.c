@@ -29,7 +29,7 @@
 
 #include "ctrl_template.h"
 #include "interface_common.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 #include "os_compat.h"
 #include "../config.h"

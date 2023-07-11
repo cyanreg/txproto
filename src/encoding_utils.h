@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 
 #include <libtxproto/encoding.h>
 

@@ -32,7 +32,7 @@
 
 #include "iosys_common.h"
 #include "logging.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "os_compat.h"
 
 typedef struct WaylandIOPriv {

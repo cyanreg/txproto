@@ -26,7 +26,7 @@
 #include <sys/ioctl.h>
 
 #include "wayland_common.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 
 static pthread_mutex_t ctx_ref_lock = PTHREAD_MUTEX_INITIALIZER;
 static AVBufferRef *ctx_ref = NULL;

@@ -31,7 +31,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <linux/input-event-codes.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "../config.h"
 
 enum SurfaceFlags {

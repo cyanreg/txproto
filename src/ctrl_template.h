@@ -21,7 +21,7 @@
 #include <stdatomic.h>
 
 #include "events.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 
 typedef struct SPCtrlTemplateCbCtx {
     SPEventType ctrl;

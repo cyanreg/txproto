@@ -30,7 +30,7 @@
 
 #include "wayland_common.h"
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 #include "iosys_common.h"
 #include "ctrl_template.h"

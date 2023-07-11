@@ -24,7 +24,7 @@
 #include <libavutil/bprint.h>
 #include <libavutil/random_seed.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "os_compat.h"
 #include "logging.h"
 

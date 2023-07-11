@@ -23,7 +23,7 @@
 #include <lauxlib.h>
 #include <luaconf.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 
 typedef struct LuaLoadedLibrary {

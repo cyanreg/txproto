@@ -25,7 +25,7 @@
 #include <libavutil/crc.h>
 
 #include "iosys_common.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 #include "ctrl_template.h"
 

@@ -21,7 +21,7 @@
 #include <stdatomic.h>
 #include <libavformat/avformat.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "fifo_packet.h"
 #include "logging.h"
 

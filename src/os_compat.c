@@ -22,7 +22,7 @@
 # endif
 
 #include "os_compat.h"
-#include "utils.h"
+#include <libtxproto/utils.h>
 
 #if defined(HAVE_PTHREAD_SETNAME_NP) && !defined(__APPLE__)
 #include <string.h>

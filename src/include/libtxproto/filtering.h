@@ -23,7 +23,7 @@
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 
-#include "utils.h"
+#include <libtxproto/utils.h>
 #include "logging.h"
 
 typedef struct FilterPad {

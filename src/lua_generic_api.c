@@ -349,10 +349,10 @@ int sp_lua_generic_link(lua_State *L)
             GET_OPT_STR(src_pad_name, "src_pad");
             GET_OPT_STR(dst_pad_name, "dst_pad");
             GET_OPT_BOOL(autostart, "autostart");
-        } else if (lua_isstring(L, -1)) {
-            src_pad_name = dst_pad_name = src_stream_desc = lua_tostring(L, -1);
         } else if (lua_isinteger(L, -1)) {
             src_stream_id = lua_tointeger(L, -1);
+        } else if (lua_isstring(L, -1)) {
+            src_pad_name = dst_pad_name = src_stream_desc = lua_tostring(L, -1);
         } else {
             LUA_ERROR("Invalid argument, expected \"table\" (options) or \"string\" (stream/pad name), got \"%s\"!",
                       lua_typename(L, lua_type(L, -1)));

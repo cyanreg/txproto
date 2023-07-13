@@ -175,11 +175,13 @@ pkg.generate(
 )
 
 # executable
-if get_option('tools').enabled()
+if get_option('cli').enabled()
+    cli_deps = dependencies
+    cli_deps += libtxproto
     executable('txproto',
         install: true,
-        sources: sources + 'txproto_main.c',
-        dependencies: dependencies + libtxproto,
+        sources: cli_lua_scripts + 'txproto_main.c',
+        dependencies: cli_deps,
     )
 endif
 

@@ -6,4 +6,4 @@ option('libavdevice', type: 'feature', value: 'auto', description: 'libavdevice 
 option('interface', type: 'feature', value: 'auto', description: 'Vulkan GUI')
 option('libedit', type: 'feature', value: 'auto', description: 'libedit support (for a REPL interface)')
 
-option('tools', type: 'feature', value: 'enabled', description: 'txproto executable')
+option('cli', type: 'feature', value: 'enabled', description: 'Standalone txproto executable')

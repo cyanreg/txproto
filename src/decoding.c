@@ -104,6 +104,8 @@ has_stream_id:
         return err;
     }
 
+    dec->avctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+
     err = avcodec_open2(dec->avctx, dec->codec, NULL);
     if (err < 0) {
     	sp_log(dec, SP_LOG_ERROR, "Cannot open decoder: %s!\n", av_err2str(err));

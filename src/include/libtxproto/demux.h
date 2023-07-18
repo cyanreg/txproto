@@ -22,7 +22,7 @@
 #include <libavformat/avformat.h>
 
 #include <libtxproto/utils.h>
-#include "fifo_packet.h"
+#include <libtxproto/fifo_packet.h>
 #include <libtxproto/log.h>
 
 typedef struct DemuxingContext {

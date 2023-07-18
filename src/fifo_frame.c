@@ -1,4 +1,4 @@
-#include "fifo_frame.h"
+#include <libtxproto/fifo_frame.h>
 
 #define FRENAME(x)     FRAME_FIFO_ ## x
 #define RENAME(x)      sp_frame_ ##x

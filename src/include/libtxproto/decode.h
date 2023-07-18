@@ -22,8 +22,8 @@
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
 
-#include "fifo_packet.h"
-#include "fifo_frame.h"
+#include <libtxproto/fifo_packet.h>
+#include <libtxproto/fifo_frame.h>
 #include <libtxproto/utils.h>
 #include <libtxproto/log.h>
 #include <libtxproto/demux.h>

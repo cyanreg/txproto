@@ -21,7 +21,7 @@
 #include <libavutil/hwcontext.h>
 #include <vulkan/vulkan.h>
 
-#include "fifo_frame.h"
+#include <libtxproto/fifo_frame.h>
 #include <libtxproto/utils.h>
 
 int sp_interface_init(AVBufferRef **s);

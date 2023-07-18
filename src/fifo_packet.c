@@ -1,4 +1,4 @@
-#include "fifo_packet.h"
+#include <libtxproto/fifo_packet.h>
 
 #define FRENAME(x)     PACKET_FIFO_ ## x
 #define RENAME(x)      sp_packet_ ##x

@@ -23,7 +23,7 @@
 #include <libavutil/opt.h>
 #include <libavutil/samplefmt.h>
 
-#include "fifo_frame.h"
+#include <libtxproto/fifo_frame.h>
 #include <libtxproto/utils.h>
 #include <libtxproto/log.h>
 

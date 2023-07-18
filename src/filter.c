@@ -24,7 +24,7 @@
 
 #include <libtxproto/filter.h>
 
-#include "fifo_frame.h"
+#include <libtxproto/fifo_frame.h>
 #include "os_compat.h"
 #include <libtxproto/utils.h>
 #include "ctrl_template.h"

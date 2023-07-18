@@ -23,7 +23,7 @@
 
 #include <libtxproto/utils.h>
 #include "fifo_packet.h"
-#include "logging.h"
+#include <libtxproto/log.h>
 
 typedef struct DemuxingContext {
     SPClass *class;

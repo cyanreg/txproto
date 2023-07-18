@@ -25,11 +25,11 @@
 #include "cli.h"
 #include "iosys_common.h"
 
-#include <libtxproto/muxing.h>
-#include <libtxproto/demuxing.h>
-#include <libtxproto/encoding.h>
-#include <libtxproto/decoding.h>
-#include <libtxproto/filtering.h>
+#include <libtxproto/mux.h>
+#include <libtxproto/demux.h>
+#include <libtxproto/encode.h>
+#include <libtxproto/decode.h>
+#include <libtxproto/filter.h>
 
 #ifdef HAVE_INTERFACE
 #include "interface_common.h"

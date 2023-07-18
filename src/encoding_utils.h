@@ -20,7 +20,7 @@
 
 #include <libtxproto/utils.h>
 
-#include <libtxproto/encoding.h>
+#include <libtxproto/encode.h>
 
 static const AVCodecHWConfig *get_codec_hw_config(EncodingContext *ctx)
 {

@@ -21,7 +21,7 @@
 #include <libavutil/pixdesc.h>
 #include <libavutil/cpu.h>
 
-#include <libtxproto/encoding.h>
+#include <libtxproto/encode.h>
 
 #include "encoding_utils.h"
 #include "os_compat.h"

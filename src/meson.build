@@ -10,23 +10,23 @@ sources = [
     'iosys_common.c',
 
     # Muxing
-    'muxing.c',
+    'mux.c',
 
     # Demuxing
-    'demuxing.c',
+    'demux.c',
 
     # Filtering
-    'filtering.c',
+    'filter.c',
 
     # Encoding
-    'encoding.c',
+    'encode.c',
 
     # Decoding
-    'decoding.c',
+    'decode.c',
 
     # Misc
     'utils.c',
-    'logging.c',
+    'log.c',
     'fifo_frame.c',
     'fifo_packet.c',
     'os_compat.c',
@@ -41,11 +41,12 @@ sources = [
 # Public headers
 headers = [
     'txproto_main.h',
-    'muxing.h',
-    'demuxing.h',
-    'filtering.h',
-    'encoding.h',
-    'decoding.h'
+    'mux.h',
+    'demux.h',
+    'filter.h',
+    'encode.h',
+    'decode.h',
+    'log.h'
 ]
 
 # libendit

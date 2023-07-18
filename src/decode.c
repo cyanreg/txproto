@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <libtxproto/decoding.h>
+#include <libtxproto/decode.h>
 
 #include <pthread.h>
 #include <libavutil/avstring.h>
@@ -104,8 +104,10 @@ has_stream_id:
         return err;
     }
 
-    if (dec->low_latency)
+    if (dec->low_latency) {
+        printf("ASSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\n");
         dec->avctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    }
 
     err = avcodec_open2(dec->avctx, dec->codec, NULL);
     if (err < 0) {

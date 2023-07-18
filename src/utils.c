@@ -26,7 +26,7 @@
 
 #include <libtxproto/utils.h>
 #include "os_compat.h"
-#include "logging.h"
+#include <libtxproto/log.h>
 
 int64_t sp_sliding_win(SlidingWinCtx *ctx, int64_t num, int64_t pts,
                        AVRational tb, int64_t len, int do_avg)

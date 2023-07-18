@@ -21,7 +21,7 @@
 #include <editline/readline.h>
 
 #include "cli.h"
-#include "logging.h"
+#include <libtxproto/log.h>
 #include "os_compat.h"
 
 struct TXCLIContext {

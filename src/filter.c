@@ -22,7 +22,7 @@
 #include <libavutil/avstring.h>
 #include <libavfilter/buffersink.h>
 
-#include <libtxproto/filtering.h>
+#include <libtxproto/filter.h>
 
 #include "fifo_frame.h"
 #include "os_compat.h"

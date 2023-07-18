@@ -31,7 +31,7 @@
 #include <libavutil/hwcontext_drm.h>
 
 #include "iosys_common.h"
-#include "logging.h"
+#include <libtxproto/log.h>
 #include <libtxproto/utils.h>
 #include "os_compat.h"
 

@@ -26,7 +26,7 @@
 
 #include "iosys_common.h"
 #include <libtxproto/utils.h>
-#include "logging.h"
+#include <libtxproto/log.h>
 #include "ctrl_template.h"
 
 #include "../config.h"

@@ -21,8 +21,8 @@
 #include <stdatomic.h>
 #include <libavformat/avformat.h>
 
-#include "encoding.h"
-#include "logging.h"
+#include "encode.h"
+#include "log.h"
 
 typedef struct MuxingContext {
     SPClass *class;

@@ -24,7 +24,7 @@
 #include <libavutil/time.h>
 #include <libavutil/random_seed.h>
 
-#include "logging.h"
+#include <libtxproto/log.h>
 #include <libtxproto/utils.h>
 #include "os_compat.h"
 

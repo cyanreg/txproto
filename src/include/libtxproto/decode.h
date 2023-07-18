@@ -25,24 +25,26 @@
 #include "fifo_packet.h"
 #include "fifo_frame.h"
 #include <libtxproto/utils.h>
-#include "logging.h"
+#include <libtxproto/log.h>
+#include <libtxproto/demux.h>
 
 /* Video encoder - we scale and convert in the encoding thread */
-typedef struct EncodingContext {
+typedef struct DecodingContext {
     SPClass *class;
 
     const char *name;
     pthread_mutex_t lock;
 
+    int64_t start_pts;
     int64_t epoch;
-    atomic_int soft_flush;
+
+    /* Options */
+    int low_latency;
 
     /* Needed to start */
-    AVBufferRef *src_frames;
-    AVBufferRef *dst_packets;
+    AVBufferRef *src_packets;
+    AVBufferRef *dst_frames;
     const AVCodec *codec;
-    int need_global_header;
-    AVBufferRef *mode_negotiate_event; /* To negotiate need_global_header */
 
     /* Events */
     SPBufferList *events;
@@ -51,31 +53,19 @@ typedef struct EncodingContext {
     atomic_int initialized;
     atomic_int running;
 
-    /* Video options only */
-    int width, height;
-    enum AVPixelFormat pix_fmt;
-
-    /* Audio options only */
-    int sample_rate;
-    enum AVSampleFormat sample_fmt;
-    uint64_t channel_layout;
-
     /* Internals below */
-    pthread_t encoding_thread;
+    pthread_t decoding_thread;
     AVCodecContext *avctx;
+    AVCodecParserContext *parser;
 
     /* Video */
-    AVBufferRef *enc_frames_ref;
-
-    /* Audio */
-    SwrContext *swr;
-    int swr_configured_rate;
-    uint64_t swr_configured_layout;
-    int swr_configured_format;
+    AVBufferRef *dec_frames_ref;
 
     int err;
-} EncodingContext;
+} DecodingContext;
 
-AVBufferRef *sp_encoder_alloc(void);
-int sp_encoder_init(AVBufferRef *ctx_ref);
-int sp_encoder_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg);
+AVBufferRef *sp_decoder_alloc(void);
+int sp_decoder_init(AVBufferRef *ctx_ref);
+int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux,
+                        int stream_id, char *stream_desc);
+int sp_decoder_ctrl(AVBufferRef *ctx_ref, enum SPEventType ctrl, void *arg);

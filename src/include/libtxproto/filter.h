@@ -24,7 +24,7 @@
 #include <libavutil/hwcontext.h>
 
 #include <libtxproto/utils.h>
-#include "logging.h"
+#include "log.h"
 
 typedef struct FilterPad {
     struct FilterContext *main;

@@ -25,7 +25,7 @@
 
 #include "fifo_frame.h"
 #include <libtxproto/utils.h>
-#include "logging.h"
+#include <libtxproto/log.h>
 
 typedef const struct IOSysAPI {
     /**

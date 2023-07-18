@@ -38,6 +38,9 @@ typedef struct DecodingContext {
     int64_t start_pts;
     int64_t epoch;
 
+    /* Options */
+    int low_latency;
+
     /* Needed to start */
     AVBufferRef *src_packets;
     AVBufferRef *dst_frames;

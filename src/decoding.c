@@ -104,6 +104,9 @@ has_stream_id:
         return err;
     }
 
+    if (dec->low_latency)
+        dec->avctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+
     err = avcodec_open2(dec->avctx, dec->codec, NULL);
     if (err < 0) {
     	sp_log(dec, SP_LOG_ERROR, "Cannot open decoder: %s!\n", av_err2str(err));
@@ -236,6 +239,11 @@ static int decoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
         ctx->epoch = atomic_load(event->epoch);
         if (!ctx->decoding_thread)
             pthread_create(&ctx->decoding_thread, NULL, decoding_thread, ctx);
+    } else if (event->ctrl & SP_EVENT_CTRL_OPTS) {
+        const char *tmp_val = NULL;
+        if ((tmp_val = dict_get(event->opts, "low_latency")))
+            if (!strcmp(tmp_val, "true") || strtol(tmp_val, NULL, 10) != 0)
+                ctx->low_latency = 1;
     } else if (event->ctrl & SP_EVENT_CTRL_STOP) {
         if (ctx->decoding_thread) {
             sp_packet_fifo_push(ctx->src_packets, NULL);

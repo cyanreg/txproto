@@ -579,7 +579,7 @@ static int lua_create_demuxer(lua_State *L)
     AVDictionary *init_opts = NULL;
     GET_OPTS_DICT(init_opts, "priv_options");
     if (init_opts) {
-        err = sp_muxer_ctrl(mctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
+        err = sp_demuxer_ctrl(mctx_ref, SP_EVENT_CTRL_OPTS | SP_EVENT_FLAG_IMMEDIATE, init_opts);
         if (err < 0)
             LUA_ERROR("Unable to set options: %s!", av_err2str(err));
     }

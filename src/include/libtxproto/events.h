@@ -20,7 +20,7 @@
 
 #include <pthread.h>
 
-#include "bufferlist.h"
+#include <libtxproto/bufferlist.h>
 
 /**
  * Event flags.

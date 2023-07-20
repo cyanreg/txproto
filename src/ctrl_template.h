@@ -20,7 +20,7 @@
 
 #include <stdatomic.h>
 
-#include "events.h"
+#include <libtxproto/events.h>
 #include <libtxproto/utils.h>
 
 typedef struct SPCtrlTemplateCbCtx {

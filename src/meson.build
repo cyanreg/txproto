@@ -48,7 +48,9 @@ headers = [
     'decode.h',
     'log.h',
     'fifo_frame.h',
-    'fifo_packet.h'
+    'fifo_packet.h',
+    'events.h',
+    'bufferlist.h',
 ]
 
 # libendit

@@ -631,6 +631,7 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
     /* Probably overkill, but why take a chance? */
     if ((ret == AVERROR_EOF) || ((ret == AVERROR(EAGAIN)) && *flush)) {
         sp_log(ctx, SP_LOG_VERBOSE, "Output pad \"%s\" flushed!\n", out_pad->name);
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
         ret = AVERROR_EOF;
         out_pad->eos = 1;
     } else if (ret != AVERROR(EAGAIN)) {

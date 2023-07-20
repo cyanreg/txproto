@@ -286,6 +286,7 @@ static void stream_status_cb(pa_stream *stream, void *data)
         sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_CONFIG, NULL);
         return;
     case PA_STREAM_TERMINATED: /* Clean termination */
+        sp_eventlist_dispatch(iosys_entry, iosys_entry->events, SP_EVENT_ON_EOS, NULL);
         return;
     case PA_STREAM_UNCONNECTED:
     case PA_STREAM_FAILED: /* Unclean termination */

@@ -56,6 +56,9 @@ static void *demuxing_thread(void *arg)
         av_packet_free(&out_packet);
     }
 
+    if (err == AVERROR(EOF))
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
+
 fail:
     return NULL;
 }

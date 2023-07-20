@@ -215,6 +215,9 @@ static void *decoding_thread(void *arg)
 end:
     sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");
 
+    if (ret == AVERROR(EOF))
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
+
     return NULL;
 
 fail:

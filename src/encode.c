@@ -557,6 +557,9 @@ static void *encoding_thread(void *arg)
         pthread_mutex_unlock(&ctx->lock);
     } while (!ctx->err);
 
+    if (ret == AVERROR(EOF))
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
+
 end:
     av_packet_free(&out_pkt);
     sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");

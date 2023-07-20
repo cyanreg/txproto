@@ -306,6 +306,8 @@ static void *xcb_thread(void *s)
         priv->next_frame_ts = now + priv->frame_delay;
     }
 
+    sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_EOS, NULL);
+
 end:
     priv->err = err;
     return NULL;

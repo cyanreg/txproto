@@ -976,6 +976,7 @@ static int wlcapture_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx, v
         pthread_mutex_lock(&priv->frame_obj_lock);
         cleanup_state(entry, priv->dmabuf.frame_obj, priv->scrcpy.frame_obj, 0);
         pthread_mutex_unlock(&priv->frame_obj_lock);
+        sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_EOS, NULL);
         return 0;
     } else {
         return AVERROR(ENOTSUP);

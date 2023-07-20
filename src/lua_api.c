@@ -1036,7 +1036,7 @@ static int epoch_event_cb(AVBufferRef *event, void *callback_ctx, void *_ctx,
         /* 1 argument: system time */
         lua_pushinteger(L, av_gettime_relative());
 
-        if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+        if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
             sp_log(ctx, SP_LOG_ERROR, "Error calling external epoch callback: %s!\n",
                    lua_tostring(L, -1));
             return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);

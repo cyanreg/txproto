@@ -27,20 +27,6 @@
 #include "version.h"
 #include "../config.h"
 
-enum EpochMode {
-    EP_MODE_OFFSET,   /* Timestamps will start at an offset (value = system time + offset) */
-    EP_MODE_SYSTEM,   /* Timestamps will start at the system arbitrary time (value = 0) */
-    EP_MODE_SOURCE,   /* Timestamps will be set to the first output's PTS */
-    EP_MODE_EXTERNAL, /* A Lua function will give us the epoch */
-};
-
-typedef struct EpochEventCtx {
-    enum EpochMode mode;
-    int64_t value;
-    AVBufferRef *src_ref;
-    int fn_ref;
-} EpochEventCtx;
-
 typedef struct TXMainContext {
     SPClass *class;
 

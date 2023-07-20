@@ -631,7 +631,6 @@ static int drain_output_pad(FilterContext *ctx, FilterPad *out_pad,
     /* Probably overkill, but why take a chance? */
     if ((ret == AVERROR_EOF) || ((ret == AVERROR(EAGAIN)) && *flush)) {
         sp_log(ctx, SP_LOG_VERBOSE, "Output pad \"%s\" flushed!\n", out_pad->name);
-        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
         ret = AVERROR_EOF;
         out_pad->eos = 1;
     } else if (ret != AVERROR(EAGAIN)) {
@@ -698,9 +697,28 @@ static void *filtering_thread(void *data)
         sp_log(ctx, SP_LOG_ERROR, "Filter errors: %s!\n", av_err2str(err));
 
     av_frame_free(&filt_frame);
+
+    {
+        int tmp = err;
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, &tmp);
+        if (tmp != 0) {
+            for (int i = 0; i < ctx->num_out_pads; i++)
+                sp_frame_fifo_push(ctx->out_pads[i]->fifo, NULL);
+        }
+    }
+
     return NULL;
 
 fail:
+    {
+        int tmp = err;
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, &tmp);
+        if (tmp != 0) {
+            for (int i = 0; i < ctx->num_out_pads; i++)
+                sp_frame_fifo_push(ctx->out_pads[i]->fifo, NULL);
+        }
+    }
+
     av_frame_free(&filt_frame);
     pthread_mutex_unlock(&ctx->lock);
     return NULL;

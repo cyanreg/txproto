@@ -23,6 +23,7 @@
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 
+#include "utils.h"
 #include "ctrl_template.h"
 
 int sp_decoding_connect(DecodingContext *dec, DemuxingContext *mux,
@@ -215,12 +216,13 @@ static void *decoding_thread(void *arg)
 end:
     sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");
 
-    if (ret == AVERROR(EOF))
-        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
+    sp_event_send_eos_frame(ctx, ctx->events, ctx->dst_frames, ret);
 
     return NULL;
 
 fail:
+    sp_event_send_eos_frame(ctx, ctx->events, ctx->dst_frames, ret);
+
     ctx->err = ret;
 
     atomic_store(&ctx->running, 0);

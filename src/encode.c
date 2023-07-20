@@ -26,6 +26,7 @@
 #include "encoding_utils.h"
 #include "os_compat.h"
 #include <libtxproto/utils.h>
+#include "utils.h"
 #include "ctrl_template.h"
 
 static int swr_configure(EncodingContext *ctx, AVFrame *conf)
@@ -557,18 +558,19 @@ static void *encoding_thread(void *arg)
         pthread_mutex_unlock(&ctx->lock);
     } while (!ctx->err);
 
-    if (ret == AVERROR(EOF))
-        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
-
 end:
     av_packet_free(&out_pkt);
     sp_log(ctx, SP_LOG_VERBOSE, "Stream flushed!\n");
+
+    sp_event_send_eos_packet(ctx, ctx->events, ctx->dst_packets, ret);
 
     return NULL;
 
 fail:
     av_packet_free(&out_pkt);
     ctx->err = ret;
+
+    sp_event_send_eos_packet(ctx, ctx->events, ctx->dst_packets, ret);
 
     atomic_store(&ctx->running, 0);
     return NULL;

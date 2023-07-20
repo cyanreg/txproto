@@ -47,7 +47,7 @@ typedef enum SPEventType {
     SP_EVENT_ON_INIT         = (1ULL <<  3), /* NULL data, emitted after initialization */
     SP_EVENT_ON_CHANGE       = (1ULL <<  4), /* NULL data */
     SP_EVENT_ON_STATS        = (1ULL <<  5), /* 0-terminated SPGenericData array */
-    SP_EVENT_ON_EOS          = (1ULL <<  6), /* NULL data */
+    SP_EVENT_ON_EOS          = (1ULL <<  6), /* 32-bit integer, indicating the reason for the EOS. MAY be set by callees to 0 to avoid propagating the EOS. */
     SP_EVENT_ON_ERROR        = (1ULL <<  7), /* 32-bit integer */
     SP_EVENT_ON_DESTROY      = (1ULL <<  8), /* NULL data, or a 0-terminated SPGenericData array */
     SP_EVENT_ON_OUTPUT       = (1ULL <<  9), /* SPRationalValue */

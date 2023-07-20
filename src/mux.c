@@ -22,6 +22,7 @@
 #include <libtxproto/mux.h>
 
 #include <libtxproto/utils.h>
+#include "utils.h"
 #include "ctrl_template.h"
 
 typedef struct MuxEncoderMap {
@@ -185,9 +186,6 @@ send:
         pthread_mutex_unlock(&ctx->lock);
     }
 
-    if (flush && (!err || err == AVERROR(EOF)))
-        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
-
     pthread_mutex_lock(&ctx->lock);
 
 fail:
@@ -200,6 +198,8 @@ fail:
     pthread_mutex_unlock(&ctx->lock);
 
     ctx->err = err;
+
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, &err);
 
     return NULL;
 }

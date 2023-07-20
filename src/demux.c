@@ -22,6 +22,7 @@
 #include <libtxproto/demux.h>
 
 #include <libtxproto/utils.h>
+#include "utils.h"
 #include "ctrl_template.h"
 
 static void *demuxing_thread(void *arg)
@@ -56,8 +57,9 @@ static void *demuxing_thread(void *arg)
         av_packet_free(&out_packet);
     }
 
-    if (err == AVERROR(EOF))
-        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, NULL);
+    sp_event_send_eos_packets(ctx, ctx->events,
+                              ctx->dst_packets, ctx->avf->nb_streams,
+                              err);
 
 fail:
     return NULL;

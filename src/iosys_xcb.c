@@ -29,6 +29,7 @@
 #include "iosys_common.h"
 #include <libtxproto/utils.h>
 #include "ctrl_template.h"
+#include "utils.h"
 #include "../config.h"
 
 const IOSysAPI src_xcb;
@@ -306,9 +307,10 @@ static void *xcb_thread(void *s)
         priv->next_frame_ts = now + priv->frame_delay;
     }
 
-    sp_eventlist_dispatch(entry, entry->events, SP_EVENT_ON_EOS, NULL);
+    err = AVERROR(EOF);
 
 end:
+    sp_event_send_eos_frame(entry, entry->events, entry->frames, err);
     priv->err = err;
     return NULL;
 }

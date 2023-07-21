@@ -533,7 +533,6 @@ static void *encoding_thread(void *arg)
 
             ret = avcodec_receive_packet(ctx->avctx, out_pkt);
             if (ret == AVERROR_EOF) {
-                ret = 0;
                 pthread_mutex_unlock(&ctx->lock);
                 goto end;
             } else if (ret == AVERROR(EAGAIN)) {

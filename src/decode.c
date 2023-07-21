@@ -178,7 +178,6 @@ static void *decoding_thread(void *arg)
             if (ret == AVERROR_EOF) {
                 pthread_mutex_unlock(&ctx->lock);
                 av_frame_free(&out_frame);
-                ret = 0;
                 goto end;
             } else if (ret == AVERROR(EAGAIN)) {
                 av_frame_free(&out_frame);

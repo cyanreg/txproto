@@ -27,6 +27,7 @@
 #include "cli.h"
 #include "iosys_common.h"
 
+#include <libtxproto/commit.h>
 #include <libtxproto/epoch.h>
 #include <libtxproto/mux.h>
 #include <libtxproto/demux.h>
@@ -404,7 +405,7 @@ static int lua_generic_schedule(lua_State *L)
     LUA_PUSH_CONTEXTED_INTERFACE(L, lua_fns, contexts);
 
     if (!(flags & SP_EVENT_FLAG_IMMEDIATE))
-        add_commit_fn_to_list(ctx, fn, obj_ref);
+        sp_add_commit_fn_to_list(ctx, fn, obj_ref);
 
     return 1;
 }
@@ -846,7 +847,7 @@ static int lua_filter_command_template(lua_State *L, int is_graph)
          LUA_ERROR("Unable to process command: %s", av_err2str(err));
 
     if (!(flags & SP_EVENT_FLAG_IMMEDIATE))
-        add_commit_fn_to_list(ctx, sp_filter_ctrl, obj_ref);
+        sp_add_commit_fn_to_list(ctx, sp_filter_ctrl, obj_ref);
 
     av_dict_free(&cmdlist);
 

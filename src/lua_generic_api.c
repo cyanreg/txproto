@@ -24,6 +24,7 @@
 
 #include "iosys_common.h"
 
+#include <libtxproto/commit.h>
 #include <libtxproto/encode.h>
 #include <libtxproto/decode.h>
 #include <libtxproto/mux.h>
@@ -104,7 +105,7 @@ static int encoder_mode_negotiate(AVBufferRef *enc_ref, int want_global)
              LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));              \
                                                                                     \
         if (!(flags & SP_EVENT_FLAG_IMMEDIATE))                                     \
-            add_commit_fn_to_list(ctx, fn, ref);                                    \
+            sp_add_commit_fn_to_list(ctx, fn, ref);                                 \
                                                                                     \
     } while (0)
 
@@ -534,8 +535,8 @@ int sp_lua_generic_link(lua_State *L)
         GENERIC_CTRL(src_ref, SP_EVENT_CTRL_START, NULL);
         GENERIC_CTRL(dst_ref, SP_EVENT_CTRL_START, NULL);
     } else { /* But if we're not auto-starting them, we need to. */
-        add_discard_fn_to_list(ctx, get_ctrl_fn(src_ref->data), src_ref);
-        add_discard_fn_to_list(ctx, get_ctrl_fn(dst_ref->data), dst_ref);
+        sp_add_discard_fn_to_list(ctx, get_ctrl_fn(src_ref->data), src_ref);
+        sp_add_discard_fn_to_list(ctx, get_ctrl_fn(dst_ref->data), dst_ref);
     }
 
     return 0;

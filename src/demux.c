@@ -40,7 +40,7 @@ static void *demuxing_thread(void *arg)
         AVPacket *out_packet = av_packet_alloc();
 
         err = av_read_frame(ctx->avf, out_packet);
-        if (err == AVERROR(EOF)) {
+        if (err == AVERROR_EOF) {
             for (int i = 0; i < ctx->avf->nb_streams; i++)
                 sp_packet_fifo_push(ctx->dst_packets[i], NULL);
 

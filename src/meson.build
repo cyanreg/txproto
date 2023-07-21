@@ -161,7 +161,7 @@ meson.override_dependency('libtxproto', libtxproto)
 # Install headers
 foreach h : headers
     parts = h.split('/')
-    path = meson.project_name()
+    path = 'lib'+meson.project_name()
     foreach p : parts
         if p != parts[-1]
             path = path / p

@@ -127,10 +127,6 @@ static int context_full_config(DecodingContext *ctx)
 {
     int err;
 
-    ctx->avctx = avcodec_alloc_context3(ctx->codec);
-    if (!ctx->avctx)
-        return AVERROR(ENOMEM);
-
     err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
     if (err < 0)
         return err;
@@ -297,7 +293,8 @@ int sp_decoder_init(AVBufferRef *ctx_ref)
     }
 
     sp_class_set_name(ctx, new_name);
-    ctx->name = new_name;
+    av_free(new_name);
+    ctx->name = sp_class_get_name(ctx);
 
     return 0;
 
@@ -330,6 +327,7 @@ static void decoder_free(void *opaque, uint8_t *data)
 
     sp_log(ctx, SP_LOG_VERBOSE, "Decoder destroyed!\n");
     sp_class_free(ctx);
+    av_free(ctx);
 }
 
 AVBufferRef *sp_decoder_alloc(void)
@@ -350,7 +348,6 @@ AVBufferRef *sp_decoder_alloc(void)
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
 
-    ctx->src_packets = sp_packet_fifo_create(ctx, 8, PACKET_FIFO_BLOCK_NO_INPUT);
     ctx->dst_frames = sp_frame_fifo_create(ctx, 0, 0);
 
     return ctx_ref;

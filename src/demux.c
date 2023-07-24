@@ -46,9 +46,11 @@ static void *demuxing_thread(void *arg)
 
             sp_log(ctx, SP_LOG_VERBOSE, "Stream EOF, FIFOs flushed!\n");
             err = 0;
+            av_packet_free(&out_packet);
             break;
         } else if (err < 0) {
             sp_log(ctx, SP_LOG_ERROR, "Failed to read packet: %s\n", av_err2str(err));
+            av_packet_free(&out_packet);
             goto fail;
         }
 

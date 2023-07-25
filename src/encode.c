@@ -403,13 +403,6 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
                 AVHWFramesContext *enc_hwfc = (AVHWFramesContext *)ctx->enc_frames_ref->data;
                 tx_frame->format = enc_hwfc->format;
 
-                /* Set frame hardware context referencce */
-                tx_frame->hw_frames_ctx = av_buffer_ref(ctx->enc_frames_ref);
-                if (!tx_frame->hw_frames_ctx) {
-                    err = AVERROR(ENOMEM);
-                    return err;
-                }
-
                 err = av_hwframe_get_buffer(ctx->enc_frames_ref, tx_frame, 0);
                 if (err < 0) {
                     sp_log(ctx, SP_LOG_ERROR, "Error allocating frame: %s!\n", av_err2str(err));

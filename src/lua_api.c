@@ -34,6 +34,7 @@
 #include <libtxproto/encode.h>
 #include <libtxproto/decode.h>
 #include <libtxproto/filter.h>
+#include <libtxproto/io.h>
 
 #ifdef HAVE_INTERFACE
 #include "interface_common.h"
@@ -764,25 +765,10 @@ static int lua_create_io(lua_State *L)
 
     uint32_t identifier = (uintptr_t)lua_touserdata(L, -1);
 
-    int i = 0;
-    AVBufferRef *entry = NULL;
-    for (; i < sp_compiled_apis_len; i++)
-        if (ctx->io_api_ctx[i] &&
-            (entry = sp_compiled_apis[i]->ref_entry(ctx->io_api_ctx[i], identifier)))
-            break;
-
-    if (!entry) {
-        lua_pushnil(L);
-        av_dict_free(&opts);
-        return 0;
-    }
-
-    int err = sp_compiled_apis[i]->init_io(ctx->io_api_ctx[i], entry, opts);
+    AVBufferRef *entry = sp_io_create(ctx, identifier, opts);
     av_dict_free(&opts);
-    if (err < 0)
-        LUA_ERROR("Unable to init IO: %s!", av_err2str(err));
-
-    sp_bufferlist_append_noref(ctx->ext_buf_refs, entry);
+    if (!entry)
+        return lua_error(L);
 
     void *contexts[] = { ctx, entry };
     static const struct luaL_Reg lua_fns[] = {
@@ -1234,6 +1220,7 @@ static int lua_register_io_cb(lua_State *L)
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "register_io_cb")
 
+    /* Unpack lua args */
     int nb_args = lua_gettop(L);
     if (nb_args != 1 && nb_args != 2)
         LUA_ERROR("Invalid number of arguments, expected 1 or 2, got %i!", nb_args);
@@ -1257,119 +1244,39 @@ static int lua_register_io_cb(lua_State *L)
         lua_pop(L, 1);
     }
 
-    for (int i = 0; (api_list && api_list[i]); i++) {
-        int j;
-        for (j = 0; j < sp_compiled_apis_len; j++)
-            if (!strcmp(api_list[i], sp_compiled_apis[j]->name))
-                break;
-        if (j == sp_compiled_apis_len) {
-            char temp[99] = { 0 };
-            snprintf(temp, sizeof(temp), "%s", api_list[i]);
-            FREE_STR_LIST(api_list);
-            LUA_ERROR("API \"%s\" not found!", temp);
-        }
-    }
-
     int fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     if (fn_ref == LUA_NOREF || fn_ref == LUA_REFNIL) {
         FREE_STR_LIST(api_list);
         LUA_ERROR("Unable to reference %s!", "function");
     }
 
-    if (!ctx->io_api_ctx)
-        ctx->io_api_ctx = av_mallocz(sizeof(*ctx->io_api_ctx)*sp_compiled_apis_len);
-
-    /* Initialize I/O APIs */
-    int initialized_apis = 0, apis_initialized = 0;
-    for (int i = 0; i < sp_compiled_apis_len; i++) {
-        if (ctx->io_api_ctx[i]) {
-            initialized_apis++;
-            continue;
-        }
-        int found = 0;
-        for (int j = 0; (api_list && api_list[j]); j++) {
-            if (!strcmp(api_list[j], sp_compiled_apis[i]->name)) {
-                found = 1;
-                break;
-            }
-        }
-        if (api_list && !found)
-            continue;
-
-        err = sp_compiled_apis[i]->init_sys(&ctx->io_api_ctx[i]);
-        if (!api_list && err == AVERROR(ENOSYS)) {
-            continue;
-        } else if (err < 0) {
-            luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
-            FREE_STR_LIST(api_list);
-            LUA_ERROR("Unable to load API \"%s\": %s!", sp_compiled_apis[i]->name,
-                      av_err2str(err));
-        }
-
-        initialized_apis++;
-        apis_initialized++;
-    }
-
-    if (!initialized_apis) {
+    /* Create IO enumeration event */
+    AVBufferRef *source_event;
+    source_event = sp_io_alloc(ctx, (const char **)api_list, source_event_cb,
+                               source_event_free, sizeof(SPSourceEventCbCtx));
+    if (!source_event) {
         luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
         FREE_STR_LIST(api_list);
-
-        if (api_list)
-            LUA_ERROR("No requested I/O API(s) available of the %d enabled at build time.\n",
-                      sp_compiled_apis_len);
-        else
-            sp_log(ctx, SP_LOG_WARN, "No I/O APIs available.\n");
-
         return 0;
-    } else if (apis_initialized) {
-        sp_log(ctx, SP_LOG_DEBUG, "%i I/O(s) initialized.\n", apis_initialized);
     }
-
-    SPEventType type = SP_EVENT_TYPE_SOURCE    | SP_EVENT_ON_CHANGE |
-                       SP_EVENT_FLAG_IMMEDIATE | SP_EVENT_FLAG_UNIQUE;
-
-    AVBufferRef *source_event = sp_event_create(source_event_cb,
-                                                source_event_free,
-                                                sizeof(SPSourceEventCbCtx),
-                                                NULL,
-                                                type,
-                                                ctx,
-                                                NULL);
 
     LUA_SET_CLEANUP(source_event);
 
+    /* Plug C => Lua callback */
     SPSourceEventCbCtx *source_event_ctx = av_buffer_get_opaque(source_event);
 
     source_event_ctx->fn_ref = fn_ref;
     source_event_ctx->lua = sp_lua_create_thread(ctx->lua, ctx);
 
-    for (int i = 0; i < sp_compiled_apis_len; i++) {
-        if (!ctx->io_api_ctx[i])
-            continue;
-        int found = 0;
-        for (int j = 0; (api_list && api_list[j]); j++) {
-            if (!strcmp(api_list[j], sp_compiled_apis[i]->name)) {
-                found = 1;
-                break;
-            }
-        }
-        if (api_list && !found)
-            continue;
-
-        /* Add and immediately run the event to signal all devices */
-        err = sp_compiled_apis[i]->ctrl(ctx->io_api_ctx[i],
-                                        SP_EVENT_CTRL_NEW_EVENT | SP_EVENT_FLAG_IMMEDIATE,
-                                        source_event);
-        if (err < 0) {
-            FREE_STR_LIST(api_list);
-            LUA_ERROR("Unable to add event to API \"%s\": %s!", sp_compiled_apis[i]->name,
-                      av_err2str(err));
-        }
+    /* Complete IO enumeration initialization */
+    err = sp_io_init(ctx, source_event, (const char **)api_list);
+    if (err < 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, fn_ref);
+        FREE_STR_LIST(api_list);
+        LUA_ERROR("Unable to reference %s!", "function");
     }
 
     FREE_STR_LIST(api_list);
-
-    sp_bufferlist_append_noref(ctx->ext_buf_refs, source_event);
 
     void *contexts[] = { ctx, source_event };
     static const struct luaL_Reg lua_fns[] = {

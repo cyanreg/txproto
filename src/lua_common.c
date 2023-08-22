@@ -25,6 +25,7 @@
 
 #include "lua_common.h"
 #include "lua_api.h"
+#include "os_compat.h"
 
 #include <libtxproto/log.h>
 #include <libtxproto/utils.h>

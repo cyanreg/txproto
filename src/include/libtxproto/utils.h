@@ -24,7 +24,6 @@
 #include <libavutil/avstring.h>
 
 #include <libtxproto/events.h>
-#include "os_compat.h"
 
 #define SPMIN(a,b) ((a) > (b) ? (b) : (a))
 #define SPMAX(a,b) ((a) > (b) ? (a) : (b))

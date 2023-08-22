@@ -35,6 +35,7 @@ sources = [
     'commit.c',
     'control.c',
     'link.c',
+    'io.c',
 
     # Version
     vcs_tag(command: ['git', 'rev-parse', '--short', 'HEAD'],
@@ -60,6 +61,7 @@ headers = [
     'commit.h',
     'control.h',
     'link.h',
+    'io.h',
 ]
 
 # libendit

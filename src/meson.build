@@ -51,6 +51,7 @@ headers = [
     'fifo_packet.h',
     'events.h',
     'bufferlist.h',
+    'utils.h',
 ]
 
 # libendit

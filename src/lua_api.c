@@ -17,6 +17,8 @@
  */
 
 #include <libavutil/bprint.h>
+#include <libavutil/buffer.h>
+#include <libavutil/mem.h>
 #include <libavutil/time.h>
 #include <libavutil/pixdesc.h>
 
@@ -25,6 +27,7 @@
 #include "cli.h"
 #include "iosys_common.h"
 
+#include <libtxproto/epoch.h>
 #include <libtxproto/mux.h>
 #include <libtxproto/demux.h>
 #include <libtxproto/encode.h>
@@ -1004,77 +1007,62 @@ static int lua_create_filtergraph(lua_State *L)
     return 1;
 }
 
-static int epoch_event_cb(AVBufferRef *event, void *callback_ctx, void *_ctx,
-                          void *dep_ctx, void *data)
+typedef struct EpochExternalCtx {
+    TXMainContext *ctx;
+    int fn_ref;
+} EpochExternalCtx;
+
+static int epoch_external_cb(int64_t systemtime, AVBufferRef *arg)
 {
-    int err = 0;
-    TXMainContext *ctx = _ctx;
-    EpochEventCtx *epoch_ctx = callback_ctx;
-
-    int64_t val;
-    switch(epoch_ctx->mode) {
-    case EP_MODE_OFFSET:
-        val = av_gettime_relative() + epoch_ctx->value;
-        break;
-    case EP_MODE_SYSTEM:
-        val = 0;
-        break;
-    case EP_MODE_SOURCE:
-        sp_log(ctx, SP_LOG_ERROR, "Warning epoch mode source, using epoch of system!\n");
-        val = 0;
-        break;
-    case EP_MODE_EXTERNAL: {
-        lua_State *L = sp_lua_lock_interface(ctx->lua);
-
-        if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
-            sp_log(ctx, SP_LOG_ERROR, "Invalid Lua epoch callback \"nil\"!\n");
-            return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
-        }
-
-        lua_rawgeti(L, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
-
-        /* 1 argument: system time */
-        lua_pushinteger(L, av_gettime_relative());
-
-        if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
-            sp_log(ctx, SP_LOG_ERROR, "Error calling external epoch callback: %s!\n",
-                   lua_tostring(L, -1));
-            return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
-        }
-
-        if (!lua_isinteger(L, -1) && !lua_isnumber(L, -1)) {
-            sp_log(ctx, SP_LOG_ERROR, "Invalid return value for epoch function, "
-                   "expected \"integer\" or \"number\", got \"%s\"!",
-                   lua_typename(L, lua_type(L, -1)));
-            return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
-        }
-
-        val = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
-
-        sp_lua_unlock_interface(ctx->lua, 0);
-
-        break; }
-    }
-
-    atomic_store(&ctx->epoch_value, val);
-
-    return err;
-}
-
-static void epoch_event_free(void *callback_ctx, void *_ctx, void *dep_ctx)
-{
-    TXMainContext *ctx = _ctx;
-    EpochEventCtx *epoch_ctx = callback_ctx;
-
-    av_buffer_unref(&epoch_ctx->src_ref);
+    EpochExternalCtx *epoch_ctx = (EpochExternalCtx *)arg->data;
+    TXMainContext *ctx = epoch_ctx->ctx;
 
     lua_State *L = sp_lua_lock_interface(ctx->lua);
-    luaL_unref(L, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
+
+    if (epoch_ctx->fn_ref == LUA_NOREF || epoch_ctx->fn_ref == LUA_REFNIL) {
+        sp_log(ctx, SP_LOG_ERROR, "Invalid Lua epoch callback \"nil\"!\n");
+        return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
+    }
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
+
+    /* 1 argument: system time */
+    lua_pushinteger(L, systemtime);
+
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        sp_log(ctx, SP_LOG_ERROR, "Error calling external epoch callback: %s!\n",
+                lua_tostring(L, -1));
+        return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
+    }
+
+    if (!lua_isinteger(L, -1) && !lua_isnumber(L, -1)) {
+        sp_log(ctx, SP_LOG_ERROR, "Invalid return value for epoch function, "
+                "expected \"integer\" or \"number\", got \"%s\"!",
+                lua_typename(L, lua_type(L, -1)));
+        return sp_lua_unlock_interface(ctx->lua, AVERROR_EXTERNAL);
+    }
+
+    int64_t val = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
+
     sp_lua_unlock_interface(ctx->lua, 0);
+
+    return val;
+}
+
+static void epoch_external_free_arg(void *opaque, uint8_t *data)
+{
+    EpochExternalCtx *epoch_ctx = (EpochExternalCtx *)data;
+
+    lua_State *L = sp_lua_lock_interface(epoch_ctx->ctx->lua);
+    luaL_unref(L, LUA_REGISTRYINDEX, epoch_ctx->fn_ref);
+    sp_lua_unlock_interface(epoch_ctx->ctx->lua, 0);
+
+    av_free(opaque);
 }
 
 static int lua_set_epoch(lua_State *L)
 {
+    int err;
     TXMainContext *ctx = lua_touserdata(L, lua_upvalueindex(1));
 
     LUA_CLEANUP_FN_DEFS(sp_class_get_name(ctx), "set_epoch")
@@ -1083,21 +1071,8 @@ static int lua_set_epoch(lua_State *L)
         LUA_ERROR("Invalid number of arguments, expected 1, got %i!",
                   lua_gettop(L));
 
-    const SPEventType flags = SP_EVENT_FLAG_ONESHOT | SP_EVENT_ON_COMMIT;
-
-    AVBufferRef *epoch_event = sp_event_create(epoch_event_cb,
-                                               epoch_event_free,
-                                               sizeof(EpochEventCtx),
-                                               NULL,
-                                               flags,
-                                               ctx,
-                                               NULL);
-
+    AVBufferRef *epoch_event = sp_epoch_event_new(ctx);
     LUA_SET_CLEANUP(epoch_event);
-
-    EpochEventCtx *epoch_ctx = av_buffer_get_opaque(epoch_event);
-
-    epoch_ctx->fn_ref = LUA_NOREF;
 
     if (lua_istable(L, -1)) {
         lua_pushnil(L);
@@ -1112,37 +1087,42 @@ static int lua_set_epoch(lua_State *L)
                       "got \"%s\"!", lua_typename(L, lua_type(L, -1)));
 
         AVBufferRef *obj = lua_touserdata(L, -1);
-
-        enum SPType type = sp_class_get_type(obj->data);
-        if (type != SP_TYPE_CLOCK_SOURCE)
+        err = sp_epoch_event_set_source(epoch_event, obj);
+        if (err < 0)
             LUA_ERROR("Invalid reference category, expected \"clock source\", got \"%s\"!",
                       sp_class_type_string(obj->data));
-
-        epoch_ctx->mode = EP_MODE_SOURCE;
-        epoch_ctx->src_ref = av_buffer_ref(obj);
     } else if (lua_isnumber(L, -1) || lua_isinteger(L, -1)) {
-        epoch_ctx->mode = EP_MODE_OFFSET;
-        epoch_ctx->value = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
+        int64_t value = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : lua_tonumber(L, -1);
+        sp_epoch_event_set_offset(epoch_event, value);
     } else if (lua_isstring(L, -1)) {
         const char *str = lua_tostring(L, -1);
+
         if (!strcmp(str, "zero")) {
-            epoch_ctx->mode = EP_MODE_OFFSET;
-            epoch_ctx->value = 0;
+            sp_epoch_event_set_offset(epoch_event, 0);
         } else if (!strcmp(str, "system")) {
-            epoch_ctx->mode = EP_MODE_SYSTEM;
+            sp_epoch_event_set_system(epoch_event);
         } else {
             LUA_ERROR("Invalid epoch mode, expected \"zero\" or \"system\", got \"%s\"!", str);
         }
     } else if (lua_isfunction(L, -1)) {
-        epoch_ctx->mode = EP_MODE_EXTERNAL;
+        EpochExternalCtx *epoch_ctx = av_mallocz(sizeof(*epoch_ctx));
+        epoch_ctx->ctx = ctx;
         epoch_ctx->fn_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+        AVBufferRef *epoch_ctx_ref;
+        epoch_ctx_ref = av_buffer_create((uint8_t *)epoch_ctx, sizeof(*epoch_ctx),
+                                         epoch_external_free_arg, NULL, 0);
+
+        sp_epoch_event_set_external(epoch_event,
+                                    epoch_external_cb,
+                                    epoch_ctx_ref);
     } else {
         LUA_ERROR("Invalid argument, expected \"string\", \"table\", \"integer\", "
                   "\"number\", or \"function\", " "got \"%s\"!",
                   lua_typename(L, lua_type(L, -1)));
     }
 
-    int err = sp_eventlist_add(ctx, ctx->events, epoch_event, 0);
+    err = sp_eventlist_add(ctx, ctx->events, epoch_event, 0);
     if (err < 0)
         av_buffer_unref(&epoch_event);
 

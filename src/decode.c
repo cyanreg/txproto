@@ -195,7 +195,7 @@ static void *decoding_thread(void *arg)
 
             FormatExtraData *fe  = (FormatExtraData *)out_frame->opaque_ref->data;
             fe->time_base        = ctx->avctx->time_base;
-            fe->bits_per_sample  = 32;
+            fe->bits_per_sample  = ctx->avctx->bits_per_raw_sample;
             out_frame->time_base = fe->time_base;
 
             sp_log(ctx, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",

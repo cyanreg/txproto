@@ -22,6 +22,7 @@
 #include <libavutil/rational.h>
 
 #include <libtxproto/events.h>
+#include <libtxproto/fifo_frame.h>
 #include <libtxproto/log.h>
 
 enum IOType {
@@ -55,6 +56,7 @@ typedef struct IOSysEntry {
     int y;
     int width;
     int height;
+    SPRotation rotation;
     AVRational framerate;
 
     /* Audio specific input properties */

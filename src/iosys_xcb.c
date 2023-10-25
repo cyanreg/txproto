@@ -264,6 +264,7 @@ static void *xcb_thread(void *s)
         FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
         fe->time_base       = AV_TIME_BASE_Q;
         fe->avg_frame_rate  = entry->framerate;
+        fe->rotation        = entry->rotation;
 
         sp_log(entry, SP_LOG_TRACE, "Pushing frame to FIFO, pts = %f\n",
                av_q2d(fe->time_base) * frame->pts);
@@ -468,6 +469,24 @@ end:
     return rate;
 }
 
+static SPRotation convert_rotation(uint16_t xcb_rotation)
+{
+    switch (xcb_rotation) {
+        case XCB_RANDR_ROTATION_ROTATE_90:
+            return ROTATION_ROTATE90;
+
+        case XCB_RANDR_ROTATION_ROTATE_180:
+            return ROTATION_ROTATE180;
+
+        case XCB_RANDR_ROTATION_ROTATE_270:
+            return ROTATION_ROTATE270;
+
+        case XCB_RANDR_ROTATION_ROTATE_0:
+        default:
+            return ROTATION_IDENTITY;
+    }
+}
+
 static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
 {
     xcb_connection_t *con = ctx->con;
@@ -568,6 +587,8 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
                                                 mon,
                                                 sp_class_get_name(entry));
 
+        SPRotation rotation = convert_rotation(info_r->rotation);
+
         change |= (entry->x != mon->x) ||
                   (entry->y != mon->y) ||
                   (entry->width != mon->width) ||
@@ -575,7 +596,8 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
                   (entry->is_default != !!mon->primary) ||
                   (priv->root != xscreen) ||
                   (entry->framerate.num != framerate.num) ||
-                  (entry->framerate.den != framerate.den);
+                  (entry->framerate.den != framerate.den) ||
+                  (entry->rotation != rotation);
 
         priv->root = xscreen;
         entry->framerate = framerate;
@@ -584,6 +606,8 @@ static void iter_monitors(XCBCtx *ctx, xcb_screen_t *xscreen)
         entry->y = mon->y;
         entry->width = mon->width;
         entry->height = mon->height;
+        entry->rotation = rotation;
+
         entry->is_default = !!mon->primary;
 
         free(info_r);

@@ -25,6 +25,7 @@
 #include "iosys_common.h"
 
 #include <libtxproto/commit.h>
+#include <libtxproto/control.h>
 #include <libtxproto/encode.h>
 #include <libtxproto/decode.h>
 #include <libtxproto/mux.h>
@@ -78,69 +79,6 @@ static int encoder_mode_negotiate(AVBufferRef *enc_ref, int want_global)
     neg_ctx->need_global |= !!want_global;
 
     return 0;
-}
-
-#define GENERIC_CTRL(ref, flags, arg)                                               \
-    do {                                                                            \
-        ctrl_fn fn = get_ctrl_fn(ref->data);                                        \
-        if (!fn)                                                                    \
-            LUA_ERROR("Unsupported CTRL type: %s!",                                 \
-                      sp_class_type_string(ref->data));                             \
-                                                                                    \
-        if (!(flags & SP_EVENT_CTRL_MASK)) {                                        \
-            LUA_ERROR("Missing ctrl: command: %s!", av_err2str(AVERROR(EINVAL)));   \
-        } else if (flags & SP_EVENT_ON_MASK) {                                      \
-            LUA_ERROR("Event specified but given to a ctrl, use %s.schedule: %s!",  \
-                      sp_class_get_name(ref->data), av_err2str(AVERROR(EINVAL)));   \
-        } else if ((flags & SP_EVENT_CTRL_OPTS) && (!arg)) {                        \
-            LUA_ERROR("No options specified for ctrl:opts: %s!",                    \
-                      av_err2str(AVERROR(EINVAL)));                                 \
-        }                                                                           \
-                                                                                    \
-        if (flags & SP_EVENT_CTRL_START)                                            \
-            err = fn(ref, flags, &ctx->epoch_value);                                \
-        else                                                                        \
-            err = fn(ref, flags, arg);                                              \
-        if (err < 0)                                                                \
-             LUA_ERROR("Unable to process CTRL: %s", av_err2str(err));              \
-                                                                                    \
-        if (!(flags & SP_EVENT_FLAG_IMMEDIATE))                                     \
-            sp_add_commit_fn_to_list(ctx, fn, ref);                                 \
-                                                                                    \
-    } while (0)
-
-static ctrl_fn get_ctrl_fn(void *ctx)
-{
-    enum SPType type = sp_class_get_type(ctx);
-    switch (type) {
-    case SP_TYPE_ENCODER:
-        return sp_encoder_ctrl;
-    case SP_TYPE_MUXER:
-        return sp_muxer_ctrl;
-    case SP_TYPE_DECODER:
-        return sp_decoder_ctrl;
-    case SP_TYPE_DEMUXER:
-        return sp_demuxer_ctrl;
-    case SP_TYPE_FILTER:
-        return sp_filter_ctrl;
-#ifdef HAVE_INTERFACE
-    case SP_TYPE_INTERFACE:
-        return sp_interface_ctrl;
-#endif
-    case SP_TYPE_AUDIO_SOURCE:
-    case SP_TYPE_AUDIO_SINK:
-    case SP_TYPE_AUDIO_BIDIR:
-    case SP_TYPE_VIDEO_SOURCE:
-    case SP_TYPE_VIDEO_SINK:
-    case SP_TYPE_VIDEO_BIDIR:
-    case SP_TYPE_SUB_SOURCE:
-    case SP_TYPE_SUB_SINK:
-    case SP_TYPE_SUB_BIDIR:
-        return ((IOSysEntry *)ctx)->ctrl;
-    default:
-        break;
-    }
-    return NULL;
 }
 
 static SPBufferList *sp_ctx_get_events_list(void *ctx)
@@ -532,11 +470,16 @@ int sp_lua_generic_link(lua_State *L)
     av_buffer_unref(&link_event);
 
     if (autostart) { /* These add a discard event, so we don't need to */
-        GENERIC_CTRL(src_ref, SP_EVENT_CTRL_START, NULL);
-        GENERIC_CTRL(dst_ref, SP_EVENT_CTRL_START, NULL);
+        err = sp_generic_ctrl(ctx, src_ref, SP_EVENT_CTRL_START, NULL);
+        if (err < 0)
+            return err;
+
+        err = sp_generic_ctrl(ctx, dst_ref, SP_EVENT_CTRL_START, NULL);
+        if (err < 0)
+            return err;
     } else { /* But if we're not auto-starting them, we need to. */
-        sp_add_discard_fn_to_list(ctx, get_ctrl_fn(src_ref->data), src_ref);
-        sp_add_discard_fn_to_list(ctx, get_ctrl_fn(dst_ref->data), dst_ref);
+        sp_add_discard_fn_to_list(ctx, sp_get_ctrl_fn(src_ref->data), src_ref);
+        sp_add_discard_fn_to_list(ctx, sp_get_ctrl_fn(dst_ref->data), dst_ref);
     }
 
     return 0;
@@ -577,7 +520,12 @@ int sp_lua_generic_ctrl(lua_State *L)
     if (err < 0)
         LUA_ERROR("Unable to parse given flags: %s", av_err2str(err));
 
-    GENERIC_CTRL(obj_ref, flags, opts);
+    err = sp_generic_ctrl(ctx, obj_ref, flags, opts);
+    if (err < 0) {
+        if (cleanup_ref && *cleanup_ref)
+            av_buffer_unref(cleanup_ref);
+        return lua_error(L);
+    }
 
     av_dict_free(&opts);
 

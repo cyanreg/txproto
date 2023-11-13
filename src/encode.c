@@ -682,7 +682,6 @@ static void *encoding_thread(void *arg)
                     ret = 0;
                     break;
                 } else {
-                    ret = 0;
                     pthread_mutex_unlock(&ctx->lock);
                     goto end;
                 }

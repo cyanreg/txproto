@@ -572,6 +572,18 @@ static int recreate_encoder(EncodingContext *ctx, AVFrame *conf)
     return 0;
 }
 
+static int video_config_changed(const EncodingContext *ctx, const AVFrame *frame)
+{
+    if (!frame)
+        return 0;
+
+    FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
+
+    return (ctx->avctx->width != frame->width) ||
+           (ctx->avctx->height != frame->height) ||
+           (ctx->rotation != fe->rotation);
+}
+
 static void *encoding_thread(void *arg)
 {
     EncodingContext *ctx = arg;
@@ -604,14 +616,9 @@ static void *encoding_thread(void *arg)
             flush = !frame;
         }
 
-        FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
-
         if (ctx->codec->type == AVMEDIA_TYPE_VIDEO) {
-            int conf_changed = (ctx->avctx->width != frame->width) ||
-                               (ctx->avctx->height != frame->height) ||
-                               (ctx->rotation != fe->rotation);
-
-            if (conf_changed) {
+            if (video_config_changed(ctx, frame)) {
+                FormatExtraData *fe = (FormatExtraData *)frame->opaque_ref->data;
                 sp_log(ctx, SP_LOG_INFO, "Configuration change detected: %dx%d, Rotation: %d\n",
                        frame->width, frame->height, fe->rotation);
 

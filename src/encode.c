@@ -487,15 +487,14 @@ static int video_process_frame(EncodingContext *ctx, AVFrame **input)
 }
 
 static int attach_sidedata(EncodingContext *ctx,
-                           AVPacket *pkt,
-                           const FormatExtraData *fe)
+                           AVPacket *pkt)
 {
     int ret;
 
     /* Gather metadata */
     AVDictionary *dict = NULL;
 
-    av_dict_set_int(&dict, "rotation", fe->rotation, 0);
+    av_dict_set_int(&dict, "rotation", ctx->rotation, 0);
 
     /* Attach metadata */
     size_t packed_dict_size = 0;
@@ -690,7 +689,7 @@ static void *encoding_thread(void *arg)
             }
 
             if (ctx->attach_sidedata == 1) {
-                ret = attach_sidedata(ctx, out_pkt, fe);
+                ret = attach_sidedata(ctx, out_pkt);
                 if (ret < 0) {
                     pthread_mutex_unlock(&ctx->lock);
                     goto fail;

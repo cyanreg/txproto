@@ -196,7 +196,7 @@ pkg.generate(
 if get_option('cli').enabled()
     cli_deps = dependencies
     cli_deps += libtxproto
-    executable('txproto',
+    cli = executable('txproto',
         install: true,
         sources: cli_lua_scripts + 'txproto_main.c',
         dependencies: cli_deps,
@@ -215,3 +215,6 @@ summary({
     'wayland': have_wayland,
     'libavdevice': libavdevice.found(),
 }, section: 'I/O systems', bool_yn: true)
+
+test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_audio.lua', '-r', 'io,package', '/tmp/test.opus', '/tmp/resulta.ts'], env : ['LUA_PATH=../test/common.lua'])
+test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_video.lua', '-r', 'io,package', '/tmp/test.webm', '/tmp/resultv.ts'], env : ['LUA_PATH=../test/common.lua'])

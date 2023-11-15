@@ -765,6 +765,16 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
             else
                 sp_packet_fifo_set_max_queued(ctx->src_frames, len);
         }
+        if ((tmp_val = dict_get(event->opts, "fifo_flags"))) {
+            enum SPFrameFIFOFlags new_block_flags = 0;
+            int res = sp_frame_fifo_string_to_block_flags(&new_block_flags, tmp_val);
+            if (res) {
+                sp_log(ctx, SP_LOG_ERROR, "Invalid fifo flags: \"%s\"!\n", tmp_val);
+            } else {
+                sp_frame_fifo_set_block_flags(ctx->src_frames, new_block_flags);
+                sp_log(ctx, SP_LOG_TRACE, "Changed fifo flags to %s (%d)\n", tmp_val, new_block_flags);
+            }
+        }
     } else if (event->ctrl & SP_EVENT_CTRL_FLUSH) {
         if (ctx->codec->capabilities & AV_CODEC_CAP_ENCODER_FLUSH) {
             atomic_store(&ctx->soft_flush, 1);

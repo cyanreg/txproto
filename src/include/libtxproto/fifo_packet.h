@@ -46,6 +46,7 @@ int RENAME(fifo_get_max_size)(AVBufferRef *src);
 /* Modify */
 void RENAME(fifo_set_max_queued)(AVBufferRef *dst, int max_queued);
 void RENAME(fifo_set_block_flags)(AVBufferRef *dst, FNAME block_flags);
+int  RENAME(fifo_string_to_block_flags)(FNAME *dst, const char *in_str);
 
 /* Up/downstreaming */
 int RENAME(fifo_mirror)(AVBufferRef *dst, AVBufferRef *src);

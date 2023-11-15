@@ -206,6 +206,32 @@ void RENAME(fifo_set_block_flags)(AVBufferRef *dst, FNAME block_flags)
     pthread_mutex_unlock(&ctx->lock);
 }
 
+// convert a lowercase, comma-separated list of block flags to actual flags
+int RENAME(fifo_string_to_block_flags)(FNAME *dst, const char *in_str)
+{
+    *dst = 0;
+    int err = 0;
+    char *saveptr;
+    char *copy = strdup(in_str);
+    char *ptr = strtok_r(copy, ",", &saveptr);
+    while (ptr != NULL) {
+        if (!strcmp(ptr, "block_no_input")) {
+            *dst |= FRENAME(BLOCK_NO_INPUT);
+        } else if (!strcmp(ptr, "block_max_output")) {
+            *dst |= FRENAME(BLOCK_MAX_OUTPUT);
+        } else if (!strcmp(ptr, "pull_no_block")) {
+            *dst |= FRENAME(PULL_NO_BLOCK);
+        } else {
+            err = AVERROR(EINVAL); // error
+            goto end;
+        }
+        ptr = strtok_r(NULL, ",", &saveptr);
+    }
+end:
+    free(copy);
+    return err;
+}
+
 int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
 {
     if (!dst)

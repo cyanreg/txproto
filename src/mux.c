@@ -344,6 +344,16 @@ static int muxer_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
             else
                 sp_packet_fifo_set_max_queued(ctx->src_packets, len);
         }
+        if ((tmp_val = dict_get(event->opts, "fifo_flags"))) {
+            enum SPPacketFIFOFlags new_block_flags = 0;
+            int res = sp_packet_fifo_string_to_block_flags(&new_block_flags, tmp_val);
+            if (res) {
+                sp_log(ctx, SP_LOG_ERROR, "Invalid fifo flags: \"%s\"!\n", tmp_val);
+            } else {
+                sp_packet_fifo_set_block_flags(ctx->src_packets, new_block_flags);
+                sp_log(ctx, SP_LOG_TRACE, "Changed fifo flags to %s (%d)\n", tmp_val, new_block_flags);
+            }
+        }
         pthread_mutex_unlock(&ctx->lock);
     } else if (event->ctrl & SP_EVENT_CTRL_FLUSH) {
         sp_log(ctx, SP_LOG_VERBOSE, "Flushing buffer\n");

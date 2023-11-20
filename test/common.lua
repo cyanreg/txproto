@@ -11,7 +11,7 @@ function common.create_audio_sample(filename)
 		return
 	end
 	print("Audio sample "..filename.." not found, generating it")
-	f = io.popen("ffmpeg -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=10.0' -c:a libopus '"..filename.."'")
+	f = io.popen("ffmpeg -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=10.0' -c:a libopus -frame_duration 20 '"..filename.."'")
 	io.close(f)
 end
 
@@ -25,21 +25,32 @@ function common.create_video_sample(filename)
 	io.close(f)
 end
 
-function get_duration(filename)
-	f = io.popen("ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '"..filename.."'")
+function common.get_duration(filename)
+	command = "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '"..filename.."'"
+	-- print("Launching: "..command)
+	f = io.popen(command)
 	output = f:read("*a")
 	io.close(f)
-	return output
+	return tonumber(output)
 end
 
-function common.check_duration(sample1, sample2)
-	duration1 = tonumber(get_duration(sample1))
-	duration2 = tonumber(get_duration(sample2))
-	return duration1 == duration2
+function common.get_nb_of_frames(filename)
+	command = "ffprobe -v error -select_streams 0 -count_frames -show_entries stream=nb_read_frames -of default=noprint_wrappers=1:nokey=1 '"..filename.."'"
+	print("Launching: "..command)
+	f = io.popen(command)
+	output = f:read("*a")
+	io.close(f)
+	return tonumber(output)
 end
 
 function common.muxer_eos(event)
 	tx.quit()
 end
+
+function common.sleep(dur)
+	f = io.popen("sleep "..dur)
+	io.close(f)
+end
+
 
 return common

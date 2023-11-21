@@ -7,11 +7,11 @@ function muxer_eos(event)
 	-- tx.quit()
 	-- muxer_a.ctrl("flush")
 	-- tx.commit()
-	-- muxer_a.destroy()
-	-- src_frames = common.get_nb_of_frames(src)
-	-- dst_frames = common.get_nb_of_frames(dst)
-    	-- print("Number of frames found in the src: "..src_frames) 
-    	-- print("Number of frames found in the dst: "..dst_frames)
+	muxer_a.destroy()
+	src_frames = common.get_nb_of_frames(src)
+	dst_frames = common.get_nb_of_frames(dst)
+    	print("Number of frames found in the src: "..src_frames) 
+    	print("Number of frames found in the dst: "..dst_frames)
 	-- assert(src_frames == dst_frames, "source and destination tests do not have the same number of frames")
 	tx.quit()
 end
@@ -29,15 +29,15 @@ function main(...)
         })
 
     dec_f = tx.create_decoder({
-            decoder = "opus",
+            decoder = "flac",
         })
     dec_f.link(source_f);
 
     encoder_a = tx.create_encoder({
-            encoder = "libopus",
+            encoder = "flac",
 	    options = {
-		    frame_duration = 20,
 		    sample_rate = 48000,
+		    frame_duration = 20,
     	    },
             priv_options = {
 		fifo_size = 10,
@@ -51,8 +51,6 @@ function main(...)
         })
     muxer_a.link(encoder_a)
     muxer_a.schedule("eos", muxer_eos);
-
-    sleep(1)
 
     tx.commit()
 end

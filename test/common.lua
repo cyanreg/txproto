@@ -11,7 +11,7 @@ function common.create_audio_sample(filename)
 		return
 	end
 	print("Audio sample "..filename.." not found, generating it")
-	f = io.popen("ffmpeg -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=10.0' -c:a libopus -frame_duration 20 '"..filename.."'")
+	f = io.popen("ffmpeg -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=10.0' -c:a flac -frame_duration 20 '"..filename.."'")
 	io.close(f)
 end
 

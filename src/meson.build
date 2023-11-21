@@ -216,5 +216,5 @@ summary({
     'libavdevice': libavdevice.found(),
 }, section: 'I/O systems', bool_yn: true)
 
-#test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_audio.lua', '-r', 'io,package', '/tmp/testa.mkv', '/tmp/resulta.mkv'], env : ['LUA_PATH=../test/common.lua'])
-test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_video.lua', '-r', 'io,package', '/tmp/testv.mkv', '/tmp/resultv.mkv'], env : ['LUA_PATH=../test/common.lua'])
+test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_audio.lua', '-r', 'io,package', '/tmp/testa.flac', '/tmp/resulta.flac'], env : ['LUA_PATH=../test/common.lua'])
+#test('test1', cli, args : ['-V', 'trace', '-s', '../test/transcode_video.lua', '-r', 'io,package', '/tmp/testv.mkv', '/tmp/resultv.mkv'], env : ['LUA_PATH=../test/common.lua'])

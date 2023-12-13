@@ -592,9 +592,17 @@ static void *encoding_thread(void *arg)
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
+#if 0
+        if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
+            int ret = context_full_config(ctx);
+            if (ret < 0)
+                return ret;
+        }
+#endif
 
     sp_log(ctx, SP_LOG_VERBOSE, "Encoder initialized!\n");
+
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
 
     do {
         pthread_mutex_lock(&ctx->lock);
@@ -711,6 +719,9 @@ static void *encoding_thread(void *arg)
                    av_q2d(ctx->avctx->time_base) * out_pkt->pts);
 
             sp_packet_fifo_push(ctx->dst_packets, out_pkt);
+
+            sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
+
             av_packet_free(&out_pkt);
         }
 
@@ -742,11 +753,13 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
     EncodingContext *ctx = _ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
+#if 1
         if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
             int ret = context_full_config(ctx);
             if (ret < 0)
                 return ret;
         }
+#endif
         ctx->epoch = atomic_load(event->epoch);
         if (!ctx->encoding_thread)
             pthread_create(&ctx->encoding_thread, NULL, encoding_thread, ctx);

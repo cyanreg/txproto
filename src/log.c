@@ -113,6 +113,8 @@ struct SPLogState {
     },
 };
 
+static int log_done = 1;
+
 static inline SPClass *get_class(void *ctx)
 {
     if (!ctx)
@@ -395,6 +397,9 @@ static int build_line_norm(SPClass *class, AVBPrint *bpc, enum SPLogLevel lvl,
 static void main_log(SPClass *class, enum SPLogLevel lvl, const char *format,
                      va_list args)
 {
+    if (log_done)
+        return;
+
     int cont = 0, no_class = 0, ends_line = 1;
     SPIncompleteLineCache *ic = NULL, *ic_unused = NULL;
     int nolog = lvl & SP_NOLOG;
@@ -986,6 +991,8 @@ int sp_log_init(enum SPLogLevel global_log_level)
     int ret = 0;
     sp_log_uninit();
 
+    log_done = 0;
+
     pthread_mutex_lock(&log_ctx.ctx_lock);
     pthread_mutex_lock(&log_ctx.file_lock);
     pthread_mutex_lock(&log_ctx.term_lock);
@@ -1049,4 +1056,6 @@ void sp_log_uninit(void)
     pthread_mutex_unlock(&log_ctx.term_lock);
     pthread_mutex_unlock(&log_ctx.file_lock);
     pthread_mutex_unlock(&log_ctx.ctx_lock);
+
+    log_done = 1;
 }

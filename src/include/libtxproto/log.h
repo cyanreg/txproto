@@ -110,7 +110,7 @@ int sp_log_set_ctx_lvl_str(const char *component, const char *lvl);
 void sp_log_set_json_out(int file, int std);
 
 /* Main logging */
-void sp_log(void *ctx, int level, const char *fmt, ...) sp_printf_format(3, 4);
+void sp_log(void *ctx, enum SPLogLevel level, const char *fmt, ...) sp_printf_format(3, 4);
 
 /* Set log file */
 int sp_log_set_file(const char *path);

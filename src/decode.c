@@ -123,19 +123,6 @@ has_stream_id:
     return 0;
 }
 
-static int context_full_config(DecodingContext *ctx)
-{
-    int err;
-
-    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
-    if (err < 0)
-        return err;
-
-    sp_log(ctx, SP_LOG_VERBOSE, "Decoder configured!\n");
-
-    return 0;
-}
-
 static void *decoding_thread(void *arg)
 {
     DecodingContext *ctx = arg;
@@ -143,9 +130,9 @@ static void *decoding_thread(void *arg)
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
-
     sp_log(ctx, SP_LOG_VERBOSE, "Decoder initialized!\n");
+
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
 
     do {
         pthread_mutex_lock(&ctx->lock);
@@ -202,6 +189,9 @@ static void *decoding_thread(void *arg)
                    av_q2d(out_frame->time_base) * out_frame->pts);
 
             sp_frame_fifo_push(ctx->dst_frames, out_frame);
+
+            sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
+
             av_frame_free(&out_frame);
         }
 
@@ -231,11 +221,6 @@ static int decoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
     DecodingContext *ctx = _ctx;
 
     if (event->ctrl & SP_EVENT_CTRL_START) {
-        if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
-            int ret = context_full_config(ctx);
-            if (ret < 0)
-                return ret;
-        }
         ctx->epoch = atomic_load(event->epoch);
         if (!ctx->decoding_thread)
             pthread_create(&ctx->decoding_thread, NULL, decoding_thread, ctx);

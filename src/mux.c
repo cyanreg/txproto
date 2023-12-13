@@ -54,8 +54,6 @@ static void *muxing_thread(void *arg)
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
-
     if (ctx->dump_sdp_file) {
         char sdp_data[16384];
         err = av_sdp_create(&ctx->avf, 1, sdp_data, sizeof(sdp_data));
@@ -91,9 +89,13 @@ static void *muxing_thread(void *arg)
 
     sp_log(ctx, SP_LOG_VERBOSE, "Muxer initialized!\n");
 
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
+
     while (1) {
         AVPacket *in_pkt = NULL;
         pthread_mutex_lock(&ctx->lock);
+
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
 
         if (!flush) {
             in_pkt = sp_packet_fifo_pop(ctx->src_packets);

@@ -32,7 +32,7 @@ static void *demuxing_thread(void *arg)
 
     sp_set_thread_name_self(sp_class_get_name(ctx));
 
-    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
 
     sp_log(ctx, SP_LOG_VERBOSE, "Muxer initialized!\n");
 
@@ -56,6 +56,8 @@ static void *demuxing_thread(void *arg)
 
         sp_log(ctx, SP_LOG_TRACE, "Sending packet from stream %i\n", out_packet->stream_index);
         sp_packet_fifo_push(ctx->dst_packets[out_packet->stream_index], out_packet);
+
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
 
         av_packet_free(&out_packet);
     }

@@ -325,13 +325,19 @@ int main(int argc, char *argv[])
 
     /* Run script entrypoint if specified */
     if (script_entrypoint && strlen(script_entrypoint)) {
-        lua_State *L = sp_lua_lock_interface(ctx->lua);
+        TXLuaContext *lctx = sp_lua_create_thread(ctx->lua, ctx);
+        if (!lctx) {
+            err = AVERROR(ENOMEM);
+            goto end;
+        }
+
+        lua_State *L = lctx->L;
 
         lua_getglobal(L, script_entrypoint);
         if (!lua_isfunction(L, -1)) {
             sp_log(ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                    script_entrypoint);
-            err = sp_lua_unlock_interface(ctx->lua, AVERROR(ENOENT));
+            err = AVERROR(ENOENT);
             goto end;
         }
 
@@ -339,17 +345,14 @@ int main(int argc, char *argv[])
         for(; optind < argc; optind++)
             lua_pushstring(L, argv[optind]);
 
-        if ((err = sp_lua_run_generic_yieldable(ctx->lua, args, 1, 1)) < 0)
+        if ((err = sp_lua_run_generic_yieldable(lctx, args, 1, 1)) < 0)
             goto end;
 
-        sp_lua_unlock_interface(ctx->lua, 0);
+        sp_lua_close_ctx(&lctx);
+    } else {
+        while (1)
+            av_usleep(UINT_MAX);
     }
-
-    /* We weren't told to exit or anything, so...
-     * In the future, maybe we should put an event loop here to process
-     * periodic events */
-    while (1)
-        av_usleep(UINT_MAX);
 
 end:
     av_freep(&lua_libs_list);

@@ -923,16 +923,18 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             /* Unlock */
             sp_lua_unlock_interface(lctx, 0);
 
-            char *fstr = sp_event_flags_to_str_buf(event_await);
-            sp_log(lctx, SP_LOG_DEBUG, "Thread waiting on an event signal (id:%lu %s)...\n",
-                   sp_event_get_id(event_await), fstr);
-            av_free(fstr);
+            if (event_await) {
+                char *fstr = sp_event_flags_to_str_buf(event_await);
+                sp_log(lctx, SP_LOG_DEBUG, "Thread waiting on an event signal (id:%lu %s)...\n",
+                       sp_event_get_id(event_await), fstr);
+                av_free(fstr);
 
-            /* Await event, if any */
-            sp_event_unref_await(&event_await);
+                /* Await event, if any */
+                sp_event_unref_await(&event_await);
 
-            sp_log(lctx, SP_LOG_DEBUG, "Event signalled, %s\n",
-                   ret == LUA_YIELD ? "resuming!" : "exiting.");
+                sp_log(lctx, SP_LOG_DEBUG, "Event signalled, %s\n",
+                       ret == LUA_YIELD ? "resuming!" : "exiting.");
+            }
 
             /* Lock again */
             sp_lua_lock_interface(lctx);

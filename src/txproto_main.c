@@ -331,13 +331,13 @@ int main(int argc, char *argv[])
             goto end;
         }
 
-        lua_State *L = lctx->L;
+        lua_State *L = sp_lua_lock_interface(lctx);
 
         lua_getglobal(L, script_entrypoint);
         if (!lua_isfunction(L, -1)) {
             sp_log(ctx, SP_LOG_ERROR, "Entrypoint \"%s\" not found!\n",
                    script_entrypoint);
-            err = AVERROR(ENOENT);
+            err = sp_lua_unlock_interface(lctx, AVERROR(ENOENT));
             goto end;
         }
 
@@ -345,9 +345,12 @@ int main(int argc, char *argv[])
         for(; optind < argc; optind++)
             lua_pushstring(L, argv[optind]);
 
-        if ((err = sp_lua_run_generic_yieldable(lctx, args, 1, 0)) < 0)
+        if ((err = sp_lua_run_generic_yieldable(lctx, args, 1, 1)) < 0) {
+            err = sp_lua_unlock_interface(lctx, err);
             goto end;
+        }
 
+        sp_lua_unlock_interface(lctx, 0);
         sp_lua_close_ctx(&lctx);
     } else {
         while (1)

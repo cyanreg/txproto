@@ -45,6 +45,5 @@ function main(...)
     while (true)
     do
         coroutine.yield()
-        print("Test")
     end
 end

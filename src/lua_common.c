@@ -921,7 +921,8 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
 
         if (ret == LUA_YIELD || event_await) {
             /* Unlock */
-            sp_lua_unlock_interface(lctx, 0);
+            if (ctx_is_locked)
+                sp_lua_unlock_interface(lctx, 0);
 
             if (event_await) {
                 char *fstr = sp_event_flags_to_str_buf(event_await);
@@ -937,7 +938,8 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             }
 
             /* Lock again */
-            sp_lua_lock_interface(lctx);
+            if (ctx_is_locked)
+                sp_lua_lock_interface(lctx);
         }
     } while (ret == LUA_YIELD);
 

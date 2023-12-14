@@ -889,7 +889,10 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
 {
     int ret, nresults = 0;
 
-    lua_State *L = ctx_is_locked ? lctx->L : sp_lua_lock_interface(lctx);
+    lua_State *L = lctx->L;
+
+    if (!ctx_is_locked)
+        sp_lua_lock_interface(lctx);
 
     sp_log(lctx, SP_LOG_DEBUG, "Lua thread started.\n");
 
@@ -908,10 +911,9 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
         sp_log(lctx, SP_LOG_DEBUG, "Lua thread %s!\n",
                ret == LUA_OK ? "exited" : "yielded");
 
-        if (nresults && lua_islightuserdata(L, -1))
+        if (nresults && lua_islightuserdata(L, -1)) {
             event_await = lua_touserdata(L, -1);
-
-        if (nresults && lua_isfunction(L, -1)) {
+        } else if (nresults && lua_isfunction(L, -1)) {
             lua_CFunction cfn = lua_tocfunction(L, -1);
             if (cfn == sp_lua_quit) {
                 ret = AVERROR_EXIT;
@@ -921,8 +923,7 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
 
         if (ret == LUA_YIELD || event_await) {
             /* Unlock */
-            if (ctx_is_locked)
-                sp_lua_unlock_interface(lctx, 0);
+            sp_lua_unlock_interface(lctx, 0);
 
             if (event_await) {
                 char *fstr = sp_event_flags_to_str_buf(event_await);
@@ -938,8 +939,7 @@ int sp_lua_run_generic_yieldable(TXLuaContext *lctx, int nb_args, int clean_stac
             }
 
             /* Lock again */
-            if (ctx_is_locked)
-                sp_lua_lock_interface(lctx);
+            sp_lua_lock_interface(lctx);
         }
     } while (ret == LUA_YIELD);
 

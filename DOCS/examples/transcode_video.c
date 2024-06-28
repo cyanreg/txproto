@@ -72,10 +72,10 @@ int main(int argc, char *argv[])
 
     AVBufferRef *encoder = tx_encoder_create(
         ctx,
-        "h264_nvenc",
-        NULL, // name
-        encoder_options,
-        NULL // init_opts
+        &(TxEncoderOptions) {
+            .enc_name = "h264_nvenc",
+            .options = encoder_options,
+        }
     );
 
     err = tx_link(ctx, decoder, encoder, 0);

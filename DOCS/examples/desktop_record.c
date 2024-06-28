@@ -84,10 +84,10 @@ int main(int argc, char *argv[])
 
     AVBufferRef *encoder = tx_encoder_create(
         ctx,
-        "h264_nvenc",
-        NULL, // name
-        &encoder_options,
-        NULL // init_opts
+        &(TxEncoderOptions) {
+            .enc_name = "h264_nvenc",
+            .options = encoder_options,
+        }
     );
 
     err = tx_link(ctx, video_source, encoder, 0);
@@ -105,7 +105,8 @@ int main(int argc, char *argv[])
         ctx,
         "rtp://127.0.0.1:30000",
         "rtp",
-        muxer_options
+        muxer_options,
+        NULL
     );
 
     err = tx_link(ctx, encoder, muxer, 0);

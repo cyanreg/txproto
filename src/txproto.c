@@ -2,11 +2,13 @@
 #include <libavutil/opt.h>
 #include <libavutil/time.h>
 
+#include <libtxproto/commit.h>
 #include <libtxproto/control.h>
 #include <libtxproto/decode.h>
 #include <libtxproto/demux.h>
 #include <libtxproto/encode.h>
 #include <libtxproto/epoch.h>
+#include <libtxproto/events.h>
 #include <libtxproto/filter.h>
 #include <libtxproto/link.h>
 #include <libtxproto/mux.h>
@@ -100,6 +102,11 @@ err:
 int tx_commit(TXMainContext *ctx)
 {
     return sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_COMMIT, NULL);
+}
+
+int tx_ctrl(TXMainContext *ctx, AVBufferRef *ref, SPEventType flags, void *arg)
+{
+    return sp_generic_ctrl(ctx, ref, flags, arg);
 }
 
 AVBufferRef *tx_demuxer_create(
@@ -323,6 +330,28 @@ int tx_link(
         src_stream_id,
         NULL // src_stream_desc
     );
+}
+
+int tx_filtergraph_command(TXMainContext *ctx, AVBufferRef *graph,
+                           const char *filter_target, AVDictionary *commands)
+{
+    int err = 0;
+
+    err = av_dict_set(&commands, "sp_filter_target", filter_target, 0);
+    if (err < 0)
+        return err;
+
+    err = sp_filter_ctrl(graph, SP_EVENT_CTRL_COMMAND, commands);
+    if (err < 0)
+        return err;
+
+    err = sp_add_commit_fn_to_list(ctx, sp_filter_ctrl, graph);
+    if (err < 0)
+        return err;
+
+    av_dict_free(&commands);
+
+    return 0;
 }
 
 int tx_destroy(

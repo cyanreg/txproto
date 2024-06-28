@@ -24,6 +24,7 @@
 
 typedef struct TXMainContext TXMainContext;
 
+#include <libtxproto/events.h>
 #include <libtxproto/io.h>
 
 TXMainContext *tx_new(void);
@@ -35,6 +36,8 @@ void tx_free(TXMainContext *ctx);
 int tx_epoch_set(TXMainContext *ctx, int64_t value);
 
 int tx_commit(TXMainContext *ctx);
+
+int tx_ctrl(TXMainContext *ctx, AVBufferRef *ref, SPEventType flags, void *arg);
 
 AVBufferRef *tx_demuxer_create(
     TXMainContext *ctx,
@@ -80,6 +83,9 @@ int tx_link(
     AVBufferRef *dst,
     int src_stream_id
 );
+
+int tx_filtergraph_command(TXMainContext *ctx, AVBufferRef *graph,
+                           const char *filter_target, AVDictionary *commands);
 
 int tx_destroy(
     TXMainContext *ctx,

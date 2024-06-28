@@ -367,17 +367,17 @@ err:
 }
 
 int tx_link(TXMainContext *ctx, AVBufferRef *src, AVBufferRef *dst,
-            int src_stream_id)
+            const TXLinkOptions *options)
 {
     return sp_generic_link(
         ctx,
         src,
         dst,
-        1, // autostart,
-        NULL, // src_pad_name,
-        NULL, // dst_pad_name,
-        src_stream_id,
-        NULL // src_stream_desc
+        options ? options->autostart : 1,
+        options ? options->src_pad : NULL,
+        options ? options->dst_pad : NULL,
+        options ? options->src_stream_id : 0,
+        options ? options->src_stream_desc : NULL
     );
 }
 

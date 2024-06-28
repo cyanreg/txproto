@@ -79,8 +79,16 @@ AVBufferRef *tx_filtergraph_create(TXMainContext *ctx, const char *graph,
                                    enum AVHWDeviceType hwctx_type,
                                    AVDictionary *init_opts);
 
+typedef struct TXLinkOptions {
+    int autostart;
+    const char *src_pad;
+    const char *dst_pad;
+    int src_stream_id;
+    const char *src_stream_desc;
+} TXLinkOptions;
+
 int tx_link(TXMainContext *ctx, AVBufferRef *src, AVBufferRef *dst,
-            int src_stream_id);
+            const TXLinkOptions *options);
 
 int tx_filtergraph_command(TXMainContext *ctx, AVBufferRef *graph,
                            const char *filter_target, AVDictionary *commands);

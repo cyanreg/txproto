@@ -16,6 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <pthread.h>
 #include <stdatomic.h>
 
 #include <libavutil/crc.h>
@@ -667,8 +668,8 @@ int sp_eventlist_dispatch(void *ctx, SPBufferList *list, SPEventType type, void 
             av_free(fstr);
 
             if (!expired) {
-                pthread_cond_broadcast(&event->cond);
                 event->dep_done = 1;
+                pthread_cond_broadcast(&event->cond);
             }
 
             av_buffer_unref(&list->entries[i]);

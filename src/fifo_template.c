@@ -232,7 +232,7 @@ end:
     return err;
 }
 
-int RENAME(fifo_push)(AVBufferRef *dst, TYPE *in)
+int RENAME(fifo_push)(AVBufferRef *dst, const TYPE *in)
 {
     if (!dst)
         return 0;

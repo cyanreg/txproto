@@ -209,7 +209,7 @@ static inline int sp_assert(int cond)
 
 static inline int sp_is_number(const char *src)
 {
-    for (int i = 0; i < strlen(src); i++)
+    for (unsigned int i = 0; i < strlen(src); i++)
         if (!av_isdigit(src[i]) && src[i] != '.')
             return 0;
     return 1;

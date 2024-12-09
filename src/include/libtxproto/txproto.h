@@ -114,6 +114,7 @@ AVBufferRef *tx_io_register_cb(
     TXMainContext *ctx,
     const char **api_list,
     int (*source_event_cb)(IOSysEntry *entry, void *userdata),
+    void (*source_event_free)(void *userdata),
     void *userdata
 );
 

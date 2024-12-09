@@ -378,6 +378,7 @@ int tx_event_register(
 
 typedef struct SourceEventCtx {
     int (*cb)(IOSysEntry *entry, void *userdata);
+    void (*free)(void *userdata);
     void *userdata;
 } SourceEventCtx;
 
@@ -388,6 +389,14 @@ static int source_event_cb(AVBufferRef *event, void *callback_ctx, void *ctx,
     IOSysEntry *entry = dep_ctx;
 
     return (*source_cb_ctx->cb)(entry, source_cb_ctx->userdata);
+}
+
+static void source_free_cb(void *callback_ctx, void *ctx, void *dep_ctx)
+{
+    SourceEventCtx *source_cb_ctx = callback_ctx;
+
+    if (source_cb_ctx->free)
+        (*source_cb_ctx->free)(source_cb_ctx->userdata);
 }
 
 int tx_event_destroy(
@@ -404,16 +413,18 @@ AVBufferRef *tx_io_register_cb(
     TXMainContext *ctx,
     const char **api_list,
     int (*cb)(IOSysEntry *entry, void *userdata),
+    void (*free_cb)(void *userdata),
     void *userdata
 ) {
     AVBufferRef *source_event;
     source_event = sp_io_alloc(ctx, (const char **)api_list, source_event_cb,
-                               NULL, sizeof(SourceEventCtx));
+                               source_free_cb, sizeof(SourceEventCtx));
     if (!source_event)
         return NULL;
 
     SourceEventCtx *source_event_ctx = av_buffer_get_opaque(source_event);
     source_event_ctx->cb = cb;
+    source_event_ctx->free = free_cb;
     source_event_ctx->userdata = userdata;
 
     int err = sp_io_init(ctx, source_event, (const char **)api_list);

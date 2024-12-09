@@ -20,13 +20,14 @@
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/cpu.h>
+#include <libavutil/mem.h>
 
 #include <libtxproto/encode.h>
 #include <libtxproto/log.h>
+#include <libtxproto/utils.h>
 
 #include "encoding_utils.h"
 #include "os_compat.h"
-#include <libtxproto/utils.h>
 #include "utils.h"
 #include "ctrl_template.h"
 
@@ -216,10 +217,10 @@ set:
     ctx->avctx->thread_type = 0;
 
     ctx->avctx->hw_frames_ctx = av_buffer_ref(ctx->enc_frames_ref);
-	if (!ctx->avctx->hw_frames_ctx) {
-		av_buffer_unref(&ctx->enc_frames_ref);
-		err = AVERROR(ENOMEM);
-	}
+    if (!ctx->avctx->hw_frames_ctx) {
+        av_buffer_unref(&ctx->enc_frames_ref);
+        err = AVERROR(ENOMEM);
+    }
 
 end:
     /* Hardware frames make their own ref */
@@ -257,10 +258,10 @@ static int configure_encoder(EncodingContext *ctx, AVFrame *conf)
     }
 
     err = avcodec_open2(ctx->avctx, ctx->codec, NULL);
-	if (err < 0) {
-		sp_log(ctx, SP_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
-		return err;
-	}
+    if (err < 0) {
+        sp_log(ctx, SP_LOG_ERROR, "Cannot open encoder: %s!\n", av_err2str(err));
+        return err;
+    }
 
     return 0;
 }
@@ -268,15 +269,26 @@ static int configure_encoder(EncodingContext *ctx, AVFrame *conf)
 static int context_full_config(EncodingContext *ctx)
 {
     int err;
+    AVFrame *conf;
 
-    err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+    do {
+        err = sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
+        if (err < 0)
+            return err;
+
+        av_buffer_unref(&ctx->mode_negotiate_event);
+
+        sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
+
+        /* blocks until we get a frame or a poke */
+        err = sp_frame_fifo_peek_flags(ctx->src_frames, &conf,
+                                       FRAME_FIFO_BLOCK_NO_INPUT |
+                                       FRAME_FIFO_PULL_POKE);
+        /* loop if we get poked to dispatch on:config */
+    } while (err == AVERROR(EAGAIN));
     if (err < 0)
         return err;
 
-    av_buffer_unref(&ctx->mode_negotiate_event);
-
-    sp_log(ctx, SP_LOG_VERBOSE, "Getting a frame to configure...\n");
-    AVFrame *conf = sp_frame_fifo_peek(ctx->src_frames);
     if (!conf) {
         sp_log(ctx, SP_LOG_ERROR, "No input frame to configure with!\n");
         return AVERROR(EINVAL);
@@ -592,7 +604,7 @@ static void *encoding_thread(void *arg)
 
 #if 0
         if (!sp_eventlist_has_dispatched(ctx->events, SP_EVENT_ON_CONFIG)) {
-            int ret = context_full_config(ctx);
+            ret = context_full_config(ctx);
             if (ret < 0)
                 return ret;
         }
@@ -600,12 +612,13 @@ static void *encoding_thread(void *arg)
 
     sp_log(ctx, SP_LOG_VERBOSE, "Encoder initialized!\n");
 
-    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
+    sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_INIT, NULL);
 
     do {
-        pthread_mutex_lock(&ctx->lock);
-
         AVFrame *frame = NULL;
+
+        pthread_mutex_lock(&ctx->lock);
+        sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG, NULL);
 
         if (ctx->reconfigure_frame && !ctx->waiting_eof) {
             frame = ctx->reconfigure_frame;
@@ -618,7 +631,21 @@ static void *encoding_thread(void *arg)
             if (ctx->avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER)
                 ctx->attach_sidedata = 1;
         } else if (!flush) {
-            frame = sp_frame_fifo_pop(ctx->src_frames);
+            sp_log(ctx, SP_LOG_TRACE, "Pulling frame...\n");
+            ret = sp_frame_fifo_pop_flags(ctx->src_frames, &frame,
+                                          FRAME_FIFO_PULL_POKE);
+            if (ret == AVERROR(EAGAIN)) {
+                sp_log(ctx, SP_LOG_VERBOSE, "No frame yet, trying again...\n");
+                pthread_mutex_unlock(&ctx->lock);
+                continue;
+            }
+
+            if (frame)
+                sp_log(ctx, SP_LOG_TRACE, "Got frame, pts = %f\n",
+                       av_q2d(ctx->avctx->time_base) * frame->pts);
+            else
+                sp_log(ctx, SP_LOG_VERBOSE, "Received NULL frame, flushing...\n");
+
             flush = !frame;
         }
 
@@ -718,8 +745,6 @@ static void *encoding_thread(void *arg)
 
             sp_packet_fifo_push(ctx->dst_packets, out_pkt);
 
-            sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_CONFIG | SP_EVENT_ON_INIT, NULL);
-
             av_packet_free(&out_pkt);
         }
 
@@ -804,6 +829,7 @@ static int encoder_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
 int sp_encoder_ctrl(AVBufferRef *ctx_ref, SPEventType ctrl, void *arg)
 {
     EncodingContext *ctx = (EncodingContext *)ctx_ref->data;
+    sp_frame_fifo_poke(ctx->src_frames);
     return sp_ctrl_template(ctx, ctx->events, 0x0,
                             encoder_ioctx_ctrl_cb, ctrl, arg);
 }

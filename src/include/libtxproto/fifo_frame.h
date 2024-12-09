@@ -21,16 +21,17 @@
 #include <assert.h>
 #include <libavutil/frame.h>
 
-enum SPFrameFIFOFlags {
-    FRAME_FIFO_BLOCK_MAX_OUTPUT = (1 << 0),
-    FRAME_FIFO_BLOCK_NO_INPUT   = (1 << 1),
-    FRAME_FIFO_PULL_NO_BLOCK    = (1 << 2),
-};
-
 #define FRENAME(x) FRAME_FIFO_ ## x
 #define RENAME(x)  sp_frame_ ##x
-#define FNAME      enum SPFrameFIFOFlags
+#define FNAME      SPFrameFIFOFlags
 #define TYPE       AVFrame
+
+typedef enum FNAME {
+    FRENAME(BLOCK_MAX_OUTPUT) = (1 << 0),
+    FRENAME(BLOCK_NO_INPUT)   = (1 << 1),
+    FRENAME(PULL_NO_BLOCK)    = (1 << 2),
+    FRENAME(PULL_POKE)        = (1 << 3),
+} FNAME;
 
 /* Create */
 AVBufferRef *RENAME(fifo_create)(void *opaque, int max_queued, FNAME block_flags); /* -1 = INF, 0 = none */
@@ -52,10 +53,12 @@ int RENAME(fifo_unmirror)(AVBufferRef *dst, AVBufferRef *src);
 int RENAME(fifo_unmirror_all)(AVBufferRef *dst);
 
 /* I/O */
+int   RENAME(fifo_poke)(AVBufferRef *dst);
 int   RENAME(fifo_push)(AVBufferRef *dst, TYPE *in);
 TYPE *RENAME(fifo_pop)(AVBufferRef *src);
-int   RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **ret, FNAME flags);
+int   RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags);
 TYPE *RENAME(fifo_peek)(AVBufferRef *src);
+int   RENAME(fifo_peek_flags)(AVBufferRef *src, TYPE **dst, FNAME flags);
 
 #undef TYPE
 #undef FNAME

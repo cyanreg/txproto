@@ -399,7 +399,6 @@ int sp_generic_link(TXMainContext *ctx,
 
     SPEventType src_post_init = sp_eventlist_has_dispatched(src_events,
                                                             SP_EVENT_ON_INIT);
-    src_post_init = 0;
     if (src_post_init)
         flags |= SP_EVENT_ON_COMMIT;
     else

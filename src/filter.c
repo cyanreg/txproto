@@ -698,7 +698,7 @@ static void *filtering_thread(void *data)
 
     av_frame_free(&filt_frame);
 
-    {
+    if (ctx->send_eos) {
         int tmp = err;
         sp_eventlist_dispatch(ctx, ctx->events, SP_EVENT_ON_EOS, &tmp);
         if (tmp != 0) {
@@ -813,6 +813,10 @@ static int filter_ioctx_ctrl_cb(AVBufferRef *event_ref, void *callback_ctx,
                 for (int i = 0; i < ctx->num_in_pads; i++)
                     sp_frame_fifo_set_max_queued(ctx->in_pads[i]->fifo, len);
             }
+        }
+        if ((tmp_val = dict_get(event->opts, "send_eos"))) {
+            /* anything other than "false" or 0 is truthy */
+            ctx->send_eos = strcmp(tmp_val, "false") && strtol(tmp_val, NULL, 10) != 0;
         }
         pthread_mutex_unlock(&ctx->lock);
     } else if (event->ctrl & SP_EVENT_CTRL_COMMAND) {
@@ -930,6 +934,7 @@ AVBufferRef *sp_filter_alloc(void)
 
     pthread_mutex_init(&ctx->lock, NULL);
     ctx->events = sp_bufferlist_new();
+    ctx->send_eos = 1;
 
     return ctx_ref;
 }

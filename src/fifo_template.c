@@ -16,6 +16,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdbool.h>
+
+#include <libavutil/buffer.h>
+#include <libtxproto/log.h>
 #include <libtxproto/utils.h>
 
 typedef struct SNAME {
@@ -24,6 +28,7 @@ typedef struct SNAME {
     int max_queued;
     FNAME block_flags;
     unsigned int queued_alloc_size;
+    bool poked;
     pthread_mutex_t lock;
     pthread_cond_t cond_in;
     pthread_cond_t cond_out;
@@ -97,11 +102,28 @@ AVBufferRef *RENAME(fifo_create)(void *opaque, int max_queued, FNAME block_flags
 
 int RENAME(fifo_mirror)(AVBufferRef *dst, AVBufferRef *src)
 {
+    if (!dst || !src)
+        return AVERROR(EINVAL);
+
     SNAME *dst_ctx = (SNAME *)dst->data;
     SNAME *src_ctx = (SNAME *)src->data;
 
-    if (!dst || !src)
-        return AVERROR(EINVAL);
+    void *src_class = av_buffer_get_opaque(src);
+    const char *src_class_name = sp_class_get_name(src_class);
+
+    if (sp_log_get_ctx_lvl(src_class_name) >= SP_LOG_VERBOSE) {
+        void *dst_class = av_buffer_get_opaque(dst);
+        const char *dst_class_name = sp_class_get_name(dst_class);
+        const char *dst_class_type = sp_class_type_string(dst_class);
+        const char *src_class_type = sp_class_type_string(src_class);
+
+        sp_log(src_class, SP_LOG_VERBOSE,
+               "Mirroring output FIFO from \"%s\" (%s) to \"%s\" (%s)\n",
+               src_class_name ? src_class_name : "unknown",
+               src_class_type ? src_class_type : "unknown",
+               dst_class_name ? dst_class_name : "unknown",
+               dst_class_type ? dst_class_type : "unknown");
+    }
 
     sp_bufferlist_append(dst_ctx->sources, src);
     sp_bufferlist_append(src_ctx->dests,   dst);
@@ -111,6 +133,26 @@ int RENAME(fifo_mirror)(AVBufferRef *dst, AVBufferRef *src)
 
 int RENAME(fifo_unmirror)(AVBufferRef *dst, AVBufferRef *src)
 {
+    if (!dst || !src)
+        return AVERROR(EINVAL);
+
+    void *src_class = av_buffer_get_opaque(src);
+    const char *src_class_name = sp_class_get_name(src_class);
+
+    if (sp_log_get_ctx_lvl(src_class_name) >= SP_LOG_VERBOSE) {
+        void *dst_class = av_buffer_get_opaque(dst);
+        const char *dst_class_name = sp_class_get_name(dst_class);
+        const char *dst_class_type = sp_class_type_string(dst_class);
+        const char *src_class_type = sp_class_type_string(src_class);
+
+        sp_log(src_class, SP_LOG_VERBOSE,
+               "Unmirroring output FIFO from \"%s\" (%s) to \"%s\" (%s)\n",
+               src_class_name ? src_class_name : "unknown",
+               src_class_type ? src_class_type : "unknown",
+               dst_class_name ? dst_class_name : "unknown",
+               dst_class_type ? dst_class_type : "unknown");
+    }
+
     SNAME *dst_ctx = (SNAME *)dst->data;
     SNAME *src_ctx = (SNAME *)src->data;
 
@@ -127,25 +169,68 @@ int RENAME(fifo_unmirror)(AVBufferRef *dst, AVBufferRef *src)
     return 0;
 }
 
-int RENAME(fifo_unmirror_all)(AVBufferRef *dst)
+int RENAME(fifo_unmirror_all)(AVBufferRef *ref)
 {
-    if (!dst)
+    if (!ref)
         return 0;
 
-    SNAME *dst_ctx = (SNAME *)dst->data;
+    void *ref_class = av_buffer_get_opaque(ref);
+    const char *ref_class_name = sp_class_get_name(ref_class);
+    enum SPLogLevel log_lvl = sp_log_get_ctx_lvl(ref_class_name);
 
-    pthread_mutex_lock(&dst_ctx->lock);
+    if (log_lvl >= SP_LOG_VERBOSE) {
+        const char *ref_class_type = sp_class_type_string(ref_class);
+
+        sp_log(ref_class, SP_LOG_VERBOSE, "Unmirroring all from \"%s\" (%s)...\n",
+               ref_class_name ? ref_class_name : "unknown",
+               ref_class_type ? ref_class_type : "unknown");
+    }
+
+    SNAME *ref_ctx = (SNAME *)ref->data;
+
+    pthread_mutex_lock(&ref_ctx->lock);
 
     AVBufferRef *src_ref = NULL;
-    while ((src_ref = sp_bufferlist_pop(dst_ctx->sources, sp_bufferlist_find_fn_first, NULL))) {
+    while ((src_ref = sp_bufferlist_pop(ref_ctx->sources, sp_bufferlist_find_fn_first, NULL))) {
         SNAME *src_ctx = (SNAME *)src_ref->data;
         AVBufferRef *own_ref = sp_bufferlist_pop(src_ctx->dests, find_ref_by_data,
-                                                 dst_ctx);
+                                                 ref_ctx);
+        if (log_lvl >= SP_LOG_VERBOSE) {
+            void *src_class = av_buffer_get_opaque(src_ref);
+            const char *src_class_name = sp_class_get_name(src_class);
+            const char *src_class_type = sp_class_type_string(src_class);
+
+            sp_log(ref_class, SP_LOG_VERBOSE, " ...from source \"%s\" (%s)\n",
+                   src_class_name ? src_class_name : "unknown",
+                   src_class_type ? src_class_type : "unknown");
+        }
         av_buffer_unref(&own_ref);
         av_buffer_unref(&src_ref);
     }
 
-    pthread_mutex_unlock(&dst_ctx->lock);
+    AVBufferRef *dst_ref = NULL;
+    while ((dst_ref = sp_bufferlist_pop(ref_ctx->dests, sp_bufferlist_find_fn_first, NULL))) {
+        SNAME *dst_ctx = (SNAME *)dst_ref->data;
+        AVBufferRef *own_ref = sp_bufferlist_pop(dst_ctx->sources, find_ref_by_data,
+                                                 ref_ctx);
+        if (log_lvl >= SP_LOG_VERBOSE) {
+            void *dst_class = av_buffer_get_opaque(dst_ref);
+            const char *dst_class_name = sp_class_get_name(dst_class);
+            const char *dst_class_type = sp_class_type_string(dst_class);
+
+            sp_log(ref_class, SP_LOG_VERBOSE, " ...from dest \"%s\" (%s)\n",
+                   dst_class_name ? dst_class_name : "unknown",
+                   dst_class_type ? dst_class_type : "unknown");
+        }
+
+        /* unblock anyone pulling this dest */
+        pthread_cond_signal(&dst_ctx->cond_in);
+
+        av_buffer_unref(&own_ref);
+        av_buffer_unref(&dst_ref);
+    }
+
+    pthread_mutex_unlock(&ref_ctx->lock);
 
     return 0;
 }
@@ -290,7 +375,24 @@ unlock:
     return err;
 }
 
-int RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
+int RENAME(fifo_poke)(AVBufferRef *ref)
+{
+    SNAME *ctx = (SNAME *)ref->data;
+    void *ref_class = av_buffer_get_opaque(ref);
+    const char *ref_class_name = sp_class_get_name(ref_class);
+    const char *ref_class_type = sp_class_type_string(ref_class);
+    sp_log(ref_class, SP_LOG_VERBOSE, "Poking FIFO \"%s\" (%s)...\n",
+           ref_class_name ? ref_class_name : "unknown",
+           ref_class_type ? ref_class_type : "unknown");
+    pthread_mutex_lock(&ctx->lock);
+    ctx->poked = true;
+    pthread_mutex_unlock(&ctx->lock);
+    pthread_cond_signal(&ctx->cond_in);
+    return 0;
+}
+
+static int PRIV_RENAME(fifo_pull_flags_template)(AVBufferRef *src, TYPE **dst,
+                                                 FNAME flags, int pop)
 {
     int ret = 0;
 
@@ -303,24 +405,43 @@ int RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
     SNAME *ctx = (SNAME *)src->data;
     pthread_mutex_lock(&ctx->lock);
 
-    if (!ctx->num_queued) {
-        if ((flags & FRENAME(PULL_NO_BLOCK)) ||
-            !(ctx->block_flags & FRENAME(BLOCK_NO_INPUT))) {
+    int pull_poke = flags & FRENAME(PULL_POKE);
+    int pull_no_block = flags & FRENAME(PULL_NO_BLOCK);
+
+    while (!ctx->num_queued) {
+        /* this one might change while we wait for `cond_in` */
+        int block_no_input = ctx->block_flags & FRENAME(BLOCK_NO_INPUT);
+
+        if (!block_no_input || pull_no_block) {
             ret = AVERROR(EAGAIN);
             goto unlock;
         }
 
-        pthread_cond_wait(&ctx->cond_in, &ctx->lock);
+        if (!ctx->poked) {
+            pthread_cond_wait(&ctx->cond_in, &ctx->lock);
+        }
+
+        /* if the `PULL_POKE` flag is set, return on poke */
+        if (pull_poke && ctx->poked) {
+            ctx->poked = false;
+            ret = AVERROR(EAGAIN);
+            goto unlock;
+        }
+        ctx->poked = false;
     }
 
-    out = ctx->queued[0];
-    ctx->num_queued--;
-    assert(ctx->num_queued >= 0);
+    if (pop) {
+        out = ctx->queued[0];
+        ctx->num_queued--;
+        assert(ctx->num_queued >= 0);
 
-    memmove(&ctx->queued[0], &ctx->queued[1], ctx->num_queued*sizeof(TYPE *));
+        memmove(&ctx->queued[0], &ctx->queued[1], ctx->num_queued*sizeof(TYPE *));
 
-    if (ctx->max_queued > 0)
-        pthread_cond_signal(&ctx->cond_out);
+        if (ctx->max_queued > 0)
+            pthread_cond_signal(&ctx->cond_out);
+    } else {
+        out = CLONE_FN(ctx->queued[0]);
+    }
 
 unlock:
     pthread_mutex_unlock(&ctx->lock);
@@ -330,33 +451,35 @@ unlock:
     return ret;
 }
 
+int RENAME(fifo_pop_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
+{
+    return PRIV_RENAME(fifo_pull_flags_template)(src, dst, flags, 1);
+}
+
 TYPE *RENAME(fifo_pop)(AVBufferRef *src)
 {
-    TYPE *ret;
-    RENAME(fifo_pop_flags)(src, &ret, 0x0);
-    return ret;
+    TYPE *val = NULL;
+    PRIV_RENAME(fifo_pull_flags_template)(src, &val, 0x0, 1);
+    return val;
+}
+
+int RENAME(fifo_peek_flags)(AVBufferRef *src, TYPE **dst, FNAME flags)
+{
+    return PRIV_RENAME(fifo_pull_flags_template)(src, dst, flags, 0);
 }
 
 TYPE *RENAME(fifo_peek)(AVBufferRef *src)
 {
-    if (!src)
-        return NULL;
-
-    TYPE *out = NULL;
-    SNAME *ctx = (SNAME *)src->data;
-    pthread_mutex_lock(&ctx->lock);
-
-    if (!ctx->num_queued) {
-        if (!(ctx->block_flags & FRENAME(BLOCK_NO_INPUT)))
-            goto unlock;
-
-        pthread_cond_wait(&ctx->cond_in, &ctx->lock);
-    }
-
-    out = CLONE_FN(ctx->queued[0]);
-
-unlock:
-    pthread_mutex_unlock(&ctx->lock);
-
-    return out;
+    TYPE *val = NULL;
+    PRIV_RENAME(fifo_pull_flags_template)(src, &val, 0x0, 0);
+    return val;
 }
+
+#undef TYPE
+#undef CLONE_FN
+#undef FREE_FN
+#undef SNAME
+#undef FNAME
+#undef PRIV_RENAME
+#undef RENAME
+#undef FRENAME

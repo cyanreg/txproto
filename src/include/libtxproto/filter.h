@@ -57,7 +57,7 @@ typedef struct FilterContext {
     char **out_pad_names;
 
     int dump_graph;
-    int fifo_size;
+    int send_eos;
 
     /* Derived from input device reference */
     enum AVHWDeviceType device_type;

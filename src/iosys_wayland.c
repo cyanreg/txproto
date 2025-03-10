@@ -369,14 +369,14 @@ static void dmabuf_frame_ready(void *data, struct zwlr_export_dmabuf_frame_v1 *f
     fe->avg_frame_rate  = priv->frame_rate;
 
     /* Timestamp of when the frame will be presented */
-    int64_t presented = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
+    int64_t presented = ((((int64_t)tv_sec_hi) << 32) | (int64_t)tv_sec_lo) * 1000000000LL + (int64_t)tv_nsec;
 
     /* Current time */
     struct timespec tsp = { 0 };
     clock_gettime(CLOCK_MONOTONIC, &tsp);
 
     /* Delay */
-    int64_t delay = presented - ((tsp.tv_sec * 1000000000) + tsp.tv_nsec);
+    int64_t delay = presented - (((int64_t)tsp.tv_sec * 1000000000LL) + (int64_t)tsp.tv_nsec);
 
     priv->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
                                      av_gettime_relative() - priv->epoch);
@@ -807,14 +807,14 @@ static void scrcpy_frame_ready(void *data, struct zwlr_screencopy_frame_v1 *fram
     fe->avg_frame_rate  = priv->frame_rate;
 
     /* Timestamp of when the frame was presented */
-    int64_t presented = ((((uint64_t)tv_sec_hi) << 32) | tv_sec_lo) * 1000000000 + tv_nsec;
+    int64_t presented = ((((int64_t)tv_sec_hi) << 32) | ((int64_t)tv_sec_lo)) * 1000000000LL + (int64_t)tv_nsec;
 
     /* Current time */
     struct timespec tsp = { 0 };
     clock_gettime(CLOCK_MONOTONIC, &tsp);
 
     /* Delay */
-    int64_t delay = presented - ((tsp.tv_sec * 1000000000) + tsp.tv_nsec);
+    int64_t delay = presented - (((int64_t)tsp.tv_sec * 1000000000LL) + (int64_t)tsp.tv_nsec);
 
     priv->frame->pts = av_add_stable(fe->time_base, delay, av_make_q(1, 1000000),
                                      av_gettime_relative() - priv->epoch);
